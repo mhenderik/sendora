@@ -107,7 +107,7 @@ func TestSettingsValidationAndUnknownKeys(t *testing.T) {
 	} {
 		e.want(e.do("PUT", "/api/settings", admin, map[string]any{k: v}), 400, fmt.Sprintf("%s=%v", k, v))
 	}
-	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"application_url": "https://files.example.com/", "clean_files_days": 0, "max_share_size": 0}), 200, "valid values")
+	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"application_url": "https://files.example.com/", "clean_files_days": 0, "max_share_size": 0, "max_expiry_time": 0}), 200, "valid values")
 	if e.s.St.Setting("application_url") != "https://files.example.com" {
 		t.Fatal("application URL not normalised:", e.s.St.Setting("application_url"))
 	}

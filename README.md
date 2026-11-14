@@ -32,9 +32,20 @@ What that means for you:
 - SHA-256 upload checks and server-prepared download snapshots with browser-side verification.
 - Optional multi-factor authentication for local accounts: authenticator-app codes (TOTP) with one-time recovery codes, set globally and overridable per user (passkeys are planned).
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Sign-in page](docs/screenshots/login.png) | ![Share in grid view](docs/screenshots/share-gallery.png) |
+| ![My shares](docs/screenshots/my-shares.png) | ![Users](docs/screenshots/admin-users.png) |
+
+More in [docs/screenshots.md](docs/screenshots.md).
+
 ## Documentation
 
 - **[Quick start](docs/quickstart.md)** — Run Sendora in Docker in a few minutes. For a build from source see [Build and development](docs/build.md).
+- **[Quick start: Docker](docs/quickstart-docker.md)** — One `docker run` command with the published image.
+- **[Quick start: Kubernetes](docs/quickstart-kubernetes.md)** — Bare-minimum manifest, port-forward, first administrator.
 - **[Docker Compose files](deploy/compose/README.md)** — Ready-to-use Compose setup with the published image, optional automatic HTTPS.
 - **[Build, develop and test](docs/build.md)** — How to build Sendora from source, run it locally and run the test suites.
 - **[Configuration](docs/configuration.md)** — Environment variables and runtime settings.

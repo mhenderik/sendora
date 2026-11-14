@@ -1,6 +1,8 @@
 # Sendora documentation
 
 - [Quick start](quickstart.md) — Run Sendora in Docker in a few minutes. For a build from source see [Build and development](build.md).
+- [Quick start: Docker](quickstart-docker.md) — One `docker run` command with the published image.
+- [Quick start: Kubernetes](quickstart-kubernetes.md) — Bare-minimum manifest, port-forward, first administrator.
 - [Build, develop and test](build.md) — How to build Sendora from source, run it locally and run the test suites.
 - [Configuration](configuration.md) — Environment variables and runtime settings.
 - [Deployment](deployment.md) — Docker behind HTTPS (see the Kubernetes guide for clusters).
@@ -11,5 +13,7 @@
 - [Translations](translations.md) — Translate the interface and the emails through JSON files.
 - [Sharing, uploads and downloads](sharing.md) — Share options, editing, the activity log and the integrity guarantees of uploads and downloads.
 - [Security and limitations](security.md) — Operational security notes and the current limitations.
+
+- [Screenshots](screenshots.md) — The interface with demo data.
 
 Other project files: [README](../README.md), [Security policy](../SECURITY.md), [Contributing](../CONTRIBUTING.md), [Changelog](../CHANGELOG.md), [Third-party notices](../THIRD_PARTY_NOTICES.md), [Example translations](../custom-translations/README.md).

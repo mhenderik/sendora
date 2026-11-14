@@ -38,11 +38,11 @@ onMounted(load)
       <label class="check"><input type="checkbox" v-model="enabled" /> {{ t('Block addresses after repeated failed sign-ins') }}</label>
       <label>{{ t('Never block these addresses') }}</label>
       <textarea v-model="allowlist" rows="4" spellcheck="false" placeholder="192.0.2.10&#10;10.0.0.0/8"></textarea>
-      <p class="muted">{{ t('One address or range (for example 192.0.2.10 or 10.0.0.0/8) per line.') }}<span v-if="info"> {{ t('Your current address is {ip}.', { ip: info.your_ip }) }}</span></p>
+      <p class="muted">{{ t('One address or range (for example 192.0.2.10 or 10.0.0.0/8) per line.') }}<span v-if="info">&nbsp;{{ t('Your current address is {ip}.', { ip: info.your_ip }) }}</span></p>
       <p class="muted">{{ t('Behind a reverse proxy, set SENDORA_TRUSTED_PROXIES; otherwise all visitors share one address.') }}</p>
       <div class="actions"><button :disabled="busy">{{ t('Save') }}</button></div>
     </form>
-    <h2>{{ t('Currently blocked') }}</h2>
+    <h2 style="margin-top:24px">{{ t('Currently blocked') }}</h2>
     <p v-if="info && !info.bans.length" class="muted">{{ t('No addresses are blocked.') }}</p>
     <div v-if="info && info.bans.length" class="table-wrap"><table>
       <tr><th>{{ t('Address') }}</th><th>{{ t('Blocked until') }}</th><th>{{ t('Times blocked') }}</th><th></th></tr>

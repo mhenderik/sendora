@@ -32,6 +32,11 @@ type env struct {
 	jar map[string]string
 }
 
+func init() {
+	// Every test instance would print its own throwaway setup code.
+	setupCodeLog = func(string, ...any) {}
+}
+
 func newEnv(t *testing.T) *env {
 	// Address blocking has its own tests; flooding tests elsewhere must not trip it.
 	t.Setenv("SENDORA_DISABLE_IP_BANS", "true")

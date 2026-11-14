@@ -155,7 +155,7 @@ func New(st *store.Store, static fs.FS, version string) *Server {
 		if len(s.setupCode) < 12 {
 			s.setupCode = newSetupCode()
 		}
-		log.Printf("first-run setup code: %s (enter it on the setup page; it changes on every restart until setup is done)", s.setupCode)
+		setupCodeLog("first-run setup code: %s (enter it on the setup page; it changes on every restart until setup is done)", s.setupCode)
 	}
 	// Reserved rows never represent an observed start. A process restart cannot
 	// truthfully promote them; release their capacity and preserve pending jobs.
@@ -190,6 +190,9 @@ func New(st *store.Store, static fs.FS, version string) *Server {
 	s.cleanImportFiles()
 	return s
 }
+
+// setupCodeLog prints the setup code; tests replace it to keep their output readable.
+var setupCodeLog = log.Printf
 
 // newSetupCode returns 12 random characters from an alphabet without look-alike
 // characters, grouped for typing (about 59 bits).

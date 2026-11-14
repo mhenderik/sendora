@@ -17,7 +17,7 @@ var boolSettings = map[string]bool{
 
 // intSettings lists the allowed range of each numeric setting.
 var intSettings = map[string][2]int{
-	"max_expiry_time":      {1, 3650},
+	"max_expiry_time":      {0, 3650}, // 0 = no maximum
 	"default_expiry_time":  {1, 3650},
 	"max_share_size":       {0, 100 << 20}, // MB; 0 = no limit
 	"clean_files_days":     {0, 3650},

@@ -4,7 +4,14 @@ Run Sendora in Docker in a few minutes. For a build from source see [Build and d
 
 [Back to the documentation index](README.md)
 
-> **Ready-made Compose files** that use the published image (no build), including an HTTPS variant with automatic certificates, are in [`deploy/compose/`](../deploy/compose/README.md). The steps below build the image from source with the `docker-compose.yml` in the project root.
+**Choose your quick start:**
+
+| Quick start | For |
+|---|---|
+| [Docker (one command)](quickstart-docker.md) | trying Sendora on your own machine with the published image |
+| [Docker Compose files](../deploy/compose/README.md) | a lasting setup on a server, optionally with automatic HTTPS |
+| [Kubernetes (bare minimum)](quickstart-kubernetes.md) | trying it in a cluster; then the full [Kubernetes guide](kubernetes.md) |
+| This page (below) | building the image yourself from source with Docker Compose |
 
 ## Requirements
 

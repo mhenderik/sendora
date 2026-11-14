@@ -1,6 +1,16 @@
 # Changelog
 
-## 0.9.0 (unreleased)
+## Unreleased
+
+- Quick starts: one-command Docker, bare-minimum Kubernetes manifest
+  (`deploy/kubernetes-minimal.yaml`); screenshots in the documentation.
+- Kubernetes example: optional init container for storage that cannot give the
+  volume to UID 10001 (kind, minikube, k3s local-path).
+- Fixed: "Max expiry 0 = no maximum" was refused by the settings validation.
+- Fixed: the language selector on signed-out pages stretched across the screen;
+  spacing on the Security screen.
+
+## 0.9.0 (2026-11-14)
 
 First public release. Feature-complete, but not yet declared stable: it is vibe coded and has not been independently reviewed (see Known limitations). 1.0.0 follows after more real-world use.
 

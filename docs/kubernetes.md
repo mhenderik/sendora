@@ -171,7 +171,7 @@ Stored file locations are resolved against the server's own `DATA_DIR/shares/<sh
 | Setup page asks for a code | read it from the log: `kubectl -n sendora logs deploy/sendora \| grep "setup code"` |
 | Sign-in or links use the wrong host | `APP_URL` does not match the public HTTPS address |
 | Everyone gets blocked or rate limited together | `SENDORA_TRUSTED_PROXIES` is not set behind the Ingress |
-| Permission errors on `/data` | the volume root is not owned by UID 10001 |
+| `chmod /data: operation not permitted` or other permission errors on `/data` | the volume root is not owned by UID 10001: let the storage administrator fix ownership, or on local clusters (kind, minikube, k3s with local-path) uncomment the `volume-owner` init container in the manifest |
 
 ## Releases and images
 
