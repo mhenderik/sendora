@@ -1,0 +1,226 @@
+package store
+
+import "fmt"
+
+var MailLanguages = []string{"en", "nl", "de", "fr", "es"}
+var MailEvents = []string{"share_created", "share_downloaded", "share_expiring", "password_reset", "verify_email", "reverse_invite", "reverse_completed", "welcome"}
+
+func ValidLanguage(language string) bool {
+	for _, l := range MailLanguages {
+		if language == l {
+			return true
+		}
+	}
+	return false
+}
+
+// MailDefaults uses the same variable names in every language. Existing English
+// templates are copied during migration, never overwritten by these defaults.
+func MailDefaults(event, language string) (string, string) {
+	if event == "welcome" {
+		return welcomeMailDefaults(language)
+	}
+	if event != "share_downloaded" {
+		return legacyMailDefaults(event, language)
+	}
+	if !ValidLanguage(language) {
+		language = "en"
+	}
+	subjects := map[string]string{
+		"en": "A download of your share started",
+		"nl": "Een download van je gedeelde bestanden is gestart",
+		"de": "Ein Download deiner Freigabe wurde gestartet",
+		"fr": "Un téléchargement de votre partage a commencé",
+		"es": "Se ha iniciado una descarga de tus archivos",
+	}
+	bodies := map[string]string{
+		"en": "A download of your share \"{{.ShareName}}\" started.\n\nFiles: {{.FileNames}}\nStarted at: {{.StartedAt}}\nDownload count: {{.DownloadCount}}\n\nThis records the start of file serving, not a completed transfer or confirmation that the recipient saved or read the files.",
+		"nl": "Een download van je gedeelde bestanden \"{{.ShareName}}\" is gestart.\n\nBestanden: {{.FileNames}}\nGestart op: {{.StartedAt}}\nAantal downloads: {{.DownloadCount}}\n\nDit registreert de start van het aanbieden van bestanden, niet een voltooide overdracht of een bevestiging dat de ontvanger de bestanden heeft opgeslagen of gelezen.",
+		"de": "Ein Download deiner Freigabe \"{{.ShareName}}\" wurde gestartet.\n\nDateien: {{.FileNames}}\nGestartet um: {{.StartedAt}}\nDownload-Anzahl: {{.DownloadCount}}\n\nDies erfasst den Beginn der Dateibereitstellung, nicht eine abgeschlossene Übertragung oder eine Bestätigung, dass der Empfänger die Dateien gespeichert oder gelesen hat.",
+		"fr": "Un téléchargement de votre partage \"{{.ShareName}}\" a commencé.\n\nFichiers : {{.FileNames}}\nHeure de début : {{.StartedAt}}\nNombre de téléchargements : {{.DownloadCount}}\n\nCela indique le début de l’envoi des fichiers, pas un transfert terminé ni une confirmation que le destinataire a enregistré ou lu les fichiers.",
+		"es": "Se ha iniciado una descarga de tus archivos \"{{.ShareName}}\".\n\nArchivos: {{.FileNames}}\nInicio: {{.StartedAt}}\nNúmero de descargas: {{.DownloadCount}}\n\nEsto registra el inicio del envío de archivos, no una transferencia completada ni una confirmación de que el destinatario haya guardado o leído los archivos.",
+	}
+	return subjects[language], bodies[language]
+}
+
+// welcomeMailDefaults is the mail an administrator-created user receives. It
+// never contains a password: only the username, the sign-in link and a one-time
+// link for choosing their own password.
+func welcomeMailDefaults(language string) (string, string) {
+	if !ValidLanguage(language) {
+		language = "en"
+	}
+	subjects := map[string]string{
+		"en": "Your {{.ApplicationName}} account is ready",
+		"nl": "Je {{.ApplicationName}}-account staat klaar",
+		"de": "Dein {{.ApplicationName}}-Konto ist bereit",
+		"fr": "Votre compte {{.ApplicationName}} est prêt",
+		"es": "Tu cuenta de {{.ApplicationName}} está lista",
+	}
+	bodies := map[string]string{
+		"en": "Hi {{.RecipientName}},\n\nAn account was created for you on {{.ApplicationName}}.\n\nUsername: {{.Username}}\nSign in: {{.LoginURL}}\n\nChoose your own password here (the link works once and is valid for {{.ExpiresDays}} days):\n{{.SetPasswordURL}}\n\nIf you did not expect this email, you can ignore it.",
+		"nl": "Hallo {{.RecipientName}},\n\nEr is een account voor je aangemaakt op {{.ApplicationName}}.\n\nGebruikersnaam: {{.Username}}\nAanmelden: {{.LoginURL}}\n\nKies hier je eigen wachtwoord (de link werkt één keer en is {{.ExpiresDays}} dagen geldig):\n{{.SetPasswordURL}}\n\nAls je deze e-mail niet verwachtte, kun je hem negeren.",
+		"de": "Hallo {{.RecipientName}},\n\nFür dich wurde ein Konto bei {{.ApplicationName}} erstellt.\n\nBenutzername: {{.Username}}\nAnmelden: {{.LoginURL}}\n\nWähle hier dein eigenes Passwort (der Link funktioniert einmal und ist {{.ExpiresDays}} Tage gültig):\n{{.SetPasswordURL}}\n\nWenn du diese E-Mail nicht erwartet hast, kannst du sie ignorieren.",
+		"fr": "Bonjour {{.RecipientName}},\n\nUn compte a été créé pour vous sur {{.ApplicationName}}.\n\nNom d’utilisateur : {{.Username}}\nConnexion : {{.LoginURL}}\n\nChoisissez ici votre mot de passe (le lien ne fonctionne qu’une fois et reste valable {{.ExpiresDays}} jours) :\n{{.SetPasswordURL}}\n\nSi vous n’attendiez pas cet e-mail, vous pouvez l’ignorer.",
+		"es": "Hola {{.RecipientName}},\n\nSe ha creado una cuenta para ti en {{.ApplicationName}}.\n\nUsuario: {{.Username}}\nIniciar sesión: {{.LoginURL}}\n\nElige aquí tu propia contraseña (el enlace funciona una vez y es válido durante {{.ExpiresDays}} días):\n{{.SetPasswordURL}}\n\nSi no esperabas este correo, puedes ignorarlo.",
+	}
+	return subjects[language], bodies[language]
+}
+
+// TestMailText is the content of the administrator's "send test email" message.
+// It is not an editable template event; it follows the recipient's language.
+func TestMailText(language string) (string, string) {
+	if !ValidLanguage(language) {
+		language = "en"
+	}
+	subjects := map[string]string{
+		"en": "Test email",
+		"nl": "Test-e-mail",
+		"de": "Test-E-Mail",
+		"fr": "E-mail de test",
+		"es": "Correo de prueba",
+	}
+	bodies := map[string]string{
+		"en": "SMTP works.",
+		"nl": "SMTP werkt.",
+		"de": "SMTP funktioniert.",
+		"fr": "SMTP fonctionne.",
+		"es": "SMTP funciona.",
+	}
+	return subjects[language], bodies[language]
+}
+
+// refinedMailDefaults lists wording improvements to built-in defaults. A row is
+// only updated while it still holds exactly the previous default, so templates an
+// administrator changed are never touched.
+var refinedMailDefaults = []struct{ key, previous, current string }{
+	{"tpl_share_downloaded_fr",
+		"Un téléchargement de votre partage \"{{.ShareName}}\" a commencé.\n\nFichiers : {{.FileNames}}\nDébut : {{.StartedAt}}\nNombre de téléchargements : {{.DownloadCount}}\n\nCela indique le début de l’envoi des fichiers, pas un transfert terminé ni une confirmation que le destinataire a enregistré ou lu les fichiers.",
+		"Un téléchargement de votre partage \"{{.ShareName}}\" a commencé.\n\nFichiers : {{.FileNames}}\nHeure de début : {{.StartedAt}}\nNombre de téléchargements : {{.DownloadCount}}\n\nCela indique le début de l’envoi des fichiers, pas un transfert terminé ni une confirmation que le destinataire a enregistré ou lu les fichiers."},
+	{"tpl_reverse_completed_es",
+		"{{.SenderName}} ha subido archivos para ti: {{.URL}}\n\nArchivos: {{.ShareName}}",
+		"{{.SenderName}} ha subido archivos para ti: {{.URL}}\n\nArchivos compartidos: {{.ShareName}}"},
+}
+
+func legacyMailDefaults(event, language string) (string, string) {
+	subjects := map[string][]string{
+		"en": {"{{.SenderName}} shared files with you", "Your share was downloaded", "Share expiring soon", "Password reset", "Verify your email", "{{.SenderName}} invites you to upload files", "Files uploaded to you"},
+		"nl": {"{{.SenderName}} heeft bestanden met je gedeeld", "Je gedeelde bestanden zijn gedownload", "Je gedeelde bestanden verlopen binnenkort", "Wachtwoord herstellen", "Verifieer je e-mailadres", "{{.SenderName}} nodigt je uit om bestanden te uploaden", "Bestanden naar je geüpload"},
+		"de": {"{{.SenderName}} hat Dateien mit dir geteilt", "Deine Dateien wurden heruntergeladen", "Deine Freigabe läuft bald ab", "Passwort zurücksetzen", "E-Mail-Adresse bestätigen", "{{.SenderName}} lädt dich zum Hochladen ein", "Dateien für dich hochgeladen"},
+		"fr": {"{{.SenderName}} a partagé des fichiers avec vous", "Vos fichiers ont été téléchargés", "Votre partage expire bientôt", "Réinitialiser le mot de passe", "Vérifiez votre adresse e-mail", "{{.SenderName}} vous invite à déposer des fichiers", "Des fichiers ont été déposés pour vous"},
+		"es": {"{{.SenderName}} ha compartido archivos contigo", "Tus archivos se han descargado", "Tu enlace caduca pronto", "Restablecer contraseña", "Verifica tu correo electrónico", "{{.SenderName}} te invita a subir archivos", "Han subido archivos para ti"},
+	}
+	bodies := map[string][]string{
+		"en": {"Hi {{.RecipientName}},\n\n{{.SenderName}} shared files with you: {{.URL}}\n\n{{.Message}}\n\nExpires: {{.Expires}}", "Your share \"{{.ShareName}}\" was downloaded.", "Your share \"{{.ShareName}}\" expires on {{.Expires}}: {{.URL}}", "Reset your password: {{.URL}}\n\nLink valid for 1 hour.", "Your verification code is {{.Code}}", "Hi {{.RecipientName}},\n\n{{.SenderName}} invites you to upload files: {{.URL}}\n\n{{.Message}}", "{{.SenderName}} uploaded files for you: {{.URL}}\n\nShare: {{.ShareName}}"},
+		"nl": {"Hallo {{.RecipientName}},\n\n{{.SenderName}} heeft bestanden met je gedeeld: {{.URL}}\n\n{{.Message}}\n\nVerloopt: {{.Expires}}", "Je gedeelde bestanden \"{{.ShareName}}\" zijn gedownload.", "Je gedeelde bestanden \"{{.ShareName}}\" verlopen op {{.Expires}}: {{.URL}}", "Herstel je wachtwoord: {{.URL}}\n\nDe link is 1 uur geldig.", "Je verificatiecode is {{.Code}}", "Hallo {{.RecipientName}},\n\n{{.SenderName}} nodigt je uit om bestanden te uploaden: {{.URL}}\n\n{{.Message}}", "{{.SenderName}} heeft bestanden naar je geüpload: {{.URL}}\n\nGedeelde bestanden: {{.ShareName}}"},
+		"de": {"Hallo {{.RecipientName}},\n\n{{.SenderName}} hat Dateien mit dir geteilt: {{.URL}}\n\n{{.Message}}\n\nAblaufdatum: {{.Expires}}", "Deine Freigabe \"{{.ShareName}}\" wurde heruntergeladen.", "Deine Freigabe \"{{.ShareName}}\" läuft am {{.Expires}} ab: {{.URL}}", "Setze dein Passwort zurück: {{.URL}}\n\nDer Link ist 1 Stunde gültig.", "Dein Bestätigungscode lautet {{.Code}}", "Hallo {{.RecipientName}},\n\n{{.SenderName}} lädt dich zum Hochladen von Dateien ein: {{.URL}}\n\n{{.Message}}", "{{.SenderName}} hat Dateien für dich hochgeladen: {{.URL}}\n\nFreigabe: {{.ShareName}}"},
+		"fr": {"Bonjour {{.RecipientName}},\n\n{{.SenderName}} a partagé des fichiers avec vous : {{.URL}}\n\n{{.Message}}\n\nExpiration : {{.Expires}}", "Votre partage \"{{.ShareName}}\" a été téléchargé.", "Votre partage \"{{.ShareName}}\" expire le {{.Expires}} : {{.URL}}", "Réinitialisez votre mot de passe : {{.URL}}\n\nLe lien est valable 1 heure.", "Votre code de vérification est {{.Code}}", "Bonjour {{.RecipientName}},\n\n{{.SenderName}} vous invite à déposer des fichiers : {{.URL}}\n\n{{.Message}}", "{{.SenderName}} a déposé des fichiers pour vous : {{.URL}}\n\nPartage : {{.ShareName}}"},
+		"es": {"Hola {{.RecipientName}},\n\n{{.SenderName}} ha compartido archivos contigo: {{.URL}}\n\n{{.Message}}\n\nCaduca: {{.Expires}}", "Tus archivos \"{{.ShareName}}\" se han descargado.", "Tu enlace \"{{.ShareName}}\" caduca el {{.Expires}}: {{.URL}}", "Restablece tu contraseña: {{.URL}}\n\nEl enlace es válido durante 1 hora.", "Tu código de verificación es {{.Code}}", "Hola {{.RecipientName}},\n\n{{.SenderName}} te invita a subir archivos: {{.URL}}\n\n{{.Message}}", "{{.SenderName}} ha subido archivos para ti: {{.URL}}\n\nArchivos compartidos: {{.ShareName}}"},
+	}
+	if !ValidLanguage(language) {
+		language = "en"
+	}
+	for i, e := range MailEvents {
+		if event == e {
+			return subjects[language][i], bodies[language][i]
+		}
+	}
+	return "", ""
+}
+
+func (s *Store) migrateMailLocalization() error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// PRAGMA inspection keeps the schema change additive for existing databases.
+	rows, err := tx.Query(`PRAGMA table_info(users)`)
+	if err != nil {
+		return err
+	}
+	found, foundUI := false, false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var def any
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &def, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		found = found || name == "language"
+		foundUI = foundUI || name == "ui_language"
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if !found {
+		if _, err := tx.Exec(`ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'en'`); err != nil {
+			return err
+		}
+	}
+	if !foundUI {
+		if _, err := tx.Exec(`ALTER TABLE users ADD COLUMN ui_language TEXT NOT NULL DEFAULT 'en'`); err != nil {
+			return err
+		}
+	}
+	// Upgrade only untouched historical download defaults, preserving custom source.
+	for _, language := range MailLanguages {
+		oldSubject, oldBody := legacyMailDefaults("share_downloaded", language)
+		subject, body := MailDefaults("share_downloaded", language)
+		for _, update := range []struct{ key, old, value string }{
+			{"subj_share_downloaded_" + language, oldSubject, subject},
+			{"tpl_share_downloaded_" + language, oldBody, body},
+		} {
+			if _, err := tx.Exec(`UPDATE settings SET value=? WHERE key=? AND value=?`, update.value, update.key, update.old); err != nil {
+				return err
+			}
+		}
+		if language == "en" {
+			if _, err := tx.Exec(`UPDATE settings SET value=? WHERE key='tpl_share_downloaded' AND value=?`, body, oldBody); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS download_mail_outbox (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, share_id INTEGER NOT NULL,
+		status TEXT NOT NULL DEFAULT 'reserved', recipient TEXT NOT NULL,
+		language TEXT NOT NULL, data TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+		next_attempt DATETIME NOT NULL, last_error TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
+		CREATE INDEX IF NOT EXISTS download_mail_pending ON download_mail_outbox(status,next_attempt)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS downloads_share_history ON downloads(share_id,created_at DESC,id DESC)`); err != nil {
+		return err
+	}
+	for _, r := range refinedMailDefaults {
+		if _, err := tx.Exec(`UPDATE settings SET value=? WHERE key=? AND value=?`, r.current, r.key, r.previous); err != nil {
+			return err
+		}
+	}
+	for _, event := range MailEvents {
+		for _, language := range MailLanguages {
+			subject, body := MailDefaults(event, language)
+			if language == "en" {
+				var old string
+				if err := tx.QueryRow(`SELECT value FROM settings WHERE key=?`, "tpl_"+event).Scan(&old); err == nil {
+					body = old
+				}
+			}
+			for key, value := range map[string]string{"tpl_" + event + "_" + language: body, "subj_" + event + "_" + language: subject} {
+				if _, err := tx.Exec(`INSERT OR IGNORE INTO settings(key,value,grp) VALUES(?,?,'email_templates')`, key, value); err != nil {
+					return fmt.Errorf("seed email template: %w", err)
+				}
+			}
+			if language == "en" {
+				if _, err := tx.Exec(`INSERT OR IGNORE INTO settings(key,value,grp) VALUES(?,?,'email_templates')`, "tpl_"+event, body); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return tx.Commit()
+}

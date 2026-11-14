@@ -1,0 +1,397 @@
+package app
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"github.com/mhenderik/sendora/internal/store"
+	"io"
+	"math"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+)
+
+type shareFileOut struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	FullPath string `json:"full_path"`
+	Size     int64  `json:"size"`
+}
+
+func shareDirExists(dataDir, longID string) bool {
+	dir, err := store.ShareDir(dataDir, longID)
+	if err != nil {
+		return false
+	}
+	st, err := os.Stat(dir)
+	return err == nil && st.IsDir()
+}
+
+// shareTotalProblem returns a user-facing message when adding add bytes to a
+// share already holding existing bytes would break the configured share size
+// (maxBytes <= 0 means unlimited) or the verified-download snapshot limit.
+func shareTotalProblem(existing, add, maxBytes int64) string {
+	if existing < 0 || add < 0 || add > math.MaxInt64-existing {
+		return "share size exceeds limit"
+	}
+	sum := existing + add
+	if maxBytes > 0 && sum > maxBytes {
+		return fmt.Sprintf("total share size would exceed limit of %d MB", maxBytes/1024/1024)
+	}
+	if lim := snapshotLimit(); sum > lim {
+		return fmt.Sprintf("share would exceed the maximum downloadable size of %d MB", lim/1024/1024)
+	}
+	return ""
+}
+
+var errNoUniquePath = errors.New("no unique file path available")
+
+// uniqueSharePath returns p, or "name (2).ext", "name (3).ext", ... in the same
+// directory, such that its lower-cased form is not in existing. The chosen
+// path is NOT added to existing; callers do that. Pure and bounded.
+func uniqueSharePath(existing map[string]bool, p string) (string, error) {
+	if !existing[strings.ToLower(p)] {
+		return p, nil
+	}
+	dir, base := path.Split(p)
+	ext := path.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	if stem == "" {
+		stem, ext = base, ""
+	}
+	for n := 2; n <= 10000; n++ {
+		cand := fmt.Sprintf("%s%s (%d)%s", dir, stem, n, ext)
+		if !existing[strings.ToLower(cand)] {
+			return cand, nil
+		}
+	}
+	return "", errNoUniquePath
+}
+
+// completeAppend finishes an upload session that targets an existing share.
+// It never claims or removes the share directory: on failure only the files
+// staged by this call are removed.
+func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id string, shareID int64) {
+	u := s.ctxUser(r)
+	if u.IsGuest {
+		jerr(w, 404, "share not found")
+		return
+	}
+	var junk completeReq
+	if err := decode(r, &junk); err != nil && !errors.Is(err, io.EOF) {
+		jerr(w, 400, "bad request")
+		return
+	}
+	type uf struct {
+		idx                           int
+		name, fp, typ                 string
+		expected, checksum, integrity string
+		size, rec                     int64
+		disk                          string
+	}
+	rows, err := s.St.DB.Query(`SELECT idx,name,full_path,type,size,received,sha256 FROM upload_files WHERE session_id=? ORDER BY idx`, id)
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	var files []uf
+	for rows.Next() {
+		var f uf
+		if err := rows.Scan(&f.idx, &f.name, &f.fp, &f.typ, &f.size, &f.rec, &f.expected); err != nil {
+			rows.Close()
+			jerr(w, 500, "database error")
+			return
+		}
+		files = append(files, f)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || len(files) == 0 {
+		jerr(w, 500, "upload metadata unavailable")
+		return
+	}
+	for _, f := range files {
+		if f.rec != f.size {
+			jerr(w, 400, fmt.Sprintf("file %q incomplete", f.name))
+			return
+		}
+	}
+	var owner int64
+	var invite sql.NullInt64
+	if err := s.St.DB.QueryRow(`SELECT quota_owner_id,invite_id FROM upload_sessions WHERE id=? AND user_id=?`, id, u.ID).Scan(&owner, &invite); err != nil {
+		jerr(w, 409, "upload reservation unavailable")
+		return
+	}
+	if invite.Valid || owner != u.ID {
+		jerr(w, 409, "upload reservation invalid")
+		return
+	}
+	var longID string
+	if err := s.St.DB.QueryRow(`SELECT long_id FROM shares WHERE id=? AND user_id=? AND status<>'deleted'`, shareID, u.ID).Scan(&longID); err != nil {
+		jerr(w, 404, "share not found")
+		return
+	}
+	if !shareDirExists(s.St.DataDir, longID) {
+		jerr(w, 409, "share is no longer available")
+		return
+	}
+	dest := filepath.Join(s.St.DataDir, "shares", longID)
+	committed := false
+	defer func() {
+		if !committed {
+			for _, f := range files {
+				if f.disk != "" {
+					os.Remove(f.disk)
+				}
+			}
+		}
+	}()
+	for i := range files {
+		f := &files[i]
+		disk := filepath.Join(dest, randHex(8)+"_"+f.name)
+		if err := stageUploadFile(filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part"), disk, f.size); err != nil {
+			os.Remove(disk) // partial copy under our own fresh random name
+			jerr(w, 500, "storage error")
+			return
+		}
+		f.disk = disk
+		checksum, err := hashDisk(r.Context(), disk, f.size)
+		if err != nil {
+			jerr(w, 409, "uploaded file integrity check failed")
+			return
+		}
+		if f.expected != "" && checksum != f.expected {
+			jerr(w, 409, "upload checksum mismatch")
+			return
+		}
+		f.checksum, f.integrity = checksum, "server_baseline"
+		if f.expected != "" {
+			f.integrity = "expected_checksum_verified"
+		}
+	}
+	maxShare := int64(s.St.SettingInt("max_share_size", 2048)) * 1024 * 1024
+	tx, err := s.St.DB.Begin()
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	defer tx.Rollback()
+	// Write lock first, then recheck everything against the current state.
+	res, err := tx.Exec(`UPDATE shares SET id=id WHERE id=? AND user_id=? AND status<>'deleted'`, shareID, u.ID)
+	if err != nil {
+		jerr(w, 500, "upload finalization failed")
+		return
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		jerr(w, 404, "share not found")
+		return
+	}
+	if !shareDirExists(s.St.DataDir, longID) {
+		jerr(w, 409, "share is no longer available")
+		return
+	}
+	res, err = tx.Exec(`UPDATE upload_sessions SET id=id WHERE id=? AND user_id=? AND quota_owner_id=? AND share_id=?`, id, u.ID, owner, shareID)
+	if err != nil {
+		jerr(w, 500, "upload finalization failed")
+		return
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		jerr(w, 409, "upload no longer exists")
+		return
+	}
+	used := map[string]bool{}
+	var existing int64
+	frows, err := tx.Query(`SELECT full_path,size FROM files WHERE share_id=?`, shareID)
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	for frows.Next() {
+		var fp string
+		var sz int64
+		if err := frows.Scan(&fp, &sz); err != nil {
+			frows.Close()
+			jerr(w, 500, "database error")
+			return
+		}
+		used[strings.ToLower(fp)] = true
+		existing += sz
+	}
+	err = frows.Err()
+	frows.Close()
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	var add int64
+	for _, f := range files {
+		add += f.size
+	}
+	if msg := shareTotalProblem(existing, add, maxShare); msg != "" {
+		jerr(w, 413, msg)
+		return
+	}
+	added := make([]shareFileOut, 0, len(files))
+	for _, f := range files {
+		np, err := uniqueSharePath(used, f.fp)
+		if err != nil {
+			jerr(w, 409, "could not choose a unique file name")
+			return
+		}
+		used[strings.ToLower(np)] = true
+		name := path.Base(np)
+		ires, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity) VALUES(?,?,?,?,?,?,?,?)`, shareID, name, np, f.size, f.typ, f.disk, f.checksum, f.integrity)
+		if err != nil {
+			jerr(w, 500, "file metadata write failed")
+			return
+		}
+		fid, _ := ires.LastInsertId()
+		added = append(added, shareFileOut{fid, name, np, f.size})
+	}
+	res, err = tx.Exec(`DELETE FROM upload_sessions WHERE id=?`, id)
+	if err != nil {
+		jerr(w, 500, "upload finalization failed")
+		return
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		jerr(w, 409, "upload no longer exists")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		jerr(w, 500, "file metadata write failed")
+		return
+	}
+	committed = true
+	os.RemoveAll(s.uploadDir(id))
+	s.logEvent(u.ID, u.Username, "share_files_added", "share#"+strconv.FormatInt(shareID, 10), fmt.Sprintf("%d files", len(added)))
+	jout(w, 201, map[string]any{"ok": true, "added": added})
+}
+
+func (s *Server) listShareFiles(w http.ResponseWriter, r *http.Request) {
+	sh := s.ownedShare(w, r)
+	if sh == nil {
+		return
+	}
+	rows, err := s.St.DB.Query(`SELECT id,name,full_path,size FROM files WHERE share_id=? ORDER BY full_path,id`, sh.ID)
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	defer rows.Close()
+	out := []shareFileOut{}
+	for rows.Next() {
+		var f shareFileOut
+		if err := rows.Scan(&f.ID, &f.Name, &f.FullPath, &f.Size); err != nil {
+			jerr(w, 500, "database error")
+			return
+		}
+		out = append(out, f)
+	}
+	if rows.Err() != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	jout(w, 200, out)
+}
+
+// removeFileCommitHook lets tests force a commit failure.
+var removeFileCommitHook func() error
+
+func (s *Server) deleteShareFile(w http.ResponseWriter, r *http.Request) {
+	sh := s.ownedShare(w, r)
+	if sh == nil {
+		return
+	}
+	u := s.ctxUser(r)
+	fileID, err := strconv.ParseInt(chi.URLParam(r, "fileId"), 10, 64)
+	if err != nil {
+		jerr(w, 404, "file not found")
+		return
+	}
+	tx, err := s.St.DB.Begin()
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	defer tx.Rollback()
+	admin := 0
+	if u.Admin {
+		admin = 1
+	}
+	res, err := tx.Exec(`UPDATE shares SET id=id WHERE id=? AND status<>'deleted' AND (?=1 OR user_id=?)`, sh.ID, admin, u.ID)
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		jerr(w, 404, "share not found")
+		return
+	}
+	var disk, lid string
+	if err := tx.QueryRow(`SELECT f.disk_path,s.long_id FROM files f JOIN shares s ON s.id=f.share_id WHERE f.id=? AND f.share_id=?`, fileID, sh.ID).Scan(&disk, &lid); err != nil {
+		if err == sql.ErrNoRows {
+			jerr(w, 404, "file not found")
+		} else {
+			jerr(w, 500, "database error")
+		}
+		return
+	}
+	var count int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM files WHERE share_id=?`, sh.ID).Scan(&count); err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	if count <= 1 {
+		jerr(w, 409, "a share needs at least one file")
+		return
+	}
+	// Only ever touch a file directly inside this share's own directory: the path
+	// is derived from the validated long ID and the recorded base name only.
+	safe, perr := store.SharePath(s.St.DataDir, lid, disk)
+	if perr != nil {
+		jerr(w, 500, "file storage metadata invalid")
+		return
+	}
+	disk = safe
+	removing := disk + ".removing"
+	renamed := false
+	if err := os.Rename(disk, removing); err == nil {
+		renamed = true
+	} else if !os.IsNotExist(err) {
+		jerr(w, 503, "file removal failed")
+		return
+	}
+	undo := func() {
+		if renamed {
+			os.Rename(removing, disk)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM files WHERE id=? AND share_id=?`, fileID, sh.ID); err != nil {
+		undo()
+		jerr(w, 500, "database error")
+		return
+	}
+	if removeFileCommitHook != nil {
+		if err := removeFileCommitHook(); err != nil {
+			undo()
+			jerr(w, 500, "database error")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		undo()
+		jerr(w, 500, "database error")
+		return
+	}
+	if renamed {
+		os.Remove(removing)
+	}
+	s.logEvent(u.ID, u.Username, "share_file_removed", "share#"+strconv.FormatInt(sh.ID, 10), "file#"+strconv.FormatInt(fileID, 10))
+	jout(w, 200, map[string]any{"ok": true})
+}

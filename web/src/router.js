@@ -1,0 +1,46 @@
+import { createRouter, createWebHistory } from 'vue-router'
+import { session } from './api'
+import { app } from './state'
+
+const routes = [
+  { path: '/', component: () => import('./views/Upload.vue'), meta: { auth: true } },
+  { path: '/login', component: () => import('./views/Login.vue') },
+  { path: '/setup', component: () => import('./views/Setup.vue') },
+  { path: '/register', component: () => import('./views/Register.vue') },
+  { path: '/forgot-password', component: () => import('./views/Forgot.vue') },
+  { path: '/reset-password/:token', component: () => import('./views/Reset.vue') },
+  { path: '/share/:id', component: () => import('./views/Share.vue') },
+  { path: '/invite/:token', component: () => import('./views/Invite.vue') },
+  { path: '/shares', component: () => import('./views/MyShares.vue'), meta: { auth: true } },
+  { path: '/profile', component: () => import('./views/Profile.vue'), meta: { auth: true } },
+  {
+    path: '/admin', component: () => import('./views/admin/Admin.vue'), meta: { auth: true, admin: true },
+    children: [
+      { path: '', redirect: '/admin/stats' },
+      { path: 'stats', component: () => import('./views/admin/Stats.vue') },
+      { path: 'users', component: () => import('./views/admin/Users.vue') },
+      { path: 'shares', component: () => import('./views/admin/AllShares.vue') },
+      { path: 'settings', component: () => import('./views/admin/SettingsView.vue') },
+      { path: 'branding', component: () => import('./views/admin/Branding.vue') },
+      { path: 'themes', component: () => import('./views/admin/Themes.vue') },
+      { path: 'providers', component: () => import('./views/admin/Providers.vue') },
+      { path: 'emails', component: () => import('./views/admin/Emails.vue') },
+      { path: 'security', component: () => import('./views/admin/Security.vue') },
+      { path: 'languages', component: () => import('./views/admin/Languages.vue') },
+      { path: 'backups', component: () => import('./views/admin/Backups.vue') },
+      { path: 'logs', component: () => import('./views/admin/Logs.vue') }
+    ]
+  },
+  { path: '/:pathMatch(.*)*', redirect: '/' }
+]
+
+const router = createRouter({ history: createWebHistory(), routes })
+
+router.beforeEach(to => {
+  if (app.boot?.setup_needed && to.path !== '/setup') return '/setup'
+  if (to.meta.auth && !session.user) return { path: '/login', query: { next: to.fullPath } }
+  if (to.meta.auth && (session.user?.must_change_password || session.user?.mfa_enroll_required) && to.path !== '/profile') return '/profile'
+  if (to.meta.admin && !session.user?.admin) return '/'
+  if (session.user?.is_guest && !['/', '/invite'].some(p => to.path === p || to.path.startsWith('/invite/')) && !to.path.startsWith('/share/')) return '/'
+})
+export default router

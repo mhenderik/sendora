@@ -1,0 +1,590 @@
+package app
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/mhenderik/sendora/internal/store"
+)
+
+// ---------- settings ----------
+
+var secretKeys = map[string]bool{"smtp_pass": true}
+
+func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
+	rows, _ := s.St.DB.Query(`SELECT key,value,grp FROM settings WHERE grp NOT IN ('secret','email_templates') AND key<>'jwt_secret' ORDER BY key`)
+	defer rows.Close()
+	out := map[string]any{}
+	for rows.Next() {
+		var k, v, g string
+		rows.Scan(&k, &v, &g)
+		if secretKeys[k] {
+			out[k] = ""
+			out[k+"_set"] = v != ""
+			continue
+		}
+		out[k] = v
+	}
+	jout(w, 200, out)
+}
+
+func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var in map[string]any
+	decoder := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))
+	decoder.UseNumber() // Do not round quota input through float64 before validation.
+	if decoder.Decode(&in) != nil {
+		jerr(w, 400, "bad request")
+		return
+	}
+	updates := make(map[string]string, len(in))
+	for k, v := range in {
+		var str string
+		switch t := v.(type) {
+		case bool:
+			str = strconv.FormatBool(t)
+		case json.Number:
+			str = t.String()
+			if k != store.DefaultStorageQuotaKey {
+				n, err := t.Float64()
+				if err != nil {
+					continue
+				}
+				str = strconv.FormatFloat(n, 'f', -1, 64)
+			}
+		case string:
+			str = t
+		default:
+			if k == settingLocalLogin {
+				jerr(w, 400, "invalid value for "+k)
+				return
+			}
+			if owned, _ := validateShareSetting(k, ""); owned {
+				jerr(w, 400, "invalid value for "+k)
+				return
+			}
+			if owned, _ := validateAccountSetting(k, ""); owned {
+				jerr(w, 400, "invalid value for "+k)
+				return
+			}
+			if owned, _ := validateLogSetting(k, ""); owned {
+				jerr(w, 400, "invalid value for "+k)
+				return
+			}
+			if owned, _ := validateBackgroundSetting(k, ""); owned {
+				jerr(w, 400, "invalid value for "+k)
+				return
+			}
+			if owned, _ := validateMFASetting(k, ""); owned {
+				jerr(w, 400, "invalid value for "+k)
+				return
+			}
+			if owned, _ := validateIdleSetting(k, ""); owned {
+				jerr(w, 400, "invalid value for "+k)
+				return
+			}
+			if k == store.DefaultStorageQuotaKey {
+				jerr(w, 400, "invalid default storage quota")
+				return
+			}
+			continue
+		}
+		if k == store.DefaultStorageQuotaKey {
+			if _, err := store.ParseQuotaBytes(str); err != nil {
+				jerr(w, 400, "invalid default storage quota")
+				return
+			}
+		}
+		if owned, err := validateShareSetting(k, str); owned && err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		if owned, err := validateAccountSetting(k, str); owned && err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		if owned, err := validateBackgroundSetting(k, str); owned && err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		if owned, err := validateReplyToSetting(k, &str); owned && err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		if owned, err := validateIPBanSetting(k, &str); owned && err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		if owned, err := validateIdleSetting(k, str); owned && err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		if owned, err := validateMFASetting(k, str); owned && err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		if owned, err := validateLogSetting(k, str); owned && err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		if k == settingLocalLogin {
+			norm, ok := normalizeLocalLoginSetting(str)
+			if !ok {
+				jerr(w, 400, "invalid value for "+k+": must be true or false")
+				return
+			}
+			str = norm
+			// Only turning it off needs the lockout check; the whole batch is rejected.
+			if str == "false" && s.St.SettingBool(settingLocalLogin) {
+				if safe, msg := s.localLoginSafe(s.ctxUser(r).ID); !safe {
+					jerr(w, 400, msg)
+					return
+				}
+			}
+		}
+		if k == settingRegistrationDomains {
+			norm, err := normalizeRegistrationDomains(str)
+			if err != nil {
+				jerr(w, 400, err.Error())
+				return
+			}
+			str = norm
+		}
+		if secretKeys[k] && str == "" {
+			continue // blank = keep
+		}
+		if k == "jwt_secret" || k == "ui_logo" || k == "ui_favicon" {
+			continue // managed via upload endpoints
+		}
+		updates[k] = str
+	}
+	// Enforcing MFA must not lock out the administrator who switches it on: they
+	// need a factor of their own (or an explicit exemption) first.
+	if np, ok := updates["mfa_policy"]; ok && (np == "admins" || np == "all") {
+		if me := s.ctxUser(r); me != nil && me.MFAPolicy != "exempt" && !s.userHasFactor(me) {
+			jerr(w, 400, msgMFAEnforceSelf)
+			return
+		}
+	}
+	tx, err := s.St.DB.Begin()
+	if err != nil {
+		jerr(w, 500, "settings update failed")
+		return
+	}
+	defer tx.Rollback()
+	for k, str := range updates {
+		if _, err := tx.Exec(`UPDATE settings SET value=? WHERE key=? AND grp NOT IN ('secret','email_templates')`, str, k); err != nil {
+			jerr(w, 500, "settings update failed")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		jerr(w, 500, "settings update failed")
+		return
+	}
+	// The transaction has committed and released the connection.
+	if _, touched := updates["logging_enabled"]; touched {
+		if on, _ := parseStrictBool(updates["logging_enabled"]); !on {
+			s.eventLog.state.Store(&logState{retention: eventLogMinRetentionHours, at: time.Now(), gen: s.St.SettingsGen()})
+			s.wipeEventLog()
+		}
+	}
+	s.refreshLogState()
+	keys := make([]string, 0, len(updates))
+	for k := range updates {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	me := s.ctxUser(r)
+	s.logEvent(me.ID, me.Username, "settings_changed", "settings", strings.Join(keys, ","))
+	if np, ok := updates["mfa_policy"]; ok {
+		s.logEvent(me.ID, me.Username, "mfa_policy_changed", "settings", "policy="+np)
+	}
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+// ---------- branding & backgrounds ----------
+
+var imgExt = map[string]string{"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif", "image/svg+xml": ".svg", "image/x-icon": ".ico", "image/vnd.microsoft.icon": ".ico"}
+
+var imgMime = map[string]string{".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
+
+func readImage(w http.ResponseWriter, r *http.Request, allowSVG bool) ([]byte, string, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		jerr(w, 400, "upload too large or invalid")
+		return nil, "", false
+	}
+	f, _, err := r.FormFile("file")
+	if err != nil {
+		jerr(w, 400, "file required")
+		return nil, "", false
+	}
+	defer f.Close()
+	data, _ := io.ReadAll(f)
+	ct := http.DetectContentType(data)
+	if strings.Contains(string(data[:min(len(data), 512)]), "<svg") && allowSVG {
+		ct = "image/svg+xml"
+	}
+	if ct == "text/xml; charset=utf-8" && allowSVG && strings.Contains(string(data), "<svg") {
+		ct = "image/svg+xml"
+	}
+	if len(data) >= 4 && string(data[:4]) == "\x00\x00\x01\x00" {
+		ct = "image/x-icon"
+	}
+	ext, ok := imgExt[ct]
+	if !ok || (ext == ".svg" && !allowSVG) {
+		jerr(w, 400, "unsupported image type")
+		return nil, "", false
+	}
+	return data, ext, true
+}
+
+func (s *Server) uploadBranding(w http.ResponseWriter, r *http.Request) {
+	kind := chi.URLParam(r, "kind")
+	if kind != "logo" && kind != "favicon" {
+		jerr(w, 404, "not found")
+		return
+	}
+	data, ext, ok := readImage(w, r, true)
+	if !ok {
+		return
+	}
+	s.clearBranding(kind)
+	name := kind + ext
+	os.WriteFile(filepath.Join(s.St.DataDir, "branding", name), data, 0o600)
+	s.St.DB.Exec(`UPDATE settings SET value=? WHERE key=?`, name, "ui_"+kind)
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) clearBranding(kind string) {
+	if old := s.St.Setting("ui_" + kind); old != "" {
+		os.Remove(filepath.Join(s.St.DataDir, "branding", filepath.Base(old)))
+	}
+}
+
+func (s *Server) deleteBranding(w http.ResponseWriter, r *http.Request) {
+	kind := chi.URLParam(r, "kind")
+	if kind != "logo" && kind != "favicon" {
+		jerr(w, 404, "not found")
+		return
+	}
+	s.clearBranding(kind)
+	s.St.DB.Exec(`UPDATE settings SET value='' WHERE key=?`, "ui_"+kind)
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+func serveImage(w http.ResponseWriter, r *http.Request, p string) {
+	ext := strings.ToLower(filepath.Ext(p))
+	ct, ok := imgMime[ext]
+	f, err := os.Open(p)
+	if err != nil || !ok {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	st, _ := f.Stat()
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeContent(w, r, filepath.Base(p), st.ModTime(), f)
+}
+
+func (s *Server) serveBranding(w http.ResponseWriter, r *http.Request) {
+	kind := chi.URLParam(r, "kind")
+	if kind != "logo" && kind != "favicon" {
+		http.NotFound(w, r)
+		return
+	}
+	name := s.St.Setting("ui_" + kind)
+	if name == "" {
+		http.NotFound(w, r)
+		return
+	}
+	serveImage(w, r, filepath.Join(s.St.DataDir, "branding", filepath.Base(name)))
+}
+
+func (s *Server) listBackgrounds(w http.ResponseWriter, r *http.Request) {
+	ents, _ := os.ReadDir(filepath.Join(s.St.DataDir, "backgrounds"))
+	out := []string{}
+	for _, e := range ents {
+		if _, ok := imgMime[strings.ToLower(filepath.Ext(e.Name()))]; ok && !e.IsDir() {
+			out = append(out, e.Name())
+		}
+	}
+	jout(w, 200, out)
+}
+
+func (s *Server) uploadBackground(w http.ResponseWriter, r *http.Request) {
+	data, ext, ok := readImage(w, r, false)
+	if !ok {
+		return
+	}
+	name := randHex(6) + ext
+	os.WriteFile(filepath.Join(s.St.DataDir, "backgrounds", name), data, 0o600)
+	jout(w, 201, map[string]any{"name": name})
+}
+
+func (s *Server) serveBackground(w http.ResponseWriter, r *http.Request) {
+	serveImage(w, r, filepath.Join(s.St.DataDir, "backgrounds", filepath.Base(chi.URLParam(r, "file"))))
+}
+
+func (s *Server) deleteBackground(w http.ResponseWriter, r *http.Request) {
+	os.Remove(filepath.Join(s.St.DataDir, "backgrounds", filepath.Base(chi.URLParam(r, "file"))))
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+// ---------- themes ----------
+
+type Theme struct {
+	ID       int64             `json:"id"`
+	Name     string            `json:"name"`
+	Category string            `json:"category"`
+	Bundled  bool              `json:"bundled"`
+	Active   bool              `json:"active"`
+	Data     map[string]string `json:"data"`
+}
+
+var colorRe = regexp.MustCompile(`^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
+var themeKeys = []string{"primary", "bg", "surface", "text", "muted", "border", "danger"}
+
+func sanitizeTheme(in map[string]string) (map[string]string, error) {
+	if len(in) != len(themeKeys) {
+		return nil, fmt.Errorf("all seven theme colors required; no extra fields allowed")
+	}
+	out := map[string]string{}
+	for _, k := range themeKeys {
+		v := in[k]
+		if !colorRe.MatchString(v) {
+			return nil, fmt.Errorf("%s must be a hex colour", k)
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (s *Server) queryThemes(where string, args ...any) []Theme {
+	rows, _ := s.St.DB.Query(`SELECT id,name,category,bundled,active,data FROM themes `+where+` ORDER BY bundled DESC,name`, args...)
+	out := []Theme{}
+	if rows == nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var t Theme
+		var d string
+		rows.Scan(&t.ID, &t.Name, &t.Category, &t.Bundled, &t.Active, &d)
+		json.Unmarshal([]byte(d), &t.Data)
+		out = append(out, t)
+	}
+	return out
+}
+
+func (s *Server) activeTheme(w http.ResponseWriter, r *http.Request) {
+	t := s.queryThemes(`WHERE active=1`)
+	if len(t) == 0 {
+		jout(w, 200, nil)
+		return
+	}
+	jout(w, 200, t[0])
+}
+
+func (s *Server) listThemes(w http.ResponseWriter, r *http.Request) {
+	jout(w, 200, s.queryThemes(``))
+}
+
+func (s *Server) saveTheme(w http.ResponseWriter, r *http.Request) {
+	var t Theme
+	if decodeMailRequest(w, r, &t) != nil || strings.TrimSpace(t.Name) == "" || len(t.Name) > 80 || !utf8.ValidString(t.Name) || strings.IndexFunc(t.Name, unicode.IsControl) >= 0 || t.ID < 0 {
+		jerr(w, 400, "valid theme name and ID required")
+		return
+	}
+	data, err := sanitizeTheme(t.Data)
+	if err != nil {
+		jerr(w, 400, err.Error())
+		return
+	}
+	b, _ := json.Marshal(data)
+	if t.ID > 0 {
+		res, err := s.St.DB.Exec(`UPDATE themes SET name=?, data=? WHERE id=? AND bundled=0`, strings.TrimSpace(t.Name), string(b), t.ID)
+		if err != nil {
+			jerr(w, 400, "theme update failed; name may already be used")
+			return
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			jerr(w, 400, "theme not editable")
+			return
+		}
+	} else if _, err := s.St.DB.Exec(`INSERT INTO themes(name,data) VALUES(?,?)`, strings.TrimSpace(t.Name), string(b)); err != nil {
+		jerr(w, 400, "name already used")
+		return
+	}
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) deleteTheme(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	res, _ := s.St.DB.Exec(`DELETE FROM themes WHERE id=? AND bundled=0 AND active=0`, id)
+	if n, _ := res.RowsAffected(); n == 0 {
+		jerr(w, 400, "cannot delete bundled or active theme")
+		return
+	}
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) activateTheme(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	tx, _ := s.St.DB.Begin()
+	tx.Exec(`UPDATE themes SET active=0`)
+	res, _ := tx.Exec(`UPDATE themes SET active=1 WHERE id=?`, id)
+	if n, _ := res.RowsAffected(); n == 0 {
+		tx.Rollback()
+		jerr(w, 404, "not found")
+		return
+	}
+	tx.Commit()
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+// ---------- stats ----------
+
+func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
+	q := func(sql string, args ...any) (n int64) { s.St.DB.QueryRow(sql, args...).Scan(&n); return }
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	type day struct {
+		Day   string `json:"day"`
+		Count int    `json:"count"`
+	}
+	perDay := []day{}
+	rows, _ := s.St.DB.Query(`SELECT date(created_at),COUNT(*) FROM downloads WHERE created_at > ? GROUP BY 1 ORDER BY 1`, time.Now().AddDate(0, 0, -14))
+	for rows != nil && rows.Next() {
+		var d day
+		rows.Scan(&d.Day, &d.Count)
+		perDay = append(perDay, d)
+	}
+	if rows != nil {
+		rows.Close()
+	}
+	top := []map[string]any{}
+	rows, _ = s.St.DB.Query(`SELECT name,long_id,download_count FROM shares ORDER BY download_count DESC LIMIT 5`)
+	for rows != nil && rows.Next() {
+		var n, l string
+		var c int64
+		rows.Scan(&n, &l, &c)
+		top = append(top, map[string]any{"name": n, "long_id": l, "downloads": c})
+	}
+	if rows != nil {
+		rows.Close()
+	}
+	jout(w, 200, map[string]any{
+		"users":             q(`SELECT COUNT(*) FROM users WHERE is_guest=0`),
+		"shares":            q(`SELECT COUNT(*) FROM shares`),
+		"active_shares":     q(`SELECT COUNT(*) FROM shares WHERE status='active' AND (expires_at IS NULL OR expires_at>?)`, time.Now()),
+		"files":             q(`SELECT COUNT(*) FROM files`),
+		"storage_bytes":     q(`SELECT COALESCE(SUM(size),0) FROM files`),
+		"downloads":         q(`SELECT COUNT(*) FROM downloads`),
+		"downloads_per_day": perDay,
+		"top_shares":        top,
+		"system": map[string]any{
+			"version": s.Version, "go": runtime.Version(), "os": runtime.GOOS + "/" + runtime.GOARCH,
+			"uptime_seconds": int(time.Since(s.Started).Seconds()), "mem_bytes": m.Sys, "goroutines": runtime.NumGoroutine(),
+		},
+	})
+}
+
+// ---------- backups ----------
+
+var backupRe = regexp.MustCompile(`^(?:fileshare-\d{8}-\d{6}|sendora-(?:encrypted|preimport)-\d{8}-\d{6}-[a-f0-9]{12})\.db$`)
+
+func (s *Server) makeBackup() (string, error) { return s.makeBackupAs("sendora-encrypted-") }
+
+// makeBackupAs writes a backup named prefix+timestamp+random. Only the
+// "sendora-encrypted-" prefix is subject to automatic pruning.
+func (s *Server) makeBackupAs(prefix string) (string, error) {
+	if s.St.IsEncrypted() {
+		name := prefix + time.Now().Format("20060102-150405") + "-" + randHex(6) + ".db"
+		// Do not expose a partly generated backup through list/download endpoints.
+		temp := filepath.Join(s.St.DataDir, "backups", ".pending-"+name)
+		if err := s.St.ExportEncryptedBackup(temp); err != nil {
+			return "", err
+		}
+		if err := os.Rename(temp, filepath.Join(s.St.DataDir, "backups", name)); err != nil {
+			os.Remove(temp)
+			return "", err
+		}
+		return name, nil
+	}
+	// Explicit plaintext fixtures only; production entrypoint requires SQLCipher.
+	name := "fileshare-" + time.Now().Format("20060102-150405") + ".db"
+	p := filepath.Join(s.St.DataDir, "backups", name)
+	if _, err := s.St.DB.Exec(`VACUUM INTO ?`, p); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		os.Remove(p)
+		return "", err
+	}
+	return name, nil
+}
+
+func (s *Server) listBackups(w http.ResponseWriter, r *http.Request) {
+	ents, _ := os.ReadDir(filepath.Join(s.St.DataDir, "backups"))
+	out := []map[string]any{}
+	for _, e := range ents {
+		if backupRe.MatchString(e.Name()) && !e.IsDir() {
+			i, err := e.Info()
+			if err != nil {
+				continue
+			}
+			out = append(out, map[string]any{"name": e.Name(), "size": i.Size(), "created_at": i.ModTime(), "encrypted": strings.HasPrefix(e.Name(), "sendora-encrypted-") || strings.HasPrefix(e.Name(), "sendora-preimport-"), "pre_import": strings.HasPrefix(e.Name(), "sendora-preimport-")})
+		}
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a]["name"].(string) > out[b]["name"].(string) })
+	jout(w, 200, out)
+}
+
+func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
+	n, err := s.makeBackup()
+	if err != nil {
+		jerr(w, 500, err.Error())
+		return
+	}
+	me := s.ctxUser(r)
+	s.logEvent(me.ID, me.Username, "backup_created", n, "")
+	jout(w, 201, map[string]any{"name": n})
+}
+
+func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request) {
+	n := chi.URLParam(r, "name")
+	if !backupRe.MatchString(n) {
+		jerr(w, 404, "not found")
+		return
+	}
+	serveDisk(w, r, filepath.Join(s.St.DataDir, "backups", n), n)
+}
+
+func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request) {
+	n := chi.URLParam(r, "name")
+	if !backupRe.MatchString(n) {
+		jerr(w, 404, "not found")
+		return
+	}
+	os.Remove(filepath.Join(s.St.DataDir, "backups", n))
+	me := s.ctxUser(r)
+	s.logEvent(me.ID, me.Username, "backup_deleted", n, "")
+	jout(w, 200, map[string]any{"ok": true})
+}

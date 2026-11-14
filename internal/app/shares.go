@@ -1,0 +1,1090 @@
+package app
+
+import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"github.com/mhenderik/sendora/internal/store"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
+)
+
+type FileInfo struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	FullPath  string `json:"full_path"`
+	Size      int64  `json:"size"`
+	Type      string `json:"type"`
+	SHA256    string `json:"sha256"`
+	Integrity string `json:"integrity"`
+	diskPath  string
+}
+
+type Share struct {
+	ID            int64      `json:"id"`
+	LongID        string     `json:"long_id"`
+	Name          string     `json:"name"`
+	Description   string     `json:"description"`
+	Owner         string     `json:"owner,omitempty"`
+	Protected     bool       `json:"password_protected"`
+	Status        string     `json:"status"`
+	DownloadLimit *int64     `json:"download_limit"`
+	DownloadCount int64      `json:"download_count"`
+	ExpiresAt     *time.Time `json:"expires_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	Expired       bool       `json:"expired"`
+	Size          int64      `json:"size"`
+	FileCount     int        `json:"file_count"`
+	Files         []FileInfo `json:"files,omitempty"`
+	userID        sql.NullInt64
+	hash          string
+}
+
+const shareCols = `s.id,s.long_id,s.name,s.description,COALESCE(u.username,''),s.password_hash,s.status,s.download_limit,s.download_count,s.expires_at,s.created_at,s.user_id,
+	(SELECT COALESCE(SUM(size),0) FROM files WHERE share_id=s.id),(SELECT COUNT(*) FROM files WHERE share_id=s.id)`
+
+func scanShare(row interface{ Scan(...any) error }) (*Share, error) {
+	sh := &Share{}
+	var lim sql.NullInt64
+	var exp sql.NullTime
+	err := row.Scan(&sh.ID, &sh.LongID, &sh.Name, &sh.Description, &sh.Owner, &sh.hash, &sh.Status, &lim, &sh.DownloadCount, &exp, &sh.CreatedAt, &sh.userID, &sh.Size, &sh.FileCount)
+	if err != nil {
+		return nil, err
+	}
+	sh.Protected = sh.hash != ""
+	if lim.Valid {
+		sh.DownloadLimit = &lim.Int64
+	}
+	if exp.Valid {
+		sh.ExpiresAt = &exp.Time
+	}
+	sh.Expired = sh.Status != "active" ||
+		(sh.ExpiresAt != nil && time.Now().After(*sh.ExpiresAt)) ||
+		(sh.DownloadLimit != nil && sh.DownloadCount >= *sh.DownloadLimit)
+	return sh, nil
+}
+
+func (s *Server) shareByLongID(id string) (*Share, error) {
+	return scanShare(s.St.DB.QueryRow(`SELECT `+shareCols+` FROM shares s LEFT JOIN users u ON u.id=s.user_id WHERE s.long_id=?`, id))
+}
+
+func (s *Server) shareByID(id int64) (*Share, error) {
+	return scanShare(s.St.DB.QueryRow(`SELECT `+shareCols+` FROM shares s LEFT JOIN users u ON u.id=s.user_id WHERE s.id=?`, id))
+}
+
+func (s *Server) shareFiles(shareID int64) []FileInfo {
+	rows, err := s.St.DB.Query(`SELECT f.id,f.name,f.full_path,f.size,f.type,f.disk_path,f.sha256,f.integrity,s.long_id FROM files f JOIN shares s ON s.id=f.share_id WHERE f.share_id=? ORDER BY f.full_path,f.id`, shareID)
+	out := []FileInfo{}
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var f FileInfo
+		var lid string
+		if rows.Scan(&f.ID, &f.Name, &f.FullPath, &f.Size, &f.Type, &f.diskPath, &f.SHA256, &f.Integrity, &lid) != nil {
+			return nil
+		}
+		// The recorded directory is never trusted: only the base name is used, under
+		// this server's DataDir/shares/<validated long id>. An unsafe record leaves
+		// diskPath empty, which cannot be opened.
+		if safe, err := store.SharePath(s.St.DataDir, lid, f.diskPath); err == nil {
+			f.diskPath = safe
+		} else {
+			f.diskPath = ""
+		}
+		out = append(out, f)
+	}
+	if rows.Err() != nil {
+		return nil
+	}
+	return out
+}
+
+// share download tokens: short-lived JWT proving password was supplied.
+func (s *Server) shareToken(sh *Share) string {
+	t := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"purpose": "share", "share": sh.LongID, "pv": s.sharePasswordVersion(sh), "exp": time.Now().Add(2 * time.Hour).Unix()})
+	str, _ := t.SignedString(s.Secret)
+	return str
+}
+
+// sharePasswordVersion binds unlock tokens to the current password hash, so a
+// changed or removed password invalidates every earlier token.
+func (s *Server) sharePasswordVersion(sh *Share) string {
+	h := hmac.New(sha256.New, s.Secret)
+	fmt.Fprintf(h, "share-password:%s:%s", sh.LongID, sh.hash)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (s *Server) shareUnlocked(r *http.Request, sh *Share) bool {
+	if !sh.Protected {
+		return true
+	}
+	tok := r.Header.Get("X-Share-Token")
+	if tok == "" {
+		tok = r.URL.Query().Get("token")
+	}
+	if tok == "" {
+		return false
+	}
+	claims := jwt.MapClaims{}
+	_, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) { return s.Secret, nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
+	return err == nil && claims["purpose"] == "share" && claims["share"] == sh.LongID && s.validSharePV(claims["pv"], sh)
+}
+
+func (s *Server) validSharePV(v any, sh *Share) bool {
+	pv, ok := v.(string)
+	return ok && hmac.Equal([]byte(pv), []byte(s.sharePasswordVersion(sh)))
+}
+
+func (s *Server) readShare(w http.ResponseWriter, r *http.Request) {
+	sh, err := s.shareByLongID(chi.URLParam(r, "id"))
+	if err != nil {
+		jerr(w, 404, "share not found")
+		return
+	}
+	if sh.Expired {
+		jout(w, 410, map[string]any{"error": "share expired", "name": sh.Name})
+		return
+	}
+	if !s.shareUnlocked(r, sh) {
+		jout(w, 200, map[string]any{"password_protected": true, "name": sh.Name, "owner": sh.Owner})
+		return
+	}
+	sh.Files = s.shareFiles(sh.ID)
+	jout(w, 200, sh)
+}
+
+func (s *Server) unlockShare(w http.ResponseWriter, r *http.Request) {
+	sh, err := s.shareByLongID(chi.URLParam(r, "id"))
+	if err != nil || sh.Expired {
+		jerr(w, 404, "share not found")
+		return
+	}
+	var b struct{ Password string }
+	decode(r, &b)
+	if bcrypt.CompareHashAndPassword([]byte(sh.hash), []byte(b.Password)) != nil {
+		time.Sleep(300 * time.Millisecond)
+		jerr(w, 401, "wrong password")
+		return
+	}
+	jout(w, 200, map[string]any{"token": s.shareToken(sh)})
+}
+
+// reserveDownload snapshots the atomic count; Range requests keep their existing
+// per-request slot semantics, even if ServeContent rejects the requested range.
+func (s *Server) reserveDownload(w http.ResponseWriter, sh *Share, files []FileInfo) (int64, bool) {
+	tx, err := s.St.DB.Begin()
+	if err != nil {
+		jerr(w, 503, "download temporarily unavailable")
+		return 0, false
+	}
+	defer tx.Rollback()
+	var email, language string
+	if sh.userID.Valid {
+		if err := tx.QueryRow(`SELECT email,language FROM users WHERE id=?`, sh.userID.Int64).Scan(&email, &language); err != nil {
+			jerr(w, 503, "download temporarily unavailable")
+			return 0, false
+		}
+	}
+	var jobID int64
+	if email != "" && !s.downloadMailAllowed(sh.ID) {
+		email = "" // notified recently: count the download, skip another email
+	}
+	if email != "" {
+		var pending int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM download_mail_outbox WHERE status IN ('reserved','pending')`).Scan(&pending); err != nil || pending >= downloadMailCapacity {
+			w.Header().Set("Retry-After", "30")
+			jerr(w, 503, "download notification queue full; try again later")
+			return 0, false
+		}
+	}
+	if err := tx.QueryRow(`UPDATE shares SET download_count=download_count+1
+		WHERE id=? AND status='active' AND (expires_at IS NULL OR expires_at>?)
+		AND (download_limit IS NULL OR download_count<download_limit)
+		RETURNING download_count`, sh.ID, time.Now()).Scan(&sh.DownloadCount); err != nil {
+		jerr(w, 410, "share expired")
+		return 0, false
+	}
+	if email != "" {
+		names := make([]string, 0, len(files))
+		for _, f := range files {
+			names = append(names, f.FullPath)
+		}
+		data, err := json.Marshal(map[string]any{"ShareName": sh.Name, "DownloadCount": sh.DownloadCount, "FileName": strings.Join(names, ", "), "FileNames": strings.Join(names, ", ")})
+		if err != nil {
+			jerr(w, 503, "download temporarily unavailable")
+			return 0, false
+		}
+		res, err := tx.Exec(`INSERT INTO download_mail_outbox(share_id,recipient,language,data,next_attempt) VALUES(?,?,?,?,?)`, sh.ID, email, language, string(data), time.Now())
+		if err != nil {
+			jerr(w, 503, "download temporarily unavailable")
+			return 0, false
+		}
+		jobID, _ = res.LastInsertId()
+	}
+	if err := tx.Commit(); err != nil {
+		jerr(w, 503, "download temporarily unavailable")
+		return 0, false
+	}
+	return jobID, true
+}
+
+// downloadWriter records a start only when a successful file response begins.
+// Neither a successful status nor bytes written proves transfer completion.
+type downloadWriter struct {
+	http.ResponseWriter
+	started  func() error
+	status   int
+	rejected bool
+}
+
+func (w *downloadWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *downloadWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	if status == http.StatusOK || status == http.StatusPartialContent {
+		if err := w.started(); err != nil {
+			w.rejected = true
+			w.Header().Del("Content-Length")
+			w.Header().Del("Content-Disposition")
+			jerr(w.ResponseWriter, 503, "download temporarily unavailable")
+			return
+		}
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *downloadWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	if w.rejected {
+		return 0, fmt.Errorf("download start recording failed")
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (s *Server) downloadResponse(w http.ResponseWriter, r *http.Request, sh *Share, fileID *int64, jobID int64) http.ResponseWriter {
+	shareID, ip := sh.ID, s.clientIP(r)
+	recorded := &downloadWriter{ResponseWriter: w, started: func() error {
+		startedAt := time.Now().UTC()
+		tx, err := s.St.DB.Begin()
+		if err == nil {
+			defer tx.Rollback()
+			_, err = tx.Exec(`INSERT INTO downloads(share_id,file_id,ip,created_at) VALUES(?,?,?,?)`, shareID, fileID, ip, startedAt)
+			if err == nil && jobID != 0 {
+				_, err = tx.Exec(`UPDATE download_mail_outbox SET status='pending',data=json_set(data,'$.StartedAt',?),next_attempt=? WHERE id=? AND status='reserved'`, startedAt.Format(time.RFC3339), startedAt, jobID)
+			}
+			if err == nil {
+				err = tx.Commit()
+			}
+		}
+		if err != nil {
+			log.Printf("record download start: %v", err)
+			return err
+		}
+		select {
+		case s.downloadMailWake <- struct{}{}:
+		default:
+		}
+		detail := "all files"
+		if fileID != nil {
+			detail = "file#" + strconv.FormatInt(*fileID, 10)
+		}
+		s.logEvent(0, "public", "download_started", "share#"+strconv.FormatInt(shareID, 10), detail)
+		return nil
+	}}
+	return &idleResponseWriter{ResponseWriter: recorded, controller: http.NewResponseController(recorded), timeout: s.transferTimeout()}
+}
+
+func (s *Server) releaseDownloadMail(jobID int64) {
+	if jobID != 0 {
+		s.St.DB.Exec(`DELETE FROM download_mail_outbox WHERE id=? AND status='reserved'`, jobID)
+	}
+}
+
+// reserve a download slot atomically w.r.t. limit
+func (s *Server) openShare(w http.ResponseWriter, r *http.Request) *Share {
+	sh, err := s.shareByLongID(chi.URLParam(r, "id"))
+	if err != nil {
+		jerr(w, 404, "share not found")
+		return nil
+	}
+	if sh.Expired {
+		jerr(w, 410, "share expired")
+		return nil
+	}
+	if !s.shareUnlocked(r, sh) {
+		jerr(w, 401, "password required")
+		return nil
+	}
+	return sh
+}
+
+func (s *Server) downloadShare(w http.ResponseWriter, r *http.Request) {
+	sh := s.openShare(w, r)
+	if sh == nil {
+		return
+	}
+	files := s.shareFiles(sh.ID)
+	if len(files) == 0 {
+		jerr(w, 404, "no files")
+		return
+	}
+	snapshot, checksum, err := s.prepareDownload(r.Context(), files)
+	if err != nil {
+		integrityError(w, err)
+		return
+	}
+	defer func() { snapshot.Close(); os.Remove(snapshot.Name()); <-integritySlots }()
+	jobID, ok := s.reserveDownload(w, sh, files)
+	if !ok {
+		return
+	}
+	defer s.releaseDownloadMail(jobID)
+	w = s.downloadResponse(w, r, sh, nil, jobID)
+	setDownloadChecksum(w, checksum)
+	if len(files) == 1 {
+		serveOpenDisk(w, r, snapshot, files[0].Name)
+		return
+	}
+	name := safeName(sh.Name)
+	if name == "" {
+		name = "share"
+	}
+	serveOpenDisk(w, r, snapshot, name+".zip")
+
+}
+
+func (s *Server) downloadShareFile(w http.ResponseWriter, r *http.Request) {
+	sh := s.openShare(w, r)
+	if sh == nil {
+		return
+	}
+	fp := strings.TrimPrefix(path.Clean("/"+wildcardPath(r)), "/")
+	for _, f := range s.shareFiles(sh.ID) {
+		if f.FullPath == fp {
+			in, checksum, err := s.prepareDownload(r.Context(), []FileInfo{f})
+			if err != nil {
+				integrityError(w, err)
+				return
+			}
+			defer func() { in.Close(); os.Remove(in.Name()); <-integritySlots }()
+			setDownloadChecksum(w, checksum)
+			id := f.ID
+			jobID, ok := s.reserveDownload(w, sh, []FileInfo{f})
+			if !ok {
+				return
+			}
+			defer s.releaseDownloadMail(jobID)
+			serveOpenDisk(s.downloadResponse(w, r, sh, &id, jobID), r, in, f.Name)
+			return
+		}
+	}
+	jerr(w, 404, "file not found")
+}
+
+// previewTypes is the only set of types ever served inline. Never add SVG,
+// HTML, PDF or anything scriptable.
+var previewTypes = map[string]string{
+	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif",
+	".mp4": "video/mp4", ".webm": "video/webm",
+	".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".wav": "audio/wav",
+}
+
+func previewSniffOK(mime string, b []byte) bool {
+	has := func(off int, sig string) bool { return len(b) >= off+len(sig) && string(b[off:off+len(sig)]) == sig }
+	switch mime {
+	case "image/png":
+		return has(0, "\x89PNG\r\n\x1a\n")
+	case "image/jpeg":
+		return has(0, "\xff\xd8\xff")
+	case "image/webp":
+		return has(0, "RIFF") && has(8, "WEBP")
+	case "image/gif":
+		return has(0, "GIF87a") || has(0, "GIF89a")
+	case "video/mp4":
+		return has(4, "ftyp")
+	case "video/webm":
+		return has(0, "\x1a\x45\xdf\xa3")
+	case "audio/mpeg":
+		return has(0, "ID3") || (len(b) >= 2 && b[0] == 0xff && b[1]&0xe0 == 0xe0)
+	case "audio/ogg":
+		return has(0, "OggS")
+	case "audio/wav":
+		return has(0, "RIFF") && has(8, "WAVE")
+	}
+	return false
+}
+
+// previewShareFile serves an allowlisted media file inline. It is not a
+// download: no counter, no outbox mail, no checksum snapshot.
+func (s *Server) previewShareFile(w http.ResponseWriter, r *http.Request) {
+	sh := s.openShare(w, r)
+	if sh == nil {
+		return
+	}
+	if !s.St.SettingBool("allow_preview") {
+		jerr(w, 403, "preview disabled")
+		return
+	}
+	if sh.DownloadLimit != nil {
+		jerr(w, 403, "preview unavailable for shares with a download limit")
+		return
+	}
+	fp := strings.TrimPrefix(path.Clean("/"+wildcardPath(r)), "/")
+	for _, f := range s.shareFiles(sh.ID) {
+		if f.FullPath != fp {
+			continue
+		}
+		mime, ok := previewTypes[strings.ToLower(path.Ext(f.Name))]
+		if !ok {
+			jerr(w, 415, "preview not supported for this file type")
+			return
+		}
+		in, err := openDownloadFile(f.diskPath)
+		if err != nil {
+			jerr(w, 404, "file missing")
+			return
+		}
+		defer in.Close()
+		head := make([]byte, 512)
+		n, _ := io.ReadFull(in, head)
+		if !previewSniffOK(mime, head[:n]) {
+			jerr(w, 415, "preview not supported for this file type")
+			return
+		}
+		st, err := in.Stat()
+		if err != nil {
+			jerr(w, 404, "file missing")
+			return
+		}
+		// Log only the first request of a media session, not every Range chunk, so a
+		// player cannot flood the audit log.
+		// A gallery loads every thumbnail at once, so also log at most one preview
+		// entry per share every few minutes instead of one per image.
+		if rng := r.Header.Get("Range"); (rng == "" || strings.HasPrefix(rng, "bytes=0-")) && previewLogAllowed(sh.ID) {
+			s.logEvent(0, "public", "share_preview", "share#"+strconv.FormatInt(sh.ID, 10), "")
+		}
+		var rw http.ResponseWriter = &idleResponseWriter{ResponseWriter: w, controller: http.NewResponseController(w), timeout: s.transferTimeout()}
+		h := rw.Header()
+		h.Set("Content-Type", mime)
+		h.Set("Content-Disposition", "inline")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+		h.Set("Cache-Control", "no-store")
+		defer func() { _ = http.NewResponseController(rw).Flush() }()
+		http.ServeContent(rw, r, "", st.ModTime(), in)
+		return
+	}
+	jerr(w, 404, "file not found")
+}
+
+func openDownloadFile(p string) (*os.File, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("file unavailable")
+	}
+	return f, nil
+}
+
+func serveDisk(w http.ResponseWriter, r *http.Request, p, name string) {
+	f, err := openDownloadFile(p)
+	if err != nil {
+		jerr(w, 404, "file missing")
+		return
+	}
+	defer f.Close()
+	serveOpenDisk(w, r, f, name)
+}
+
+func serveOpenDisk(w http.ResponseWriter, r *http.Request, f *os.File, name string) {
+	st, err := f.Stat()
+	if err != nil {
+		jerr(w, 404, "file missing")
+		return
+	}
+	if _, ok := w.(*idleResponseWriter); !ok {
+		w = &idleResponseWriter{ResponseWriter: w, controller: http.NewResponseController(w), timeout: 60 * time.Second}
+	}
+	controller := http.NewResponseController(w)
+	defer func() {
+		// Flush pending buffered bytes under the final deadline before releasing
+		// the snapshot slot. net/http resets deadlines for the next request.
+		_ = controller.Flush()
+	}()
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename*=UTF-8''%s`, urlEscape(name)))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Type", "application/octet-stream")
+	http.ServeContent(w, r, name, st.ModTime(), f)
+}
+
+func urlEscape(s string) string {
+	var b strings.Builder
+	for _, c := range []byte(s) {
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("-_.~", c) >= 0 {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
+}
+
+func safeName(n string) string {
+	n = filepath.Base(strings.TrimSpace(n))
+	n = strings.Map(func(r rune) rune {
+		if r < 32 || strings.ContainsRune(`"/\:*?<>|`, r) {
+			return '_'
+		}
+		return r
+	}, n)
+	if n == "." || n == ".." || n == string(filepath.Separator) {
+		return ""
+	}
+	return n
+}
+
+// ---------- owner management ----------
+
+func (s *Server) listShares(w http.ResponseWriter, where string, args ...any) {
+	rows, err := s.St.DB.Query(`SELECT `+shareCols+` FROM shares s LEFT JOIN users u ON u.id=s.user_id `+where+` ORDER BY s.created_at DESC`, args...)
+	if err != nil {
+		jerr(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []*Share{}
+	for rows.Next() {
+		sh, err := scanShare(rows)
+		if err == nil {
+			out = append(out, sh)
+		}
+	}
+	jout(w, 200, out)
+}
+
+func (s *Server) myShares(w http.ResponseWriter, r *http.Request) {
+	s.listShares(w, `WHERE s.user_id=? AND s.status<>'deleted'`, s.ctxUser(r).ID)
+}
+
+func (s *Server) allShares(w http.ResponseWriter, r *http.Request) {
+	s.listShares(w, `WHERE s.status<>'deleted'`)
+}
+
+func (s *Server) ownedShare(w http.ResponseWriter, r *http.Request) *Share {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	sh, err := s.shareByID(id)
+	u := s.ctxUser(r)
+	if err != nil || (!u.Admin && (!sh.userID.Valid || sh.userID.Int64 != u.ID)) {
+		jerr(w, 404, "share not found")
+		return nil
+	}
+	return sh
+}
+
+func (s *Server) shareDownloads(w http.ResponseWriter, r *http.Request) {
+	sh := s.ownedShare(w, r)
+	if sh == nil {
+		return
+	}
+	limit, offset := 50, 0
+	for key, dest := range map[string]*int{"limit": &limit, "offset": &offset} {
+		if value := r.URL.Query().Get(key); value != "" {
+			n, err := strconv.Atoi(value)
+			if err != nil || n < 0 || (key == "limit" && n == 0) {
+				jerr(w, 400, "invalid pagination")
+				return
+			}
+			*dest = n
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	var total int64
+	if err := s.St.DB.QueryRow(`SELECT COUNT(*) FROM downloads WHERE share_id=?`, sh.ID).Scan(&total); err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	files := s.shareFiles(sh.ID)
+	rows, err := s.St.DB.Query(`SELECT d.id,d.file_id,COALESCE(f.name,''),d.created_at
+		FROM downloads d LEFT JOIN files f ON f.id=d.file_id AND f.share_id=d.share_id
+		WHERE d.share_id=? ORDER BY d.created_at DESC,d.id DESC LIMIT ? OFFSET ?`, sh.ID, limit, offset)
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	wholeName := safeName(sh.Name)
+	if wholeName == "" {
+		wholeName = "share"
+	}
+	wholeName += ".zip"
+	if len(files) == 1 {
+		wholeName = files[0].Name
+	}
+	for rows.Next() {
+		var id int64
+		var fileID sql.NullInt64
+		var name string
+		var at time.Time
+		if err := rows.Scan(&id, &fileID, &name, &at); err != nil {
+			jerr(w, 500, "database error")
+			return
+		}
+		var fid any
+		if fileID.Valid {
+			fid = fileID.Int64
+		} else {
+			name = wholeName
+		}
+		out = append(out, map[string]any{"id": id, "file_id": fid, "file_name": name, "created_at": at})
+	}
+	if rows.Err() != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	jout(w, 200, map[string]any{"downloads": out, "total": total, "limit": limit, "offset": offset})
+}
+
+func (s *Server) expireShare(w http.ResponseWriter, r *http.Request) {
+	sh := s.ownedShare(w, r)
+	if sh == nil {
+		return
+	}
+	s.St.DB.Exec(`UPDATE shares SET status='expired', expires_at=? WHERE id=?`, time.Now(), sh.ID)
+	s.logShare(r, "share_expired_manual", sh.ID, "")
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) extendShare(w http.ResponseWriter, r *http.Request) {
+	sh := s.ownedShare(w, r)
+	if sh == nil {
+		return
+	}
+	var b struct{ Days int }
+	decode(r, &b)
+	if b.Days <= 0 {
+		jerr(w, 400, "days required")
+		return
+	}
+	max := s.St.SettingInt("max_expiry_time", 30)
+	if !s.ctxUser(r).Admin && max > 0 && b.Days > max {
+		jerr(w, 400, fmt.Sprintf("max %d days", max))
+		return
+	}
+	base := time.Now()
+	if sh.ExpiresAt != nil && sh.ExpiresAt.After(base) {
+		base = *sh.ExpiresAt
+	}
+	s.St.DB.Exec(`UPDATE shares SET expires_at=?, status='active', expiry_warned=0 WHERE id=?`, base.AddDate(0, 0, b.Days), sh.ID)
+	s.logShare(r, "share_extended", sh.ID, strconv.Itoa(b.Days)+" days")
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+// setShareExpiry sets an absolute expiry (or none) after creation. Shortening
+// and extending are both allowed; an expired share is reactivated only while
+// its files still exist.
+func (s *Server) setShareExpiry(w http.ResponseWriter, r *http.Request) {
+	sh := s.ownedShare(w, r)
+	if sh == nil {
+		return
+	}
+	var b struct {
+		ExpiresAt *time.Time `json:"expires_at"`
+		Never     bool       `json:"never"`
+	}
+	if err := decode(r, &b); err != nil {
+		jerr(w, 400, "invalid request")
+		return
+	}
+	if b.Never == (b.ExpiresAt != nil) {
+		jerr(w, 400, "provide either expires_at or never")
+		return
+	}
+	admin := s.ctxUser(r).Admin
+	max := s.St.SettingInt("max_expiry_time", 30)
+	now := time.Now()
+	var exp any
+	if b.Never {
+		if !admin && max > 0 {
+			jerr(w, 400, fmt.Sprintf("max %d days", max))
+			return
+		}
+	} else {
+		if !b.ExpiresAt.After(now) {
+			jerr(w, 400, "expiry must be in the future")
+			return
+		}
+		if !admin && max > 0 && b.ExpiresAt.After(now.AddDate(0, 0, max)) {
+			jerr(w, 400, fmt.Sprintf("max %d days", max))
+			return
+		}
+		exp = b.ExpiresAt.UTC()
+	}
+	if sh.Expired {
+		if !shareDirExists(s.St.DataDir, sh.LongID) {
+			jerr(w, 409, "share files were already cleaned up")
+			return
+		}
+	}
+	res, err := s.St.DB.Exec(`UPDATE shares SET expires_at=?, status='active', expiry_warned=0
+		WHERE id=? AND status<>'deleted' AND (?=1 OR user_id=?)`, exp, sh.ID, admin, s.ctxUser(r).ID)
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		jerr(w, 404, "share not found")
+		return
+	}
+	s.logShare(r, "share_expiry_changed", sh.ID, "")
+	jout(w, 200, map[string]any{"ok": true, "expires_at": exp})
+}
+
+func (s *Server) setDownloadLimit(w http.ResponseWriter, r *http.Request) {
+	sh := s.ownedShare(w, r)
+	if sh == nil {
+		return
+	}
+	var b struct{ Limit *int64 }
+	decode(r, &b)
+	if b.Limit != nil && *b.Limit <= 0 {
+		b.Limit = nil
+	}
+	// Maintenance marks limit-exhausted shares expired without changing their future expiry.
+	// Revive only that case, not manually or time-expired shares.
+	s.St.DB.Exec(`UPDATE shares SET download_limit=?, status=CASE
+		WHEN status='expired' AND download_limit IS NOT NULL AND download_count>=download_limit
+		AND (expires_at IS NULL OR expires_at>?) AND (? IS NULL OR download_count<?)
+		THEN 'active' ELSE status END WHERE id=?`, b.Limit, time.Now(), b.Limit, b.Limit, sh.ID)
+	s.logShare(r, "share_limit_changed", sh.ID, "")
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+// editShare applies a partial update. Absent fields stay unchanged; wrong
+// types, unknown fields and conflicting options are rejected with 400.
+func (s *Server) editShare(w http.ResponseWriter, r *http.Request) {
+	sh := s.ownedShare(w, r)
+	if sh == nil {
+		return
+	}
+	var raw map[string]json.RawMessage
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err := dec.Decode(&raw); err != nil || raw == nil {
+		jerr(w, 400, "invalid request")
+		return
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		jerr(w, 400, "invalid request")
+		return
+	}
+	bad := func(msg string) { jerr(w, 400, msg) }
+	for k := range raw {
+		switch k {
+		case "name", "description", "download_limit", "password", "remove_password":
+		default:
+			bad("unknown field: " + k)
+			return
+		}
+	}
+	// field parses a present, non-null value strictly into dst.
+	field := func(k string, dst any) (present, ok bool) {
+		v, has := raw[k]
+		if !has {
+			return false, true
+		}
+		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+			bad(k + " must not be null")
+			return true, false
+		}
+		if err := json.Unmarshal(v, dst); err != nil {
+			bad(k + " has an invalid type")
+			return true, false
+		}
+		return true, true
+	}
+	var name, desc, pw string
+	var limit float64
+	var removePW bool
+	hasName, ok := field("name", &name)
+	if !ok {
+		return
+	}
+	hasDesc, ok := field("description", &desc)
+	if !ok {
+		return
+	}
+	hasLimit, ok := field("download_limit", &limit)
+	if !ok {
+		return
+	}
+	hasPW, ok := field("password", &pw)
+	if !ok {
+		return
+	}
+	_, ok = field("remove_password", &removePW)
+	if !ok {
+		return
+	}
+	sets := []string{}
+	args := []any{}
+	if hasName {
+		name = strings.TrimSpace(name)
+		if hasFormatRune(name) {
+			bad("name contains invalid characters")
+			return
+		}
+		if n := utf8.RuneCountInString(name); n < 1 || n > 120 {
+			bad("name must be 1 to 120 characters")
+			return
+		}
+		sets = append(sets, "name=?")
+		args = append(args, name)
+	}
+	if hasDesc {
+		if utf8.RuneCountInString(desc) > 2000 {
+			bad("description must not exceed 2000 characters")
+			return
+		}
+		sets = append(sets, "description=?")
+		args = append(args, desc)
+	}
+	if hasLimit {
+		if limit < 0 || limit != float64(int64(limit)) || limit > 1<<53 {
+			bad("download_limit must be a whole number, 0 or greater")
+			return
+		}
+		var lim any
+		if limit > 0 {
+			lim = int64(limit)
+		}
+		// Same revive rule as setDownloadLimit: only a share that maintenance
+		// expired because its limit was exhausted is reactivated.
+		sets = append(sets, `download_limit=?`, `status=CASE
+			WHEN status='expired' AND download_limit IS NOT NULL AND download_count>=download_limit
+			AND (expires_at IS NULL OR expires_at>?) AND (? IS NULL OR download_count<?)
+			THEN 'active' ELSE status END`)
+		args = append(args, lim, time.Now(), lim, lim)
+	}
+	if hasPW && removePW {
+		bad("password and remove_password are mutually exclusive")
+		return
+	}
+	if hasPW || removePW {
+		policy, err := s.loadSharePolicy()
+		if err != nil {
+			jerr(w, 500, "share password policy unavailable")
+			return
+		}
+		if removePW {
+			if policy.Required {
+				bad("a share password is required")
+				return
+			}
+			sets = append(sets, "password_hash=?")
+			args = append(args, "")
+		} else {
+			if pw == "" {
+				bad("password must not be empty; use remove_password to remove it")
+				return
+			}
+			if err := validateSharePassword(policy, pw); err != nil {
+				bad(err.Error())
+				return
+			}
+			h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+			if err != nil {
+				bad("share password must not exceed 72 bytes")
+				return
+			}
+			sets = append(sets, "password_hash=?")
+			args = append(args, string(h))
+		}
+	}
+	if len(sets) > 0 {
+		u := s.ctxUser(r)
+		args = append(args, sh.ID, u.Admin, u.ID)
+		res, err := s.St.DB.Exec(`UPDATE shares SET `+strings.Join(sets, ", ")+` WHERE id=? AND status<>'deleted' AND (?=1 OR user_id=?)`, args...)
+		if err != nil {
+			jerr(w, 500, "database error")
+			return
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			jerr(w, 404, "share not found")
+			return
+		}
+		// Field names only, never values.
+		var changed []string
+		if hasName {
+			changed = append(changed, "name")
+		}
+		if hasDesc {
+			changed = append(changed, "description")
+		}
+		if hasLimit {
+			changed = append(changed, "download_limit")
+		}
+		if hasPW {
+			changed = append(changed, "password_set")
+		}
+		if removePW {
+			changed = append(changed, "password_removed")
+		}
+		s.logShare(r, "share_edited", sh.ID, strings.Join(changed, ","))
+	}
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) deleteShare(w http.ResponseWriter, r *http.Request) {
+	sh := s.ownedShare(w, r)
+	if sh == nil {
+		return
+	}
+	if _, err := s.removeShare(sh.ID); err != nil {
+		jerr(w, 503, "share cleanup failed")
+		return
+	}
+	s.logShare(r, "share_deleted", sh.ID, "")
+	jout(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) pruneMine(w http.ResponseWriter, r *http.Request) {
+	rows, _ := s.St.DB.Query(`SELECT id FROM shares WHERE user_id=? AND (status<>'active' OR (expires_at IS NOT NULL AND expires_at<?))`, s.ctxUser(r).ID, time.Now())
+	var ids []int64
+	for rows != nil && rows.Next() {
+		var id int64
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	if rows != nil {
+		rows.Close()
+	}
+	removed := 0
+	for _, id := range ids {
+		ok, err := s.removeShareIf(id, `user_id=? AND (status<>'active' OR (expires_at IS NOT NULL AND expires_at<?))`, s.ctxUser(r).ID, time.Now())
+		if err != nil {
+			jerr(w, 503, "share cleanup failed")
+			return
+		}
+		if ok {
+			removed++
+			s.logShare(r, "share_deleted", id, "prune")
+		}
+	}
+	jout(w, 200, map[string]any{"removed": removed})
+}
+
+// removeShare serializes removal with quota admission and other removals in the
+// database. Storage stays charged until filesystem cleanup has succeeded.
+func (s *Server) removeShare(id int64) (bool, error) {
+	return s.removeShareIf(id, "1=1")
+}
+
+// Conditions are trusted internal SQL. Recheck discovery predicates under the
+// write lock so an extended share is not removed from a stale cleanup snapshot.
+func (s *Server) removeShareIf(id int64, condition string, args ...any) (bool, error) {
+	tx, err := s.St.DB.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE shares SET id=id WHERE id=?`, id); err != nil {
+		return false, err
+	}
+	var lid string
+	queryArgs := append([]any{id}, args...)
+	if err := tx.QueryRow(`SELECT long_id FROM shares WHERE id=? AND (`+condition+`)`, queryArgs...).Scan(&lid); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	if lid == "" {
+		return false, fmt.Errorf("share storage metadata unavailable")
+	}
+	// Pending append sessions go away with the share (ON DELETE CASCADE); remember
+	// their staging dirs and remove them after the commit.
+	var sessions []string
+	srows, err := tx.Query(`SELECT id FROM upload_sessions WHERE share_id=?`, id)
+	if err != nil {
+		return false, err
+	}
+	for srows.Next() {
+		var sid string
+		if err := srows.Scan(&sid); err != nil {
+			srows.Close()
+			return false, err
+		}
+		sessions = append(sessions, sid)
+	}
+	err = srows.Err()
+	srows.Close()
+	if err != nil {
+		return false, err
+	}
+	// Only ever remove a validated share directory; a share record with a malformed
+	// long ID (e.g. from a tampered import) is deleted without touching the disk.
+	if dir, derr := store.ShareDir(s.St.DataDir, lid); derr == nil {
+		if err := os.RemoveAll(dir); err != nil {
+			return false, err
+		}
+	}
+	res, err := tx.Exec(`DELETE FROM shares WHERE id=?`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	for _, sid := range sessions {
+		os.RemoveAll(s.uploadDir(sid))
+	}
+	return n == 1, nil
+}
+
+// wildcardPath returns the decoded `*` route segment. chi serves the raw
+// (still percent-encoded) path whenever the client's encoding differs from Go's
+// canonical form, e.g. literal parentheses as produced by encodeURIComponent,
+// so such names ("photo (1).jpg") would otherwise never match.
+func wildcardPath(r *http.Request) string {
+	p := chi.URLParam(r, "*")
+	if r.URL.RawPath != "" {
+		if decoded, err := url.PathUnescape(p); err == nil {
+			p = decoded
+		}
+	}
+	return p
+}

@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm --prefix web ci
+      - run: node --test web/src/*.test.mjs
+      - run: npm --prefix web run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 1
+
+  go:
+    needs: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      # The sqlcipher stage of the Dockerfile builds the exact engine (4.20.0)
+      # with a verified checksum; the tests run inside it.
+      - name: Build the SQLCipher/Go toolchain image
+        run: docker build --target sqlcipher -t sendora-sqlcipher .
+      - name: vet and test
+        run: |
+          docker run --rm -v "$PWD":/src -w /src -e CGO_ENABLED=1 sendora-sqlcipher \
+            sh -c 'go vet ./... && go test -race -count=1 ./...'
+
+  image:
+    needs: [web, go]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t sendora:ci .

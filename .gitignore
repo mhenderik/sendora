@@ -1,0 +1,35 @@
+# Runtime data and secrets: never commit
+/data/
+/sendora-data/
+/fileshare-data/
+*.db
+*.db-wal
+*.db-shm
+*.db.pre-import
+database.key
+*.key
+.env
+.env.*
+
+# Build output
+/sendora
+/sendora-db
+/fileshare
+web/dist/
+coverage/
+*.test
+*.out
+
+# Dependencies
+web/node_modules/
+
+# Editors, OS and temporary files
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tmp
+*.temp
+*.log
+~*

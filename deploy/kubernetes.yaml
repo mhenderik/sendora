@@ -1,0 +1,171 @@
+# Illustrative single-instance deployment; read the README before applying.
+# Replace the placeholder image and APP_URL with values you control.
+# The storage provisioner/administrator must make /data and restored files
+# owned by UID 10001: fsGroup alone does not grant permission to chmod them.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sendora
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sendora-data
+  namespace: sendora
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Omitted storageClassName uses the cluster default; select a suitable class.
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sendora
+  namespace: sendora
+spec:
+  # SQLite and process-local jobs/locks require exactly one live instance.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sendora
+  template:
+    metadata:
+      labels:
+        app: sendora
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sendora
+          # Not a published release: build/push your image and replace this.
+          image: ghcr.io/your-org/sendora:VERSION
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: "8080"
+            - name: DATA_DIR
+              value: /data
+            - name: SENDORA_DB_KEY_FILE
+              value: /run/secrets/sendora/database.key
+            # Enable only for private first initialization, then set false.
+            - name: SENDORA_DB_INITIALIZE
+              value: "false"
+            - name: APP_URL
+              value: https://sendora.example.com
+            - name: TZ
+              value: UTC
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            - name: database-key
+              mountPath: /run/secrets/sendora
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sendora-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        # Create sendora-db-key separately from a raw key file; no key in YAML.
+        # Projected root-owned mode 0440 is readable through fsGroup 10001.
+        - name: database-key
+          secret:
+            secretName: sendora-db-key
+            defaultMode: 0440
+            items:
+              - key: database.key
+                path: database.key
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sendora
+  namespace: sendora
+spec:
+  type: ClusterIP
+  selector:
+    app: sendora
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+# Optional Ingress: uncomment only after private first-run setup and configuring
+# your controller, DNS, canonical APP_URL, and sendora-tls TLS Secret.
+# Configure HTTPS redirects and upload/download limits in your controller.
+# ---
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: sendora
+#   namespace: sendora
+# spec:
+#   ingressClassName: nginx # Replace with your installed controller's class.
+#   tls:
+#     - hosts:
+#         - sendora.example.com
+#       secretName: sendora-tls
+#   rules:
+#     - host: sendora.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: sendora
+#                 port:
+#                   name: http

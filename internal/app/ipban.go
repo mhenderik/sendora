@@ -1,0 +1,288 @@
+package app
+
+import (
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Address bans ("fail2ban for Sendora"): repeated failed sign-in style requests
+// (wrong password, wrong MFA code, wrong share password) from one client address
+// block that address from the sign-in style routes for a while. Repeat offenders
+// are blocked for twice as long each time, up to a day. Downloads of public
+// shares, token refresh and existing sessions are not affected. Bans are kept in
+// the database so a restart does not clear them; administrators can lift them.
+const (
+	ipBanThreshold = 10
+	ipBanWindow    = 10 * time.Minute
+	ipBanBase      = 30 * time.Minute
+	ipBanMax       = 24 * time.Hour
+	ipBanMemory    = 24 * time.Hour // strikes are forgotten after this long without a new ban
+	ipBanMaxKeys   = 4096
+	ipBanMaxList   = 50
+
+	settingIPBanEnabled   = "ip_ban_enabled"
+	settingIPBanAllowlist = "ip_ban_allowlist"
+)
+
+type ipBan struct {
+	until      time.Time
+	strikes    int
+	lastStrike time.Time
+}
+type ipFail struct {
+	count   int
+	expires time.Time
+}
+type ipBanState struct {
+	mu    sync.Mutex
+	bans  map[string]ipBan
+	fails map[string]ipFail
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int)        { r.status = code; r.ResponseWriter.WriteHeader(code) }
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// ipBanKey groups IPv6 clients by /64 (one household or host can use any address
+// in its prefix); IPv4 and unparsable values are used as is.
+func ipBanKey(ip string) string {
+	p := net.ParseIP(ip)
+	if p == nil {
+		return ip
+	}
+	if v4 := p.To4(); v4 != nil {
+		return v4.String()
+	}
+	return p.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
+// ipBansEnabled is off when the recovery switch is set or the setting is false.
+func (s *Server) ipBansEnabled() bool {
+	if os.Getenv("SENDORA_DISABLE_IP_BANS") == "true" {
+		return false
+	}
+	v := s.St.Setting(settingIPBanEnabled)
+	return v == "" || v == "true"
+}
+
+func parseIPList(v string) (nets []*net.IPNet, canonical []string, err error) {
+	for _, item := range strings.FieldsFunc(v, func(r rune) bool { return r == '\n' || r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\r' }) {
+		var n *net.IPNet
+		if strings.Contains(item, "/") {
+			_, parsed, e := net.ParseCIDR(item)
+			if e != nil {
+				return nil, nil, fmt.Errorf("invalid address or range: %s", clipForMessage(item))
+			}
+			n = parsed
+		} else {
+			ip := net.ParseIP(item)
+			if ip == nil {
+				return nil, nil, fmt.Errorf("invalid address or range: %s", clipForMessage(item))
+			}
+			bits := 128
+			if v4 := ip.To4(); v4 != nil {
+				ip, bits = v4, 32
+			}
+			n = &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)}
+		}
+		nets = append(nets, n)
+		canonical = append(canonical, n.String())
+	}
+	if len(nets) > ipBanMaxList {
+		return nil, nil, fmt.Errorf("at most %d addresses or ranges", ipBanMaxList)
+	}
+	return nets, canonical, nil
+}
+
+// validateIPBanSetting validates and normalises the two settings; the allowlist
+// is rewritten to one canonical entry per line.
+func validateIPBanSetting(key string, val *string) (owned bool, err error) {
+	switch key {
+	case settingIPBanEnabled:
+		if *val != "true" && *val != "false" {
+			return true, fmt.Errorf("%s must be true or false", key)
+		}
+		return true, nil
+	case settingIPBanAllowlist:
+		if len(*val) > 4096 {
+			return true, fmt.Errorf("allowlist too long")
+		}
+		_, canonical, e := parseIPList(*val)
+		if e != nil {
+			return true, e
+		}
+		*val = strings.Join(canonical, "\n")
+		return true, nil
+	}
+	return false, nil
+}
+
+func (s *Server) ipAllowlisted(ip string) bool {
+	p := net.ParseIP(ip)
+	if p == nil {
+		return false
+	}
+	nets, _, err := parseIPList(s.St.Setting(settingIPBanAllowlist))
+	if err != nil {
+		return false
+	}
+	for _, n := range nets {
+		if n.Contains(p) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) loadIPBans() {
+	s.ipBans.mu.Lock()
+	defer s.ipBans.mu.Unlock()
+	s.ipBans.bans = map[string]ipBan{}
+	rows, err := s.St.DB.Query(`SELECT ip,banned_until,strikes,last_strike FROM ip_bans`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ip string
+		var until, strikes, last int64
+		if rows.Scan(&ip, &until, &strikes, &last) == nil {
+			s.ipBans.bans[ip] = ipBan{until: time.Unix(until, 0), strikes: int(strikes), lastStrike: time.Unix(last, 0)}
+		}
+	}
+}
+
+// ipBlocked reports whether the client address is currently banned.
+func (s *Server) ipBlocked(ip string) (time.Duration, bool) {
+	if !s.ipBansEnabled() {
+		return 0, false
+	}
+	key := ipBanKey(ip)
+	s.ipBans.mu.Lock()
+	b, ok := s.ipBans.bans[key]
+	s.ipBans.mu.Unlock()
+	if !ok || !time.Now().Before(b.until) {
+		return 0, false
+	}
+	if s.ipAllowlisted(ip) {
+		return 0, false
+	}
+	return time.Until(b.until), true
+}
+
+// noteIPFailure counts a failed attempt and bans the address at the threshold.
+func (s *Server) noteIPFailure(ip string) {
+	if !s.ipBansEnabled() || s.ipAllowlisted(ip) {
+		return
+	}
+	key := ipBanKey(ip)
+	now := time.Now()
+	s.ipBans.mu.Lock()
+	if s.ipBans.fails == nil {
+		s.ipBans.fails = map[string]ipFail{}
+	}
+	f := s.ipBans.fails[key]
+	if !now.Before(f.expires) {
+		if len(s.ipBans.fails) >= ipBanMaxKeys {
+			for k, v := range s.ipBans.fails {
+				if !now.Before(v.expires) {
+					delete(s.ipBans.fails, k)
+				}
+			}
+			if len(s.ipBans.fails) >= ipBanMaxKeys {
+				s.ipBans.fails = map[string]ipFail{}
+			}
+		}
+		f = ipFail{expires: now.Add(ipBanWindow)}
+	}
+	f.count++
+	if f.count < ipBanThreshold {
+		s.ipBans.fails[key] = f
+		s.ipBans.mu.Unlock()
+		return
+	}
+	delete(s.ipBans.fails, key)
+	prev := s.ipBans.bans[key]
+	strikes := 1
+	if !prev.lastStrike.IsZero() && now.Sub(prev.lastStrike) < ipBanMemory {
+		strikes = prev.strikes + 1
+	}
+	dur := ipBanBase
+	for i := 1; i < strikes && dur < ipBanMax; i++ {
+		dur *= 2
+	}
+	if dur > ipBanMax {
+		dur = ipBanMax
+	}
+	b := ipBan{until: now.Add(dur), strikes: strikes, lastStrike: now}
+	s.ipBans.bans[key] = b
+	s.ipBans.mu.Unlock()
+	s.St.DB.Exec(`INSERT INTO ip_bans(ip,banned_until,strikes,last_strike) VALUES(?,?,?,?)
+		ON CONFLICT(ip) DO UPDATE SET banned_until=excluded.banned_until,strikes=excluded.strikes,last_strike=excluded.last_strike`,
+		key, b.until.Unix(), strikes, now.Unix())
+	// The activity log never stores addresses, so only the fact is recorded.
+	s.logEvent(0, "", "ip_banned", "", fmt.Sprintf("strike=%d minutes=%d", strikes, int(dur.Minutes())))
+}
+
+type ipBanInfo struct {
+	IP      string    `json:"ip"`
+	Until   time.Time `json:"until"`
+	Strikes int       `json:"strikes"`
+}
+
+func (s *Server) activeIPBans() []ipBanInfo {
+	now := time.Now()
+	s.ipBans.mu.Lock()
+	defer s.ipBans.mu.Unlock()
+	out := []ipBanInfo{}
+	for k, b := range s.ipBans.bans {
+		if now.Before(b.until) {
+			out = append(out, ipBanInfo{IP: k, Until: b.until, Strikes: b.strikes})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Until.After(out[j].Until) })
+	return out
+}
+
+// listIPBansHandler: GET /api/ip-bans (admin).
+func (s *Server) listIPBansHandler(w http.ResponseWriter, r *http.Request) {
+	jout(w, 200, map[string]any{
+		"enabled":        s.ipBansEnabled(),
+		"env_disabled":   os.Getenv("SENDORA_DISABLE_IP_BANS") == "true",
+		"threshold":      ipBanThreshold,
+		"window_minutes": int(ipBanWindow.Minutes()),
+		"ban_minutes":    int(ipBanBase.Minutes()),
+		"max_hours":      int(ipBanMax.Hours()),
+		"your_ip":        s.clientIP(r),
+		"bans":           s.activeIPBans(),
+	})
+}
+
+// deleteIPBanHandler: DELETE /api/ip-bans?ip=... (admin). Also forgets strikes.
+func (s *Server) deleteIPBanHandler(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("ip")
+	s.ipBans.mu.Lock()
+	_, found := s.ipBans.bans[key]
+	delete(s.ipBans.bans, key)
+	delete(s.ipBans.fails, key)
+	s.ipBans.mu.Unlock()
+	if !found {
+		jerr(w, 404, "address not banned")
+		return
+	}
+	s.St.DB.Exec(`DELETE FROM ip_bans WHERE ip=?`, key)
+	if me := s.ctxUser(r); me != nil {
+		s.logEvent(me.ID, me.Username, "ip_unbanned", "", "")
+	}
+	jout(w, 200, map[string]any{"ok": true})
+}
