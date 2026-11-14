@@ -166,7 +166,10 @@ func (s *Server) security(next http.Handler) http.Handler {
 			if timeout <= 0 {
 				timeout = 30 * time.Second
 			}
-			if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/uploads/") {
+			// Chunk uploads and the (up to 4 GiB) database import are large transfers:
+			// they only need to keep moving at a minimum speed, not finish in 30 s.
+			if (r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/uploads/")) ||
+				(r.Method == http.MethodPost && r.URL.Path == "/api/backups/import") {
 				timeout = s.transferTimeout()
 				r.Body = &idleRequestBody{ReadCloser: r.Body, controller: rc, timeout: timeout}
 			}

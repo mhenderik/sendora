@@ -27,7 +27,11 @@ var secretKeys = map[string]bool{"smtp_pass": true}
 const msgSMTPPasswordAgain = "enter the SMTP password again when changing the server, port, user or security"
 
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.St.DB.Query(`SELECT key,value,grp FROM settings WHERE grp NOT IN ('secret','email_templates') AND key<>'jwt_secret' ORDER BY key`)
+	rows, err := s.St.DB.Query(`SELECT key,value,grp FROM settings WHERE grp NOT IN ('secret','email_templates') AND key<>'jwt_secret' ORDER BY key`)
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
 	defer rows.Close()
 	out := map[string]any{}
 	for rows.Next() {
@@ -490,15 +494,29 @@ func (s *Server) deleteTheme(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) activateTheme(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	tx, _ := s.St.DB.Begin()
-	tx.Exec(`UPDATE themes SET active=0`)
-	res, _ := tx.Exec(`UPDATE themes SET active=1 WHERE id=?`, id)
+	tx, err := s.St.DB.Begin()
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE themes SET active=0`); err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	res, err := tx.Exec(`UPDATE themes SET active=1 WHERE id=?`, id)
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		tx.Rollback()
 		jerr(w, 404, "not found")
 		return
 	}
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
 	jout(w, 200, map[string]any{"ok": true})
 }
 

@@ -56,7 +56,7 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_CLEAN_FILES_DAYS` | `7` | `clean_files_days` |
 | `SENDORA_DEFAULT_EXPIRY_TIME` | `7` | `default_expiry_time` |
 | `SENDORA_DEFAULT_LANGUAGE` | `en` | `default_language` |
-| `SENDORA_DEFAULT_STORAGE_QUOTA_BYTES` | `10737418240` | `default_storage_quota_bytes` |
+| `SENDORA_DEFAULT_STORAGE_QUOTA_BYTES` | `10000000000` (10 GB) | `default_storage_quota_bytes` |
 | `SENDORA_EXPIRY_WARNING_DAYS` | `2` | `expiry_warning_days` |
 | `SENDORA_IDLE_LOGOUT_MINUTES` | `60` | `idle_logout_minutes` |
 | `SENDORA_IP_BAN_ALLOWLIST` | empty | `ip_ban_allowlist` |

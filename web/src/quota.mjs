@@ -1,6 +1,7 @@
+import { tr } from './i18n/mark.mjs'
 const GB = 1_000_000_000n
 const MAX_BYTES = BigInt(Number.MAX_SAFE_INTEGER)
-const INVALID = 'Enter a valid quota in GB (up to 9 decimal places).'
+const INVALID = tr('Enter a valid quota in GB (up to 9 decimal places).')
 
 function validBytes(value) {
   if (typeof value === 'number' && !Number.isSafeInteger(value)) throw new Error(INVALID)

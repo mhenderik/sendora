@@ -772,8 +772,6 @@
   "Import these seven templates? Existing translations for this language will be replaced.": "Deze zeven sjablonen importeren? Bestaande vertalingen voor deze taal worden vervangen.",
   "Translation JSON imported": "Vertaal-JSON geïmporteerd",
   "Import preview": "Importvoorbeeld",
-  "Existing language: all seven templates will be replaced.": "Bestaande taal: alle zeven sjablonen worden vervangen.",
-  "New language: all seven templates will be added.": "Nieuwe taal: alle zeven sjablonen worden toegevoegd.",
   "Confirm import": "Import bevestigen",
   "Directory (tenant) ID": "Directory-ID (tenant)",
   "Single organization tenant only. Microsoft email claims are not treated as verified; accounts are never linked by email.": "Alleen één organisatietenant. Microsoft-e-mailclaims gelden niet als geverifieerd; accounts worden nooit op e-mailadres gekoppeld.",
@@ -808,5 +806,6 @@
   "registration failed": "registratie mislukt",
   "username must be 1 to 64 characters: letters a-z, digits, dot, underscore or hyphen": "gebruikersnaam moet 1 tot 64 tekens zijn: letters a-z, cijfers, punt, liggend streepje of koppelteken",
   "this login provider is managed by the server configuration and cannot be changed here": "deze aanmeldprovider wordt beheerd via de serverconfiguratie en kan hier niet worden gewijzigd",
-  "%s is managed by the server configuration and cannot be changed here": "%s wordt beheerd via de serverconfiguratie en kan hier niet worden gewijzigd"
+  "%s is managed by the server configuration and cannot be changed here": "%s wordt beheerd via de serverconfiguratie en kan hier niet worden gewijzigd",
+  "total size exceeds the download limit of %d MB": "totale grootte overschrijdt de downloadlimiet van %d MB"
 }

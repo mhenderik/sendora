@@ -570,7 +570,9 @@ func (s *Server) putTemplates(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	for k, v := range updates {
-		if _, err := tx.Exec(`UPDATE settings SET value=? WHERE key=? AND grp='email_templates'`, v, k); err != nil {
+		// Upsert: a language added before a mail event existed (e.g. welcome) has
+		// no row for it yet, and an UPDATE alone would silently save nothing.
+		if _, err := tx.Exec(`INSERT INTO settings(key,grp,value) VALUES(?,'email_templates',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.grp='email_templates'`, k, v); err != nil {
 			jerr(w, 500, "template save failed")
 			return
 		}

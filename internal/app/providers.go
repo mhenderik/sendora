@@ -422,6 +422,9 @@ func (s *Server) resolveExternalUser(p *Provider, id extIdentity) (*User, string
 		return nil, "no account linked to this login"
 	}
 	base := nonUser.ReplaceAllString(firstNonEmpty(id.Username, strings.Split(id.Email, "@")[0], "user"), "")
+	if len(base) > 58 { // leave room for a numeric suffix within the 64-character limit
+		base = base[:58]
+	}
 	if base == "" {
 		base = "user"
 	}

@@ -101,7 +101,10 @@ func (s *Server) maintain() {
 	}
 
 	// stale upload sessions (> 24h)
-	rows, _ := s.St.DB.Query(`SELECT id FROM upload_sessions WHERE created_at<?`, now.Add(-24*time.Hour))
+	// created_at defaults to SQLite's CURRENT_TIMESTAMP (UTC text) but may also be
+	// written by Go (local time with an offset); datetime() normalises both to UTC.
+	staleBefore := now.UTC().Add(-24 * time.Hour).Format("2006-01-02 15:04:05")
+	rows, _ := s.St.DB.Query(`SELECT id FROM upload_sessions WHERE datetime(created_at)<?`, staleBefore)
 	var stale []string
 	for rows != nil && rows.Next() {
 		var id string
@@ -116,7 +119,7 @@ func (s *Server) maintain() {
 		// The discovery query is only a snapshot. Completion/abort may already
 		// have removed this session while cleanup waited for its stripe.
 		var exists int
-		if err := s.St.DB.QueryRow(`SELECT COUNT(*) FROM upload_sessions WHERE id=? AND created_at<?`, id, now.Add(-24*time.Hour)).Scan(&exists); err == nil && exists == 1 {
+		if err := s.St.DB.QueryRow(`SELECT COUNT(*) FROM upload_sessions WHERE id=? AND datetime(created_at)<?`, id, staleBefore).Scan(&exists); err == nil && exists == 1 {
 			if err := s.removeUploadSession(id); err != nil {
 				log.Printf("stale upload cleanup: %v", err)
 			}
@@ -129,7 +132,7 @@ func (s *Server) maintain() {
 	s.St.DB.Exec(`DELETE FROM refresh_spent WHERE expires_at<?`, now)
 	s.St.DB.Exec(`DELETE FROM password_resets WHERE expires_at<?`, now)
 	s.St.DB.Exec(`DELETE FROM email_verifications WHERE expires_at<?`, now)
-	s.St.DB.Exec(`DELETE FROM downloads WHERE created_at<?`, now.AddDate(0, 0, -90))
+	s.St.DB.Exec(`DELETE FROM downloads WHERE datetime(created_at)<?`, now.UTC().AddDate(0, 0, -90).Format("2006-01-02 15:04:05"))
 	// Self-registrations that never proved their email (they cannot sign in) are
 	// squatting on usernames and addresses: remove them after 48 hours. Only
 	// accounts still marked as a pending registration qualify, never an

@@ -73,7 +73,7 @@ Uploading validates without changing the database and displays the language plus
 
 Admin APIs: `GET /api/email-templates/export?language=en` returns downloadable JSON. `POST /api/email-templates/import` accepts `{ "bundle": <exported-object>, "apply": false }` for validation/preview. Applying uses `apply: true`; overwriting an existing language additionally requires `overwrite: true`.
 
-Profile email-language preferences are separate from menu-language preferences. A uniquely matching ordinary account recipient uses its email-language preference; external recipients use the language selected by the sender (English if none is supplied). Missing translations fall back to English. Menu translations remain the five bundled UI languages; manually translated email content is not a menu translation mechanism.
+Profile email-language preferences are separate from menu-language preferences. A uniquely matching ordinary account recipient uses its email-language preference; external recipients use the language selected by the sender (English if none is supplied). Missing translations fall back to English. Menu (interface) languages are separate: they are translated through JSON under Admin → Languages (see [Translations](translations.md)).
 
 ### Download notification semantics
 

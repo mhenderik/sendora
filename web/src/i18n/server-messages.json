@@ -355,7 +355,8 @@
     "invalid address or range: %s",
     "at most %d addresses or ranges",
     "%s must be a whole number from %d to %d",
-    "%s is managed by the server configuration and cannot be changed here"
+    "%s is managed by the server configuration and cannot be changed here",
+    "total size exceeds the download limit of %d MB"
   ],
   "alreadyTranslated": [
     "file integrity check failed; download blocked",

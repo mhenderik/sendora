@@ -58,7 +58,10 @@
     "The one-time setup code is printed in the server log when Sendora starts without accounts (for Docker: docker compose logs sendora).": "De eenmalige installatiecode staat in de serverlog zodra Sendora start zonder accounts (voor Docker: docker compose logs sendora).",
     "Settings set in the server configuration (environment or Kubernetes ConfigMap) are read-only here: {n}.": "Instellingen uit de serverconfiguratie (omgeving of Kubernetes ConfigMap) zijn hier alleen-lezen: {n}.",
     "Set in the server configuration (environment or Kubernetes ConfigMap); change it there.": "Ingesteld in de serverconfiguratie (omgeving of Kubernetes ConfigMap); wijzig het daar.",
-    "Managed by configuration": "Beheerd via configuratie"
+    "Managed by configuration": "Beheerd via configuratie",
+    "Existing language: the templates in this file will replace the current ones.": "Bestaande taal: de sjablonen in dit bestand vervangen de huidige.",
+    "New language: the templates in this file will be added.": "Nieuwe taal: de sjablonen in dit bestand worden toegevoegd.",
+    "Enter a valid quota in GB (up to 9 decimal places).": "Voer een geldig quotum in GB in (maximaal 9 decimalen)."
   },
   "de": {
     "{changed} of {total} texts differ from the built-in text and will be stored.": "{changed} von {total} Texten weichen vom eingebauten Text ab und werden gespeichert.",

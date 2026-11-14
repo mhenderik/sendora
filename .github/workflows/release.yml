@@ -20,7 +20,10 @@ jobs:
   image:
     runs-on: ubuntu-latest
     steps:
+      # A manual run rebuilds exactly the tag of the given version.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref }}
       - name: Version
         id: version
         run: |
@@ -41,7 +44,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}},value=v${{ steps.version.outputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=v${{ steps.version.outputs.version }}
-            type=raw,value=latest
+            # Only a new tag moves "latest"; rebuilding an old version must not.
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
       - uses: docker/build-push-action@v6
         with:
           context: .

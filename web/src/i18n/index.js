@@ -1,5 +1,6 @@
 import { ref, reactive, shallowReactive } from 'vue'
-import { tr, setTranslator } from './mark.mjs'
+import { tr, setTranslator, dynamicMatcher, translateDynamic } from './mark.mjs'
+import serverMessages from './server-messages.json'
 import { lookup, interpolate, CODE_PATTERN } from '../ui-language.mjs'
 import de from './de.json'
 import fr from './fr.json'
@@ -62,8 +63,13 @@ export function t(key, vars) {
   return interpolate(lookup(key, overrides[lang.value], bundled[lang.value]), vars)
 }
 export { tr }
-// Server and helper-module messages are translated through this when a translation exists.
-setTranslator(key => t(key))
+// Server and helper-module messages are translated through this when a translation
+// exists; messages with filled-in values are matched against the known patterns.
+const dynamicMessages = dynamicMatcher(serverMessages.dynamic)
+setTranslator(key => {
+  const exact = t(key)
+  return exact !== key ? exact : translateDynamic(key, dynamicMessages, t)
+})
 
 // BCP 47 locale for dates, following the active menu language.
 const locales = { en: 'en-GB', nl: 'nl-NL', de: 'de-DE', fr: 'fr-FR', es: 'es-ES' }

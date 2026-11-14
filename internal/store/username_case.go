@@ -5,8 +5,9 @@ import "log"
 // migrateUsernameCase makes usernames unique regardless of ASCII letter case
 // ("Admin" and "admin" are the same account). The display case stays as typed.
 // If an existing database already holds names that differ only by case, the
-// unique index cannot be created: startup continues, a warning names the
-// accounts to rename, and logins prefer the exact-case match.
+// unique index cannot be created: startup continues, a warning gives the number
+// of such names (find them with GROUP BY username COLLATE NOCASE), and logins
+// prefer the exact-case match.
 func (s *Store) migrateUsernameCase() error {
 	var n int
 	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM (SELECT 1 FROM users GROUP BY username COLLATE NOCASE HAVING COUNT(*)>1)`).Scan(&n); err != nil {

@@ -10,6 +10,7 @@ database.key
 *.key
 .env
 .env.*
+!.env.example
 
 # Build output
 /sendora

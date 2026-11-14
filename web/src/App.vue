@@ -66,7 +66,7 @@ function startIdle() {
     onTimeout: idleTimedOut,
   })
   timer = setInterval(() => monitor?.tick(), 5000)
-  // The warning countdown needs finer ticks than the 15 s inactivity check.
+  // The warning countdown needs finer ticks than the 5 s inactivity check.
   countdown = setInterval(() => { if (monitor?.warning) monitor.tick() }, 1000)
 }
 let countdown = null

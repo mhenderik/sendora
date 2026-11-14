@@ -141,6 +141,11 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	maxShare := int64(s.St.SettingInt("max_share_size", 2048)) * 1024 * 1024
+	// A share larger than the verified-download limit could never be downloaded.
+	if limit := snapshotLimit(); total > limit {
+		jerr(w, 413, fmt.Sprintf("total size exceeds the download limit of %d MB", limit/1024/1024))
+		return
+	}
 	id := randHex(16)
 	tx, err := s.St.DB.Begin()
 	if err != nil {
@@ -328,7 +333,11 @@ func (s *Server) uploadStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, _ := s.St.DB.Query(`SELECT idx,size,received FROM upload_files WHERE session_id=? ORDER BY idx`, id)
+	rows, err := s.St.DB.Query(`SELECT idx,size,received FROM upload_files WHERE session_id=? ORDER BY idx`, id)
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {

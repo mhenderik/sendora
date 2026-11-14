@@ -68,7 +68,7 @@ export CGO_ENABLED=1
 npm --prefix web ci
 npm --prefix web run build
 go vet ./...
-go test -race ./... -cover -timeout 180s
+go test -race ./... -cover -timeout 40m   # the app package takes 10-20 minutes with -race
 node --test web/src/*.test.mjs
 ```
 
