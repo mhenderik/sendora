@@ -81,6 +81,9 @@ type Server struct {
 
 	// Settings set by the server configuration (see config.go).
 	managedSettings map[string]bool
+
+	// rateWindow overrides the one-minute rate-limit window (tests only).
+	rateWindow time.Duration
 }
 
 func lockStripe(locks *[64]sync.Mutex, key string) func() {

@@ -44,6 +44,9 @@ func newEnv(t *testing.T) *env {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.RunDownloadMail(ctx)
 	t.Cleanup(cancel)
+	// Failed sign-ins are deliberately slow; on a slow test machine 61 of them
+	// can take longer than a minute, so budgets must not reset mid-test.
+	s.rateWindow = time.Hour
 	ts := httptest.NewServer(s.Router())
 	t.Cleanup(ts.Close)
 	return &env{t: t, s: s, ts: ts}

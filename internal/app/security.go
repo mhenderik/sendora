@@ -118,6 +118,15 @@ func isPublicTransfer(p string) bool {
 	return len(parts) >= 2 && (parts[1] == "download" || parts[1] == "preview")
 }
 
+// rateLimitWindow is the period of the per-route request budgets: one minute,
+// unless a test lengthens it (slow test machines must still reach the limit).
+func (s *Server) rateLimitWindow() time.Duration {
+	if s.rateWindow > 0 {
+		return s.rateWindow
+	}
+	return time.Minute
+}
+
 func (s *Server) security(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -195,13 +204,13 @@ func (s *Server) security(next http.Handler) http.Handler {
 			}
 			// IPv6 clients are grouped by /64, like the address block, so rotating
 			// addresses inside one prefix does not multiply the budget.
-			if !s.allowRequest(class+":"+ipBanKey(s.clientIP(r)), classLimit, time.Minute) {
+			if !s.allowRequest(class+":"+ipBanKey(s.clientIP(r)), classLimit, s.rateLimitWindow()) {
 				w.Header().Set("Retry-After", "60")
 				jerr(w, 429, "too many requests")
 				return
 			}
 		}
-		if class == "download" && !s.allowRequest("download:"+ipBanKey(s.clientIP(r)), classLimit, time.Minute) {
+		if class == "download" && !s.allowRequest("download:"+ipBanKey(s.clientIP(r)), classLimit, s.rateLimitWindow()) {
 			w.Header().Set("Retry-After", "60")
 			jerr(w, 429, "too many download requests")
 			return
