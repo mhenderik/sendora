@@ -25,7 +25,7 @@ go build -trimpath -o sendora .
 ```sh
 node --test web/src/*.test.mjs    # frontend logic and translations
 go vet ./...
-go test -race ./...               # the app package takes several minutes
+go test -race -timeout 40m ./...        # the app package takes several minutes
 ```
 
 Please add or update a test with every behaviour change, especially anything
