@@ -22,13 +22,17 @@ backup tooling, and the container image and example manifests.
 
 Out of scope: problems that need an already compromised server, administrator
 account or database key; denial of service through unlimited traffic (put a proxy
-in front, see `SENDORA_TRUSTED_PROXIES` in the README); social engineering;
+in front, see `SENDORA_TRUSTED_PROXIES` in [docs/configuration.md](docs/configuration.md)); social engineering;
 missing hardening of your own deployment.
+
+## Independent review
+
+Sendora was written largely by an AI coding assistant for a maintainer who is not a software developer. It has automated tests but has **not** been audited by an independent security professional. Reviews and responsible disclosure are very welcome.
 
 ## Known trade-offs
 
 These are documented, deliberate decisions, not undisclosed bugs (details in the
-README, section *Security and operational caveats*):
+[docs/security.md](docs/security.md)):
 
 - Anyone who knows a username can lock that account's password sign-in for 15
   minutes. Administrators can unlock it.

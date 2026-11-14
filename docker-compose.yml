@@ -6,11 +6,13 @@ services:
       - "127.0.0.1:8080:8080"
     environment:
       # APP_URL: https://files.example.com   # public URL used in links/emails/OIDC callbacks
-      # JWT_SECRET: change-me                # optional; auto-generated and stored in DB otherwise
+      # JWT_SECRET: <at least 32 random characters>  # optional; auto-generated and stored in DB otherwise
       SENDORA_DB_KEY_FILE: /run/secrets/sendora_db_key
       # Set true only for private first initialization, then recreate with false.
       SENDORA_DB_INITIALIZE: "${SENDORA_DB_INITIALIZE:-false}"
       TZ: UTC
+      # Any admin setting can be set here as SENDORA_<SETTING>, e.g.
+      # SENDORA_ALLOW_SELF_REGISTRATION: "false"  (see docs/configuration.md)
     volumes:
       - ./sendora-data:/data
     secrets:

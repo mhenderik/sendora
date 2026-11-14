@@ -309,7 +309,7 @@ func (s *Server) mfaWebAuthnLoginFinish(w http.ResponseWriter, r *http.Request) 
 		jerr(w, 401, msgMFAExpired)
 		return
 	}
-	unlock := lockStripe(&s.loginLocks, strconv.FormatInt(uid, 10))
+	unlock := onceUnlock(lockStripe(&s.loginLocks, strconv.FormatInt(uid, 10)))
 	defer unlock()
 	u, jti, exp, ok := s.pendingMFAUser(w, b.MFAToken)
 	if !ok {
@@ -329,6 +329,7 @@ func (s *Server) mfaWebAuthnLoginFinish(w http.ResponseWriter, r *http.Request) 
 	fail := func() {
 		s.noteAuthFailure(u)
 		s.logEvent(u.ID, u.Username, "mfa_failed", "", "webauthn")
+		unlock()
 		rejectMFA(w)
 	}
 	id, idOK := b.Credential.credentialID()

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -74,6 +75,12 @@ type Server struct {
 	importExec      func() error  // re-exec of this process
 	importExit      func(int)
 	importDone      chan struct{}
+
+	// One-time code required for first-run setup (empty once an account exists).
+	setupCode string
+
+	// Settings set by the server configuration (see config.go).
+	managedSettings map[string]bool
 }
 
 func lockStripe(locks *[64]sync.Mutex, key string) func() {
@@ -131,7 +138,22 @@ func New(st *store.Store, static fs.FS, version string) *Server {
 		panic(err)
 	}
 	s.Secret = []byte(sec)
+	if err := s.applyConfig(); err != nil {
+		panic(fmt.Errorf("configuration: %w", err))
+	}
 	s.loadIPBans()
+	// A fresh instance must not be claimed by whoever reaches it first: setup
+	// needs a one-time code that only someone with access to the server log (or
+	// the deployment's environment) has.
+	var users int
+	st.DB.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&users)
+	if users == 0 {
+		s.setupCode = strings.ToUpper(strings.TrimSpace(os.Getenv("SENDORA_SETUP_CODE")))
+		if len(s.setupCode) < 12 {
+			s.setupCode = newSetupCode()
+		}
+		log.Printf("first-run setup code: %s (enter it on the setup page; it changes on every restart until setup is done)", s.setupCode)
+	}
 	// Reserved rows never represent an observed start. A process restart cannot
 	// truthfully promote them; release their capacity and preserve pending jobs.
 	if _, err := st.DB.Exec(`DELETE FROM download_mail_outbox WHERE status='reserved'`); err != nil {
@@ -154,8 +176,34 @@ func New(st *store.Store, static fs.FS, version string) *Server {
 			}
 		}
 	}
+	// Share directories moved aside for deletion when the process stopped.
+	if shareEntries, err := os.ReadDir(path.Join(st.DataDir, "shares")); err == nil {
+		for _, entry := range shareEntries {
+			if strings.HasPrefix(entry.Name(), ".deleting-") && entry.IsDir() {
+				os.RemoveAll(path.Join(st.DataDir, "shares", entry.Name()))
+			}
+		}
+	}
 	s.cleanImportFiles()
 	return s
+}
+
+// newSetupCode returns 12 random characters from an alphabet without look-alike
+// characters, grouped for typing (about 59 bits).
+func newSetupCode() string {
+	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	out := make([]byte, 0, 14)
+	for i, c := range b {
+		if i == 4 || i == 8 {
+			out = append(out, '-')
+		}
+		out = append(out, alphabet[int(c)%len(alphabet)])
+	}
+	return string(out)
 }
 
 func randHex(n int) string {
@@ -386,7 +434,7 @@ func withUser(r *http.Request, u *User) *http.Request {
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	jout(w, 200, map[string]any{"status": "ok", "version": s.Version})
+	jout(w, 200, map[string]any{"status": "ok"})
 }
 
 func (s *Server) baseURL(r *http.Request) string {
@@ -409,7 +457,6 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	s.St.DB.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&users)
 	out := map[string]any{
 		"setup_needed":                   users == 0,
-		"version":                        s.Version,
 		"application_name":               s.St.Setting("application_name"),
 		"default_language":               s.St.Setting("default_language"),
 		"show_language_selector":         s.St.SettingBool("show_language_selector"),

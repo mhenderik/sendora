@@ -110,6 +110,24 @@ func (s *Server) sendMail(to, subject, body string) error {
 	return c.Quit()
 }
 
+// smtpErrorCategory turns a delivery error into a short, fixed message for the
+// browser. Raw network errors (addresses, ports, server banners) stay in the
+// server log, so the test button cannot be used to map internal hosts.
+func smtpErrorCategory(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "smtp not configured"), strings.Contains(msg, "bad from address"), strings.Contains(msg, "bad recipient"), strings.Contains(msg, "invalid smtp"):
+		return err.Error()
+	case strings.Contains(msg, "535"), strings.Contains(msg, "auth"):
+		return "SMTP sign-in failed: check the username and password"
+	case strings.Contains(msg, "tls"), strings.Contains(msg, "x509"), strings.Contains(msg, "certificate"):
+		return "SMTP secure connection failed: check the security mode and port"
+	case strings.Contains(msg, "dial"), strings.Contains(msg, "timeout"), strings.Contains(msg, "refused"), strings.Contains(msg, "no such host"):
+		return "could not connect to the SMTP server: check the server and port"
+	}
+	return "sending the test email failed (details are in the server log)"
+}
+
 func mailMessage(from, to *mail.Address, subject, body string) string {
 	return mailMessageReplyTo(from, to, nil, subject, body)
 }
@@ -144,11 +162,17 @@ func validateReplyToSetting(key string, val *string) (owned bool, err error) {
 	if e != nil {
 		return true, fmt.Errorf("invalid reply-to address")
 	}
-	// A bare address is stored without angle brackets; with a name: Name <address>.
+	// Stored readably: a bare address without angle brackets, a name as a quoted
+	// string in plain UTF-8 (mail.Address.String would RFC 2047-encode it). The
+	// header itself is still encoded when the message is built.
 	if a.Name == "" {
 		*val = a.Address
 	} else {
-		*val = a.String()
+		quoted := `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(a.Name) + `"`
+		*val = quoted + " <" + a.Address + ">"
+		if b, e := mail.ParseAddress(*val); e != nil || b.Name != a.Name || b.Address != a.Address {
+			*val = a.String()
+		}
 	}
 	return true, nil
 }
@@ -572,7 +596,8 @@ func (s *Server) testEmail(w http.ResponseWriter, r *http.Request) {
 	}
 	subject, body := store.TestMailText(u.Language)
 	if err := s.sendMail(u.Email, subject, body); err != nil {
-		jerr(w, 400, err.Error())
+		log.Printf("test email failed: %v", err)
+		jerr(w, 400, smtpErrorCategory(err))
 		return
 	}
 	jout(w, 200, map[string]any{"ok": true})

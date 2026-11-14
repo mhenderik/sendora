@@ -3,7 +3,10 @@ package app
 import (
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mhenderik/sendora/internal/store"
@@ -28,6 +31,27 @@ func quotaChoice(quota *int64, inherits *bool) (*bool, bool) {
 func validQuotaBytes(q *int64) bool {
 	return q == nil || (*q >= 0 && *q <= maxSafeQuotaBytes)
 }
+
+// recentSignIn is how long after signing in an account without a local password
+// may change its password or email address.
+const recentSignIn = 10 * time.Minute
+
+const msgRecentSignIn = "sign in again to change your password or email address"
+
+// dummyHash makes a failed lookup cost as much as a password check, so response
+// times do not reveal whether an account exists.
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("sendora-timing-equaliser"), bcrypt.DefaultCost)
+
+// usernameOf returns the username for the activity log ("" when unknown).
+func (s *Server) usernameOf(id int64) string {
+	var name string
+	s.St.DB.QueryRow(`SELECT username FROM users WHERE id=?`, id).Scan(&name)
+	return name
+}
+
+// onceUnlock wraps a lock release so it can be called early (before the failure
+// delay, so a slow rejection never holds the account lock) and again by defer.
+func onceUnlock(unlock func()) func() { return sync.OnceFunc(unlock) }
 
 func rejectLogin(w http.ResponseWriter) {
 	time.Sleep(300 * time.Millisecond)

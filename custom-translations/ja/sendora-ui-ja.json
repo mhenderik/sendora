@@ -777,7 +777,6 @@
     "user update failed": "ユーザーの更新に失敗しました",
     "username already exists": "そのユーザー名はすでに存在します",
     "username and password required": "ユーザー名とパスワードが必要です",
-    "username or email already in use": "ユーザー名またはメールアドレスはすでに使用されています",
     "username, email and password required": "ユーザー名、メールアドレス、パスワードが必要です",
     "valid email required": "有効なメールアドレスが必要です",
     "valid issuer URL required": "有効な発行者URLが必要です",
@@ -792,6 +791,7 @@
     "{app} recovery codes": "{app} のリカバリーコード",
     "{changed} of {total} texts differ from the built-in text and will be stored.": "{total}件中{changed}件のテキストが組み込みのテキストと異なり、保存されます。",
     "{count} of {max} custom languages in use.": "カスタム言語を{max}個中{count}個使用中です。",
-    "© {year} Sendora contributors": "© {year} Sendora contributors"
+    "© {year} Sendora contributors": "© {year} Sendora contributors",
+    "username already in use": "ユーザー名は既に使用されています"
   }
 }

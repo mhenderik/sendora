@@ -11,6 +11,11 @@ import (
 // organisation's SMTP server to spam arbitrary addresses with attacker-chosen text.
 const mailRecipientsPerHour = 100
 
+// mailRecipientsPerHourTotal caps all user-triggered notification mail of the
+// instance together, so several (self-registered) accounts cannot multiply the
+// per-user allowance into a spam run through the organisation's mail domain.
+const mailRecipientsPerHourTotal = 500
+
 // downloadMailMinInterval is a variable only so tests can lift the throttle.
 var downloadMailMinInterval = 60 * time.Second
 
@@ -31,7 +36,10 @@ func countRecipients(list []string) int {
 
 // takeMail charges n recipient emails against the user's hourly allowance.
 func (s *Server) takeMail(userID int64, n int) bool {
-	return s.allowN("mail:"+strconv.FormatInt(userID, 10), n, mailRecipientsPerHour, time.Hour)
+	if !s.allowN("mail:"+strconv.FormatInt(userID, 10), n, mailRecipientsPerHour, time.Hour) {
+		return false
+	}
+	return s.allowN("mail:instance", n, mailRecipientsPerHourTotal, time.Hour)
 }
 
 // queueMail hands a message to a small fixed worker pool. When the queue is full

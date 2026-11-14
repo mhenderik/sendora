@@ -132,7 +132,7 @@ func TestSnapshotLimitsAndImmutableCopy(t *testing.T) {
 	if string(data) != "abc" || checksum != sum(data) {
 		t.Fatal("mutable snapshot")
 	}
-	t.Setenv("FILESHARE_VERIFIED_DOWNLOAD_MAX_BYTES", "2")
+	t.Setenv("SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES", "2")
 	_, _, err = e.s.prepareDownload(context.Background(), files)
 	if err != errSnapshotLimit {
 		t.Fatal(fmt.Sprint(err))

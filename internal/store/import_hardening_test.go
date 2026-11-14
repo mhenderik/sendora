@@ -169,3 +169,14 @@ func TestSharePathContainment(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareImportedRefusesGeneratedColumns(t *testing.T) {
+	p := preparedCopy(t, func(st *Store) {
+		if _, err := st.DB.Exec(`ALTER TABLE settings ADD COLUMN boom BLOB GENERATED ALWAYS AS (zeroblob(1000)) VIRTUAL`); err != nil {
+			t.Skip("generated columns unavailable:", err)
+		}
+	})
+	if _, err := PrepareImported(p, impKeyA, t.TempDir()); err == nil || !strings.Contains(err.Error(), "generated") {
+		t.Fatal("generated column accepted:", err)
+	}
+}

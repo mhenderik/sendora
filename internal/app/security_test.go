@@ -20,7 +20,14 @@ func TestIdentitySecurity(t *testing.T) {
 	admin := e.setup()
 	bob := e.mkUser(admin, "bob", false)
 	e.s.St.SetSetting("allow_self_registration", "true")
-	e.want(e.do("POST", "/api/auth/register", "", map[string]any{"username": "duplicate", "email": "ADMIN@x.io", "password": "password123"}), 400, "duplicate case-insensitive email")
+	// A taken address gets the same answer as a successful registration (no
+	// enumeration), but no account is created.
+	e.want(e.do("POST", "/api/auth/register", "", map[string]any{"username": "duplicate", "email": "ADMIN@x.io", "password": "password123"}), 201, "duplicate case-insensitive email")
+	var dup int
+	e.s.St.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE username='duplicate'`).Scan(&dup)
+	if dup != 0 {
+		t.Fatal("duplicate case-insensitive email created an account")
+	}
 	e.want(e.do("PUT", "/api/users/me", bob, map[string]any{"name": "Bob", "email": "admin@x.io", "current_password": "password123"}), 400, "email takeover")
 	e.want(e.do("PUT", "/api/users/me", bob, map[string]any{"name": "Bob", "email": "new@x.io"}), 400, "email requires current password")
 	updated := e.do("PUT", "/api/users/me", bob, map[string]any{"name": "Bob", "email": "new@x.io", "current_password": "password123"})

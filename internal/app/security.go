@@ -100,7 +100,7 @@ func routeClass(r *http.Request) (class string, limit int) {
 		return "login", 60
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/api/auth/"):
 		return "auth", 60
-	case r.Method == http.MethodGet && isPublicTransfer(p):
+	case (r.Method == http.MethodGet || r.Method == http.MethodPost) && isPublicTransfer(p):
 		return "download", 120
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/i18n/"):
 		return "i18n", 120
@@ -166,14 +166,16 @@ func (s *Server) security(next http.Handler) http.Handler {
 				return
 			}
 		}
-		if sensitive && class != "refresh" {
+		if sensitive && class != "refresh" && class != "i18n" {
 			if wait, banned := s.ipBlocked(s.clientIP(r)); banned {
 				w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 				jerr(w, 429, "too many failed attempts from this address; try again later")
 				return
 			}
 		}
-		if sensitive && (class == "login" || class == "mfa" || class == "unlock" || class == "auth") {
+		// Only failed sign-in steps count, not signed-in requests whose access token
+		// expired (for example the two-step settings under /api/users/me).
+		if sensitive && (class == "login" || class == "unlock" || class == "auth" || (class == "mfa" && strings.HasPrefix(r.URL.Path, "/api/auth/mfa/"))) {
 			rec := &statusRecorder{ResponseWriter: w, status: 200}
 			w = rec
 			ip := s.clientIP(r)
@@ -191,13 +193,15 @@ func (s *Server) security(next http.Handler) http.Handler {
 				jerr(w, 429, "too many concurrent authentication requests")
 				return
 			}
-			if !s.allowRequest(class+":"+s.clientIP(r), classLimit, time.Minute) {
+			// IPv6 clients are grouped by /64, like the address block, so rotating
+			// addresses inside one prefix does not multiply the budget.
+			if !s.allowRequest(class+":"+ipBanKey(s.clientIP(r)), classLimit, time.Minute) {
 				w.Header().Set("Retry-After", "60")
 				jerr(w, 429, "too many requests")
 				return
 			}
 		}
-		if class == "download" && !s.allowRequest("download:"+s.clientIP(r), classLimit, time.Minute) {
+		if class == "download" && !s.allowRequest("download:"+ipBanKey(s.clientIP(r)), classLimit, time.Minute) {
 			w.Header().Set("Retry-After", "60")
 			jerr(w, 429, "too many download requests")
 			return

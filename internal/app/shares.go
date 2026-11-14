@@ -165,7 +165,8 @@ func (s *Server) readShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.shareUnlocked(r, sh) {
-		jout(w, 200, map[string]any{"password_protected": true, "name": sh.Name, "owner": sh.Owner})
+		// Nothing about the owner before the password is given.
+		jout(w, 200, map[string]any{"password_protected": true, "name": sh.Name})
 		return
 	}
 	sh.Files = s.shareFiles(sh.ID)
@@ -352,12 +353,13 @@ func (s *Server) downloadShare(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 404, "no files")
 		return
 	}
-	snapshot, checksum, err := s.prepareDownload(r.Context(), files)
+	client := ipBanKey(s.clientIP(r))
+	snapshot, checksum, err := s.prepareClientDownload(r.Context(), client, files)
 	if err != nil {
 		integrityError(w, err)
 		return
 	}
-	defer func() { snapshot.Close(); os.Remove(snapshot.Name()); <-integritySlots }()
+	defer func() { snapshot.Close(); os.Remove(snapshot.Name()); <-integritySlots; releaseDownloadClient(client) }()
 	jobID, ok := s.reserveDownload(w, sh, files)
 	if !ok {
 		return
@@ -385,12 +387,13 @@ func (s *Server) downloadShareFile(w http.ResponseWriter, r *http.Request) {
 	fp := strings.TrimPrefix(path.Clean("/"+wildcardPath(r)), "/")
 	for _, f := range s.shareFiles(sh.ID) {
 		if f.FullPath == fp {
-			in, checksum, err := s.prepareDownload(r.Context(), []FileInfo{f})
+			client := ipBanKey(s.clientIP(r))
+			in, checksum, err := s.prepareClientDownload(r.Context(), client, []FileInfo{f})
 			if err != nil {
 				integrityError(w, err)
 				return
 			}
-			defer func() { in.Close(); os.Remove(in.Name()); <-integritySlots }()
+			defer func() { in.Close(); os.Remove(in.Name()); <-integritySlots; releaseDownloadClient(client) }()
 			setDownloadChecksum(w, checksum)
 			id := f.ID
 			jobID, ok := s.reserveDownload(w, sh, []FileInfo{f})
@@ -1053,21 +1056,41 @@ func (s *Server) removeShareIf(id int64, condition string, args ...any) (bool, e
 	}
 	// Only ever remove a validated share directory; a share record with a malformed
 	// long ID (e.g. from a tampered import) is deleted without touching the disk.
-	if dir, derr := store.ShareDir(s.St.DataDir, lid); derr == nil {
-		if err := os.RemoveAll(dir); err != nil {
-			return false, err
+	// The directory is moved aside inside the transaction (fast) and deleted
+	// after the commit, so a share with thousands of files never holds the only
+	// database connection while the disk works.
+	var tomb, dir string
+	if d, derr := store.ShareDir(s.St.DataDir, lid); derr == nil {
+		dir = d
+		tomb = filepath.Join(filepath.Dir(dir), ".deleting-"+randHex(8)) // same directory, so same mount
+		if err := os.Rename(dir, tomb); err != nil {
+			if !os.IsNotExist(err) {
+				return false, err
+			}
+			tomb = ""
+		}
+	}
+	restore := func() {
+		if tomb != "" {
+			os.Rename(tomb, dir)
 		}
 	}
 	res, err := tx.Exec(`DELETE FROM shares WHERE id=?`, id)
 	if err != nil {
+		restore()
 		return false, err
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
+		restore()
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
+		restore()
 		return false, err
+	}
+	if tomb != "" {
+		os.RemoveAll(tomb)
 	}
 	for _, sid := range sessions {
 		os.RemoveAll(s.uploadDir(sid))

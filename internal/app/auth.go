@@ -3,6 +3,7 @@ package app
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -74,12 +75,17 @@ func hashToken(t string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func (s *Server) accessToken(u *User) string {
+func (s *Server) accessToken(u *User) string { return s.accessTokenAt(u, time.Now()) }
+
+// accessTokenAt records when the session was signed in (auth_time), so actions
+// that need a recent sign-in can check it; refresh carries the original time.
+func (s *Server) accessTokenAt(u *User, authTime time.Time) string {
 	claims := jwt.MapClaims{
 		"sub":        strconv.FormatInt(u.ID, 10),
 		"purpose":    "access",
 		"jti":        randHex(16),
 		"credential": s.credentialVersion(u),
+		"auth_time":  authTime.Unix(),
 		"exp":        time.Now().Add(15 * time.Minute).Unix(),
 	}
 	// Required but not yet enrolled: the token only reaches the enrolment routes.
@@ -93,10 +99,43 @@ func (s *Server) accessToken(u *User) string {
 	return str
 }
 
+// sessionMaxAge is the absolute lifetime of a session: refreshing never extends
+// it beyond this time after the original sign-in.
+const sessionMaxAge = 30 * 24 * time.Hour
+
+// requestAuthTime returns the sign-in time recorded in the request's (already
+// validated) access token, or the zero time.
+func (s *Server) requestAuthTime(r *http.Request) time.Time {
+	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	claims := jwt.MapClaims{}
+	if _, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) { return s.Secret, nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()); err != nil {
+		return time.Time{}
+	}
+	if v, ok := claims["auth_time"].(float64); ok && v > 0 {
+		return time.Unix(int64(v), 0)
+	}
+	return time.Time{}
+}
+
 func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, u *User) bool {
+	return s.issueSessionSince(w, r, u, time.Now())
+}
+
+// sessionStartOf is the sign-in time of the current request's session, used when
+// a profile or security change re-issues the session: it must not restart the
+// 30-day limit or the recent-sign-in window.
+func (s *Server) sessionStartOf(r *http.Request) time.Time {
+	if t := s.requestAuthTime(r); !t.IsZero() && time.Since(t) < sessionMaxAge {
+		return t
+	}
+	return time.Now()
+}
+
+func (s *Server) issueSessionSince(w http.ResponseWriter, r *http.Request, u *User, start time.Time) bool {
 	rt := randHex(32)
-	exp := time.Now().Add(30 * 24 * time.Hour)
-	res, err := s.St.DB.Exec(`INSERT INTO refresh_tokens(hash,user_id,expires_at,issued_at) SELECT ?,id,?,? FROM users WHERE id=? AND password_hash=? AND email=? AND must_change_password=?`, hashToken(rt), exp, time.Now(), u.ID, u.passwordHash, u.Email, u.MustChangePassword)
+	now := time.Now()
+	exp := start.Add(sessionMaxAge)
+	res, err := s.St.DB.Exec(`INSERT INTO refresh_tokens(hash,user_id,expires_at,issued_at,session_started) SELECT ?,id,?,?,? FROM users WHERE id=? AND password_hash=? AND email=? AND must_change_password=?`, hashToken(rt), exp, now, start, u.ID, u.passwordHash, u.Email, u.MustChangePassword)
 	if err != nil {
 		return false
 	}
@@ -188,6 +227,7 @@ type credentials struct {
 	Email      string `json:"email"`
 	Language   string `json:"language"`
 	UILanguage string `json:"ui_language"`
+	SetupCode  string `json:"setup_code"`
 }
 
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
@@ -200,6 +240,15 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	var c credentials
 	if decode(r, &c) != nil || c.Username == "" {
 		jerr(w, 400, "username and password required")
+		return
+	}
+	if !validUsername(c.Username) {
+		jerr(w, 400, msgInvalidUsername)
+		return
+	}
+	given := strings.ToUpper(strings.TrimSpace(c.SetupCode))
+	if s.setupCode == "" || subtle.ConstantTimeCompare([]byte(given), []byte(s.setupCode)) != 1 {
+		jerr(w, 403, "invalid setup code: use the code printed in the server log")
 		return
 	}
 	if !s.requireAccountPassword(w, c.Password) {
@@ -262,6 +311,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil || u.passwordHash == "" {
+		bcrypt.CompareHashAndPassword(dummyHash, []byte(c.Password)) // equal timing
 		// Never record the typed username: it may be a mistyped password.
 		if err == nil {
 			s.logEvent(u.ID, u.Username, "login_failed", "", "")
@@ -271,14 +321,16 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		rejectLogin(w)
 		return
 	}
-	unlock := lockStripe(&s.loginLocks, strconv.FormatInt(u.ID, 10))
+	unlock := onceUnlock(lockStripe(&s.loginLocks, strconv.FormatInt(u.ID, 10)))
 	defer unlock()
 	// Reload after acquiring the account lock; aliases and peers share one counter.
 	u, err = s.userByID(u.ID)
 	if err != nil || u.IsGuest || u.passwordHash == "" || u.loginLockedUntil > time.Now().Unix() {
+		bcrypt.CompareHashAndPassword(dummyHash, []byte(c.Password)) // equal timing
 		if err == nil && !u.IsGuest {
 			s.logEvent(u.ID, u.Username, "login_failed", "", "account locked")
 		}
+		unlock()
 		rejectLogin(w)
 		return
 	}
@@ -307,6 +359,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	// A concurrent identity/credential mutation must not inherit an old attempt.
 	res, err := s.St.DB.Exec(`UPDATE users SET login_failures=?,login_locked_until=? WHERE id=? AND password_hash=? AND email=? AND must_change_password=? AND is_guest=0`, failures, lockedUntil, u.ID, u.passwordHash, u.Email, u.MustChangePassword)
 	if err != nil {
+		unlock()
 		rejectLogin(w)
 		return
 	}
@@ -317,6 +370,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 				s.logEvent(u.ID, u.Username, "login_lockout", "", "locked after repeated failures")
 			}
 		}
+		unlock()
 		rejectLogin(w)
 		return
 	}
@@ -332,6 +386,15 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	s.sessionResponse(w, r, u)
 }
 
+// refreshReuseGrace: a rotated refresh token presented again within this time is
+// treated as a race (two tabs refreshing at once, a response lost on the way)
+// and only refused; later reuse means the token was copied.
+const refreshReuseGrace = 60 * time.Second
+
+func (s *Server) clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: "refresh", Value: "", Path: "/api/auth", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secureCookies(r)})
+}
+
 func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie("refresh")
 	if err != nil {
@@ -345,34 +408,83 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	var uid int64
-	var issued sql.NullTime
-	if err := tx.QueryRow(`DELETE FROM refresh_tokens WHERE hash=? AND expires_at>? RETURNING user_id,issued_at`, hashToken(c.Value), time.Now()).Scan(&uid, &issued); err != nil {
+	// end refuses the refresh, keeping the token deleted, and clears the cookie.
+	end := func() {
+		tx.Commit()
+		s.clearRefreshCookie(w, r)
 		jerr(w, 401, "session expired")
+	}
+	var uid int64
+	var issued, started sql.NullTime
+	if err := tx.QueryRow(`DELETE FROM refresh_tokens WHERE hash=? AND expires_at>? RETURNING user_id,issued_at,session_started`, hashToken(c.Value), time.Now()).Scan(&uid, &issued, &started); err != nil {
+		var victim int64
+		var spentAt time.Time
+		if tx.QueryRow(`SELECT user_id,spent_at FROM refresh_spent WHERE hash=? AND expires_at>?`, hashToken(c.Value), time.Now()).Scan(&victim, &spentAt) == nil {
+			if time.Since(spentAt) < refreshReuseGrace {
+				// Probably a parallel refresh from another tab: refuse without
+				// touching the cookie, which may already hold the new token.
+				jerr(w, 401, "session expired")
+				return
+			}
+			// A rotated token presented again later means it was copied: revoke
+			// the whole session family so the copy stops working too.
+			tx.Exec(`DELETE FROM refresh_tokens WHERE user_id=?`, victim)
+			tx.Exec(`DELETE FROM refresh_spent WHERE user_id=?`, victim)
+			if tx.Commit() == nil {
+				s.logEvent(victim, s.usernameOf(victim), "session_reuse_detected", "", "all sessions signed out")
+			}
+		}
+		// Release the only connection before clearRefreshCookie reads settings.
+		tx.Rollback()
+		s.clearRefreshCookie(w, r)
+		jerr(w, 401, "session expired")
+		return
+	}
+	now := time.Now()
+	start, authTime := now, time.Time{}
+	if started.Valid {
+		start, authTime = started.Time, started.Time
+	} else if issued.Valid {
+		start = issued.Time // older token: cap the session, but no recent sign-in
+	}
+	if now.Sub(start) >= sessionMaxAge {
+		end()
 		return
 	}
 	u, err := scanUser(tx.QueryRow(`SELECT `+userCols+` FROM users WHERE id=?`, uid))
 	if err != nil {
-		jerr(w, 401, "no user")
+		end()
 		return
 	}
 	if u.IsGuest {
 		var valid int
 		if tx.QueryRow(`SELECT COUNT(*) FROM reverse_invites WHERE guest_user_id=? AND completed_at IS NULL AND expires_at>?`, uid, time.Now()).Scan(&valid) != nil || valid != 1 {
-			jerr(w, 401, "invite expired")
+			end()
 			return
 		}
-	} else if issued.Valid && idleExpired(idleMinutes, issued.Time, time.Now()) {
-		// Abandoned session: keep the token deleted (commit) and refuse to continue.
-		if err := tx.Commit(); err != nil {
-			jerr(w, 500, "session failed")
+	} else {
+		if u.passwordHash == "" {
+			// An account without a local password exists only through its sign-in
+			// provider: when the link is removed or the provider is disabled, the
+			// session ends at the next refresh.
+			var links int
+			if tx.QueryRow(`SELECT COUNT(*) FROM user_auth_providers upa JOIN auth_providers ap ON ap.id=upa.provider_id WHERE upa.user_id=? AND ap.enabled=1`, uid).Scan(&links) != nil || links == 0 {
+				end()
+				return
+			}
+		}
+		if issued.Valid && idleExpired(idleMinutes, issued.Time, time.Now()) {
+			end() // abandoned session
 			return
 		}
-		jerr(w, 401, "session expired")
+	}
+	// Only a successful rotation records the old token as spent.
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO refresh_spent(hash,user_id,spent_at,expires_at) VALUES(?,?,?,?)`, hashToken(c.Value), uid, now, start.Add(sessionMaxAge)); err != nil {
+		jerr(w, 500, "session failed")
 		return
 	}
-	rt, exp := randHex(32), time.Now().Add(30*24*time.Hour)
-	if _, err := tx.Exec(`INSERT INTO refresh_tokens(hash,user_id,expires_at,issued_at) VALUES(?,?,?,?)`, hashToken(rt), uid, exp, time.Now()); err != nil {
+	rt, exp := randHex(32), start.Add(sessionMaxAge)
+	if _, err := tx.Exec(`INSERT INTO refresh_tokens(hash,user_id,expires_at,issued_at,session_started) VALUES(?,?,?,?,?)`, hashToken(rt), uid, exp, now, start); err != nil {
 		jerr(w, 500, "session failed")
 		return
 	}
@@ -382,7 +494,7 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: "refresh", Value: rt, Path: "/api/auth", Expires: exp, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secureCookies(r)})
 	s.fillMFA(u) // the transaction above has committed and released the connection
-	jout(w, 200, map[string]any{"access_token": s.accessToken(u), "user": u})
+	jout(w, 200, map[string]any{"access_token": s.accessTokenAt(u, authTime), "user": u})
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -427,7 +539,7 @@ func (s *Server) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	tok := randHex(24)
 	res, err := s.St.DB.Exec(`INSERT INTO password_resets(hash,user_id,expires_at)
-		SELECT ?,id,? FROM users WHERE id=? AND email=? AND password_hash=? AND email_verified=1
+		SELECT ?,id,? FROM users WHERE id=? AND email=? AND password_hash=? AND password_hash<>'' AND email_verified=1
 		`, hashToken(tok), time.Now().Add(time.Hour), u.ID, u.Email, u.passwordHash)
 	if err != nil {
 		return
@@ -493,7 +605,7 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if kind == "welcome" {
 		// The link only reached the mailbox owner, which proves the address.
-		if _, err := tx.Exec(`UPDATE users SET email_verified=1 WHERE id=? AND is_guest=0 AND email<>''`, uid); err != nil {
+		if _, err := tx.Exec(`UPDATE users SET email_verified=1,pending_registration=0 WHERE id=? AND is_guest=0 AND email<>''`, uid); err != nil {
 			jerr(w, 500, "password reset failed")
 			return
 		}
@@ -518,6 +630,10 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	var c credentials
 	if decode(r, &c) != nil || c.Username == "" {
 		jerr(w, 400, "username, email and password required")
+		return
+	}
+	if !validUsername(c.Username) {
+		jerr(w, 400, msgInvalidUsername)
 		return
 	}
 	if !s.requireAccountPassword(w, c.Password) {
@@ -561,12 +677,23 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte(c.Password), bcrypt.DefaultCost)
-	res, err := s.St.DB.Exec(`INSERT INTO users(username,name,email,password_hash,email_verified,language,ui_language) VALUES(?,?,?,?,?,?,?)`,
-		c.Username, c.Name, c.Email, string(hash), !verify, c.Language, c.UILanguage)
+	res, err := s.St.DB.Exec(`INSERT INTO users(username,name,email,password_hash,email_verified,language,ui_language,pending_registration) VALUES(?,?,?,?,?,?,?,?)`,
+		c.Username, c.Name, c.Email, string(hash), !verify, c.Language, c.UILanguage, verify)
 	if err != nil {
-		// Deliberately the same answer for a taken username and a taken email, so
-		// registration cannot be used to find out who has an account.
-		jerr(w, 400, "username or email already in use")
+		// Usernames are visible to share recipients anyway, so a taken username is
+		// reported. A taken email address gets the same answer as a successful
+		// registration, so registration cannot reveal who has an account.
+		var taken int
+		s.St.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE username=? COLLATE NOCASE`, c.Username).Scan(&taken)
+		if taken > 0 {
+			jerr(w, 400, "username already in use")
+			return
+		}
+		if email, _ := canonicalEmail(c.Email); email != "" && !s.emailAvailable(email, 0) {
+			jout(w, 201, map[string]any{"needs_verification": true})
+			return
+		}
+		jerr(w, 500, "registration failed")
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -642,7 +769,7 @@ func (s *Server) verifyEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE users SET email_verified=1 WHERE id=? AND lower(trim(email))=? AND email_verified=0 AND EXISTS(SELECT 1 FROM email_verifications WHERE user_id=? AND code=? AND expires_at>?)`, uid, b.Email, uid, b.Code, time.Now())
+	res, err := tx.Exec(`UPDATE users SET email_verified=1,pending_registration=0 WHERE id=? AND lower(trim(email))=? AND email_verified=0 AND EXISTS(SELECT 1 FROM email_verifications WHERE user_id=? AND code=? AND expires_at>?)`, uid, b.Email, uid, b.Code, time.Now())
 	if err != nil {
 		jerr(w, 500, "verification failed")
 		return
@@ -774,6 +901,13 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "current password incorrect")
 		return
 	}
+	// Accounts without a local password cannot confirm with one: require a recent
+	// sign-in through their provider instead, so a stolen access token cannot add
+	// a permanent local password or redirect the email.
+	if (b.Password != "" || emailChanged) && u.passwordHash == "" && time.Since(s.requestAuthTime(r)) > recentSignIn {
+		jerr(w, 403, msgRecentSignIn)
+		return
+	}
 	passwordHash := u.passwordHash
 	mustChange := u.MustChangePassword
 	if b.Password != "" {
@@ -827,10 +961,10 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 		s.sendVerification(nu)
 	}
 	if emailChanged || b.Password != "" {
-		s.issueSession(w, r, nu)
+		s.issueSessionSince(w, r, nu, s.sessionStartOf(r))
 	}
 	s.fillMFA(nu)
-	jout(w, 200, map[string]any{"user": nu, "access_token": s.accessToken(nu)})
+	jout(w, 200, map[string]any{"user": nu, "access_token": s.accessTokenAt(nu, s.requestAuthTime(r))})
 }
 
 func (s *Server) unlinkProvider(w http.ResponseWriter, r *http.Request) {
@@ -882,8 +1016,23 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 500, "user list unavailable")
 		return
 	}
+	// Where each account comes from: a local password and/or linked providers.
+	sources := map[int64][]string{}
+	if lr, lerr := s.St.DB.Query(`SELECT upa.user_id, ap.type FROM user_auth_providers upa JOIN auth_providers ap ON ap.id=upa.provider_id ORDER BY ap.type`); lerr == nil {
+		for lr.Next() {
+			var uid int64
+			var typ string
+			if lr.Scan(&uid, &typ) == nil {
+				if l := sources[uid]; len(l) == 0 || l[len(l)-1] != typ {
+					sources[uid] = append(l, typ)
+				}
+			}
+		}
+		lr.Close()
+	}
 	type adminUser struct {
 		*User
+		Sources []string `json:"sources"`
 		*store.StorageUsage
 		QuotaBytes           int64 `json:"quota_bytes"`
 		QuotaInheritsDefault bool  `json:"quota_inherits_default"`
@@ -897,7 +1046,12 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.fillMFA(u)
-		out = append(out, adminUser{User: u, StorageUsage: usage, QuotaBytes: usage.QuotaBytes, QuotaInheritsDefault: usage.QuotaInheritsDefault, LoginLockedUntil: u.loginLockedUntil})
+		src := []string{}
+		if u.passwordHash != "" {
+			src = append(src, "local")
+		}
+		src = append(src, sources[u.ID]...)
+		out = append(out, adminUser{User: u, Sources: src, StorageUsage: usage, QuotaBytes: usage.QuotaBytes, QuotaInheritsDefault: usage.QuotaInheritsDefault, LoginLockedUntil: u.loginLockedUntil})
 	}
 	jout(w, 200, out)
 }
@@ -913,6 +1067,10 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if decode(r, &b) != nil || b.Username == "" {
 		jerr(w, 400, "username and password required")
+		return
+	}
+	if !validUsername(b.Username) {
+		jerr(w, 400, msgInvalidUsername)
 		return
 	}
 	if !s.requireAccountPassword(w, b.Password) {

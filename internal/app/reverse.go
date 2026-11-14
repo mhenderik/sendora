@@ -168,6 +168,8 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 // acceptInvite turns an invite token into a guest session limited to one upload.
+const msgReverseOff = "uploads by invitation are turned off"
+
 func (s *Server) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 		jerr(w, 403, "cross-origin request refused")
@@ -178,6 +180,10 @@ func (s *Server) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	if decode(r, &in) != nil || in.Token == "" || len(in.Token) > 256 {
 		jerr(w, 404, "invite not found")
+		return
+	}
+	if !s.St.SettingBool("allow_reverse_shares") {
+		jerr(w, 403, msgReverseOff)
 		return
 	}
 	tok := in.Token
@@ -215,8 +221,13 @@ func (s *Server) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	if reusable && parent == nil {
 		// Open link: the link itself never uploads. Each accept mints a fresh
 		// guest plus a single-use child invite with its own unreturned token.
+		// A slot is taken by a finished upload, an upload in progress, or an
+		// accept from the last hour. Accepts that never start uploading release
+		// their slot after an hour, so the link cannot be exhausted by clicking.
 		var taken int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM reverse_invites WHERE parent_id=? AND (completed_at IS NOT NULL OR expires_at>?)`, id, now).Scan(&taken); err != nil {
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM reverse_invites c WHERE c.parent_id=? AND (c.completed_at IS NOT NULL
+			OR (c.expires_at>? AND (c.created_at>? OR EXISTS(SELECT 1 FROM upload_sessions us WHERE us.invite_id=c.id))))`,
+			id, now, now.Add(-time.Hour).UTC().Format("2006-01-02 15:04:05")).Scan(&taken); err != nil {
 			jerr(w, 500, "invite unavailable")
 			return
 		}

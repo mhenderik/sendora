@@ -50,6 +50,8 @@ th{font-size:12px;text-transform:uppercase;color:var(--muted)}
 .chart{display:flex;align-items:flex-end;gap:4px;height:100px}
 .chart i{flex:1;background:var(--primary);border-radius:3px 3px 0 0;min-height:2px}
 .sso{display:flex;flex-direction:column;gap:8px;margin-top:16px}
+.sso a.ms{display:flex;align-items:center;justify-content:center;gap:12px;height:41px;padding:0 12px;background:#fff;color:#5e5e5e;border:1px solid #8c8c8c;font-family:"Segoe UI",system-ui,-apple-system,sans-serif;font-size:15px;font-weight:600}
+.sso a.ms:hover{background:#f3f3f3}
 .sso a{display:block;text-align:center;padding:9px;border:1px solid var(--border);border-radius:8px;color:var(--text);background:var(--surface)}
 pre{white-space:pre-wrap;word-break:break-all}
 @media(max-width:600px){main{padding:16px 12px}.nav{padding:8px 12px}}

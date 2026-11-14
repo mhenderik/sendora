@@ -119,6 +119,11 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 404, "share not found")
 		return
 	}
+	// Switching uploads by invitation off also stops invitations already sent.
+	if u.IsGuest && !s.St.SettingBool("allow_reverse_shares") {
+		jerr(w, 403, msgReverseOff)
+		return
+	}
 	var total int64
 	for _, f := range b.Files {
 		if f.SHA256 != "" && !validSHA256(f.SHA256) {
@@ -179,6 +184,25 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		inviteID = iid
+		// For an open link, the upload limit is checked again when uploading
+		// starts: an accept may have released its slot after an hour.
+		var parentID sql.NullInt64
+		var maxUploads int
+		if err := tx.QueryRow(`SELECT c.parent_id,COALESCE(p.max_uploads,1) FROM reverse_invites c LEFT JOIN reverse_invites p ON p.id=c.parent_id WHERE c.id=?`, iid).Scan(&parentID, &maxUploads); err != nil {
+			jerr(w, 403, "invite no longer valid")
+			return
+		}
+		if parentID.Valid {
+			var used int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM reverse_invites c WHERE c.parent_id=? AND c.id<>? AND (c.completed_at IS NOT NULL OR EXISTS(SELECT 1 FROM upload_sessions us WHERE us.invite_id=c.id))`, parentID.Int64, iid).Scan(&used); err != nil {
+				jerr(w, 500, "database error")
+				return
+			}
+			if used >= maxUploads {
+				jerr(w, 410, "invite upload limit reached")
+				return
+			}
+		}
 	}
 	var shareID any
 	if b.ShareID != nil {
@@ -218,6 +242,11 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 500, "upload metadata write failed")
 		return
 	}
+	// Within one new share every path must be unique (case-insensitively), or
+	// the ZIP and single-file downloads would be ambiguous: repeated names get a
+	// " (2)" suffix, as when appending to a share, and a file that is also used
+	// as a folder is refused. Append sessions are renamed on completion instead.
+	seenFiles, seenDirs := map[string]bool{}, map[string]bool{}
 	for i, f := range b.Files {
 		if validateUploadPath(f.FullPath) != nil {
 			jerr(w, 400, "unsafe file path")
@@ -248,6 +277,29 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 			tx.Rollback()
 			jerr(w, 400, "invalid file name")
 			return
+		}
+		if shareID == nil {
+			if seenFiles[strings.ToLower(fp)] {
+				renamed, err := uniqueSharePath(seenFiles, fp)
+				if err != nil {
+					jerr(w, 400, "duplicate file path in upload")
+					return
+				}
+				fp, name = renamed, safeName(path.Base(renamed))
+			}
+			key := strings.ToLower(fp)
+			if seenDirs[key] {
+				jerr(w, 400, "duplicate file path in upload")
+				return
+			}
+			for dir := path.Dir(key); dir != "." && dir != "/"; dir = path.Dir(dir) {
+				if seenFiles[dir] {
+					jerr(w, 400, "duplicate file path in upload")
+					return
+				}
+				seenDirs[dir] = true
+			}
+			seenFiles[key] = true
 		}
 		typ := f.Type
 		if typ == "" {
@@ -376,6 +428,10 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	u := s.ctxUser(r)
+	if u.IsGuest && !s.St.SettingBool("allow_reverse_shares") {
+		jerr(w, 403, msgReverseOff)
+		return
+	}
 	var appendTo sql.NullInt64
 	if err := s.St.DB.QueryRow(`SELECT share_id FROM upload_sessions WHERE id=?`, id).Scan(&appendTo); err != nil {
 		jerr(w, 409, "upload no longer exists")
@@ -614,6 +670,12 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 	}
 	if inviteID != nil && emailOK {
 		go s.notifyInviteCompleted(inviteOwner, u, emailURL, name)
+	}
+	if u.IsGuest {
+		// The share belongs to the inviter. The guest never gets its link, so an
+		// invitation cannot be used to publish files on this domain.
+		jout(w, 201, map[string]any{"ok": true})
+		return
 	}
 	jout(w, 201, map[string]any{"id": sid, "long_id": longID, "url": url})
 }

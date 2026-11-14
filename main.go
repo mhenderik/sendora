@@ -29,6 +29,10 @@ func env(k, def string) string {
 }
 
 func main() {
+	// A short signing secret could be guessed offline from any captured token.
+	if sec := os.Getenv("JWT_SECRET"); sec != "" && len(sec) < 32 {
+		log.Fatal("JWT_SECRET must be at least 32 characters (leave it unset to use a generated secret)")
+	}
 	key, err := store.ReadDatabaseKey(os.Getenv("SENDORA_DB_KEY_FILE"))
 	if err != nil {
 		log.Fatal(err)

@@ -24,15 +24,38 @@ First public release.
 - Interface and mail translations through JSON files (Dutch complete; German,
   French and Spanish partial; add any language under Admin → Languages). Examples
   in `custom-translations/`.
+- Microsoft Entra sign-in button with the Microsoft logo; the Entra user name is stored as an unverified email address on new accounts.
+- Every admin setting and the login providers can be set from environment variables /
+  a Kubernetes ConfigMap (secrets from files); configured values are read-only in the UI.
 - Branding: logo, favicon, backgrounds, themes. Built-in Sendora logo.
 - Activity log (at most 24 hours) with CSV export.
 
+### Security
+- Pentest fixes: absolute 30-day session lifetime, refresh-token reuse detection,
+  provider-only sessions end with the provider, no password reset by mail for SSO-only
+  accounts, recent sign-in required for their password/email changes, username rules,
+  equal login timing, taken emails hidden at registration, SMTP password and client
+  secret bound to their server, generic SMTP test errors, instance-wide mail cap,
+  minimum transfer speed and one download slot per client, duplicate upload paths
+  refused, share folders deleted outside the database transaction, hardened database
+  import, settings validation, stricter CSV export, one-time first-run setup code,
+  version hidden from public endpoints, `JWT_SECRET` minimum length.
+- Fixed: the 48-hour cleanup of unconfirmed registrations also deleted Entra accounts
+  and existing accounts that had changed their email address.
+- Second review: guests no longer receive the share link, the reverse-share switch also
+  stops existing invitations, open-link slots are released and guest accounts cleaned
+  up, rate limits group IPv6 by /64, refresh-token reuse has a 60-second grace period.
+
 ### Known limitations
+- **Vibe coded, not independently reviewed.** The project was written with an AI coding
+  assistant by a maintainer who is not a developer; there has been no external code
+  review or penetration test. See the README.
 - **Passkeys and security keys are not verified against real hardware** in this
   project (only a software authenticator and test vectors). Test yours, and keep a
   recovery code, before you make MFA mandatory.
 - Requires official SQLCipher 4.20.0 and CGO; the Docker image builds it.
-- Usernames are case-insensitive for ASCII letters only.
+- Usernames are case-insensitive and limited to ASCII letters, digits, dot, underscore
+  and hyphen.
 - Gmail replaces a From address that is not a verified *Send mail as* alias.
 - The database file is still named `fileshare.db` for compatibility with existing
   installations.

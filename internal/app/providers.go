@@ -35,13 +35,14 @@ type Provider struct {
 	TrustEmail        bool   `json:"trust_email"`
 	AllowRegistration bool   `json:"allow_registration"`
 	CallbackURL       string `json:"callback_url,omitempty"`
+	Managed           bool   `json:"managed"` // set by the server configuration; read-only here
 }
 
-const provCols = `id,uuid,name,type,enabled,client_id,client_secret,issuer_url,icon,trust_email,allow_registration`
+const provCols = `id,uuid,name,type,enabled,client_id,client_secret,issuer_url,icon,trust_email,allow_registration,managed`
 
 func scanProvider(row interface{ Scan(...any) error }) (*Provider, error) {
 	p := &Provider{}
-	err := row.Scan(&p.ID, &p.UUID, &p.Name, &p.Type, &p.Enabled, &p.ClientID, &p.ClientSecret, &p.IssuerURL, &p.Icon, &p.TrustEmail, &p.AllowRegistration)
+	err := row.Scan(&p.ID, &p.UUID, &p.Name, &p.Type, &p.Enabled, &p.ClientID, &p.ClientSecret, &p.IssuerURL, &p.Icon, &p.TrustEmail, &p.AllowRegistration, &p.Managed)
 	p.SecretSet = p.ClientSecret != ""
 	if p.Type == "entra" {
 		p.TenantID, _ = entraTenant(p.IssuerURL)
@@ -125,8 +126,21 @@ func (s *Server) createProvider(w http.ResponseWriter, r *http.Request) {
 	jout(w, 201, map[string]any{"id": id, "uuid": p.UUID, "callback_url": s.baseURL(r) + "/api/auth/oidc/" + p.UUID + "/callback"})
 }
 
+// providerManaged reports whether a provider comes from the server configuration.
+func (s *Server) providerManaged(id int64) bool {
+	var m bool
+	s.St.DB.QueryRow(`SELECT managed FROM auth_providers WHERE id=?`, id).Scan(&m)
+	return m
+}
+
+const msgProviderManaged = "this login provider is managed by the server configuration and cannot be changed here"
+
 func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if s.providerManaged(id) {
+		jerr(w, 409, msgProviderManaged)
+		return
+	}
 	var p Provider
 	if decode(r, &p) != nil {
 		jerr(w, 400, "bad request")
@@ -159,6 +173,11 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 409, "linked provider identity cannot change; create a new provider")
 		return
 	}
+	// The stored client secret is only sent to the issuer it was entered for.
+	if p.ClientSecret == "" && (oldType != p.Type || oldClient != p.ClientID || oldIssuer != p.IssuerURL) {
+		jerr(w, 400, "enter the client secret again when changing the provider type, client ID or issuer")
+		return
+	}
 	_, err = tx.Exec(`UPDATE auth_providers SET name=?,type=?,enabled=?,client_id=?,issuer_url=?,icon=?,trust_email=?,allow_registration=? WHERE id=?`,
 		p.Name, p.Type, p.Enabled, p.ClientID, p.IssuerURL, p.Icon, p.TrustEmail, p.AllowRegistration, id)
 	if err == nil && p.ClientSecret != "" {
@@ -177,6 +196,10 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteProvider(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if s.providerManaged(id) {
+		jerr(w, 409, msgProviderManaged)
+		return
+	}
 	if s.refuseLastExternalAdmin(w, 0, id) {
 		return
 	}
@@ -361,6 +384,16 @@ func (s *Server) resolveExternalUser(p *Provider, id extIdentity) (*User, string
 		if err != nil || u.IsGuest {
 			return nil, "account unavailable"
 		}
+		// Fill an empty email from the Entra user name once; never overwrite.
+		if u.Email == "" {
+			if upn := s.entraUPNEmail(p, id, u.ID); upn != "" {
+				if res, e := s.St.DB.Exec(`UPDATE users SET email=?,email_verified=0 WHERE id=? AND email=''`, upn, u.ID); e == nil {
+					if n, _ := res.RowsAffected(); n == 1 {
+						u.Email = upn
+					}
+				}
+			}
+		}
 		return u, ""
 	}
 	if err != sql.ErrNoRows {
@@ -378,6 +411,12 @@ func (s *Server) resolveExternalUser(p *Provider, id extIdentity) (*User, string
 	}
 	if email != "" && !s.emailAvailable(email, 0) {
 		return nil, "email already has an account; use its existing login"
+	}
+	verified := 1
+	if email == "" {
+		if email = s.entraUPNEmail(p, id, 0); email != "" {
+			verified = 0 // the user name is not proof of a mailbox
+		}
 	}
 	if !p.AllowRegistration {
 		return nil, "no account linked to this login"
@@ -400,7 +439,7 @@ func (s *Server) resolveExternalUser(p *Provider, id extIdentity) (*User, string
 		return nil, "could not create account"
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`INSERT INTO users(username,name,email,password_hash) VALUES(?,?,?, '')`, uname, id.Name, email)
+	res, err := tx.Exec(`INSERT INTO users(username,name,email,email_verified,password_hash) VALUES(?,?,?,?, '')`, uname, id.Name, email, verified)
 	if err != nil {
 		return nil, "could not create account"
 	}
@@ -416,6 +455,27 @@ func (s *Server) resolveExternalUser(p *Provider, id extIdentity) (*User, string
 		return nil, "could not create account"
 	}
 	return u, ""
+}
+
+// entraUPNEmail returns the Entra user name (preferred_username, normally the
+// user principal name) when it is an email address nobody else uses. It is stored
+// on the account as an unverified address for display and notifications only: it
+// is never used to link accounts, and unverified addresses cannot reset passwords.
+// The email claim of the token is deliberately still ignored.
+func (s *Server) entraUPNEmail(p *Provider, id extIdentity, except int64) string {
+	if p.Type != "entra" || !strings.Contains(id.Username, "@") {
+		return ""
+	}
+	// Guest (B2B) accounts have a user principal name such as
+	// name_example.com#EXT#@tenant.onmicrosoft.com, which is not a mailbox.
+	if strings.Contains(strings.ToLower(id.Username), "#ext#") {
+		return ""
+	}
+	email, err := canonicalEmail(id.Username)
+	if err != nil || email == "" || !s.emailAvailable(email, except) {
+		return ""
+	}
+	return email
 }
 
 func firstNonEmpty(v ...string) string {

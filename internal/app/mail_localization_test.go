@@ -176,7 +176,7 @@ func TestMailBackpressureAndRecovery(t *testing.T) {
 
 func TestSetupAndAdminLanguage(t *testing.T) {
 	e := newEnv(t)
-	setup := e.do("POST", "/api/setup", "", map[string]any{"username": "admin", "email": "admin@example.com", "password": "password123", "language": "fr"})
+	setup := e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "admin", "email": "admin@example.com", "password": "password123", "language": "fr"})
 	e.want(setup, 200, "setup language")
 	if setup.J()["user"].(map[string]any)["language"] != "fr" {
 		t.Fatal("setup preference ignored")
@@ -190,7 +190,7 @@ func TestSetupAndAdminLanguage(t *testing.T) {
 
 func TestUILanguageIndependentPersistence(t *testing.T) {
 	e := newEnv(t)
-	setup := e.do("POST", "/api/setup", "", map[string]any{"username": "admin", "password": "password123", "email": "admin@x.io", "language": "fr", "ui_language": "nl"})
+	setup := e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "admin", "password": "password123", "email": "admin@x.io", "language": "fr", "ui_language": "nl"})
 	e.want(setup, 200, "independent setup preferences")
 	admin := setup.S("access_token")
 	check := func(r resp, ui, email string) {

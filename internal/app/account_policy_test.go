@@ -113,20 +113,20 @@ func TestAccountPolicyDefaultsAndBootstrap(t *testing.T) {
 func TestAccountPolicySetup(t *testing.T) {
 	e := newEnv(t)
 	e.s.St.SetSetting("account_password_require_upper", "true")
-	r := e.do("POST", "/api/setup", "", map[string]any{"username": "a", "password": "password123", "email": "a@x.io"})
+	r := e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "a", "password": "password123", "email": "a@x.io"})
 	e.want(r, 400, "weak")
 	if e.errMsg(r) != "password must contain an uppercase letter" {
 		t.Fatal(e.errMsg(r))
 	}
-	e.want(e.do("POST", "/api/setup", "", map[string]any{"username": "a", "password": strings.Repeat("A", 73)}), 400, "73")
+	e.want(e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "a", "password": strings.Repeat("A", 73)}), 400, "73")
 	e.s.St.DB.Exec(`UPDATE settings SET value='bogus' WHERE key='account_password_min_length'`)
-	r = e.do("POST", "/api/setup", "", map[string]any{"username": "a", "password": "Password123", "email": "a@x.io"})
+	r = e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "a", "password": "Password123", "email": "a@x.io"})
 	e.want(r, 500, "corrupt")
 	if e.errMsg(r) != "password policy unavailable" || e.userCount() != 0 {
 		t.Fatal("corrupt must create nothing", e.errMsg(r))
 	}
 	e.s.St.SetSetting("account_password_min_length", "8")
-	e.want(e.do("POST", "/api/setup", "", map[string]any{"username": "a", "password": "Password123", "email": "a@x.io"}), 200, "strong")
+	e.want(e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "a", "password": "Password123", "email": "a@x.io"}), 200, "strong")
 }
 
 func TestAccountPolicyAdminPaths(t *testing.T) {

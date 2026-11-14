@@ -101,7 +101,7 @@ func (e *env) want(r resp, code int, what string) {
 }
 
 func (e *env) setup() string {
-	r := e.do("POST", "/api/setup", "", map[string]any{"username": "admin", "password": "password123", "email": "admin@x.io"})
+	r := e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "admin", "password": "password123", "email": "admin@x.io"})
 	e.want(r, 200, "setup")
 	return r.S("access_token")
 }
@@ -260,9 +260,9 @@ func TestSetupAndAuth(t *testing.T) {
 	if !e.do("GET", "/api/bootstrap", "", nil).J()["setup_needed"].(bool) {
 		t.Fatal("setup_needed expected")
 	}
-	e.want(e.do("POST", "/api/setup", "", map[string]any{"username": "a", "password": "short"}), 400, "short pw")
+	e.want(e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "a", "password": "short"}), 400, "short pw")
 	tok := e.setup()
-	e.want(e.do("POST", "/api/setup", "", map[string]any{"username": "b", "password": "password123"}), 403, "second setup")
+	e.want(e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "b", "password": "password123"}), 403, "second setup")
 	if e.do("GET", "/api/bootstrap", "", nil).J()["setup_needed"].(bool) {
 		t.Fatal("setup_needed should be false")
 	}
@@ -941,6 +941,7 @@ func TestJobsAndStats(t *testing.T) {
 	e.useSMTP(sink)
 	r := e.share(tok, map[string]string{"a": "1"}, map[string]any{"expires_in_days": 1, "name": "soon"})
 	e.want(r, 201, "share")
+	e.s.BaseURL = "https://files.example.test" // expiry links need a public URL
 	e.s.maintain()
 	sink.wait(t, "expires on")
 	// expired share files deleted after retention
@@ -975,7 +976,7 @@ func TestSecurityRegressions(t *testing.T) {
 	t.Run("bcrypt byte limit", func(t *testing.T) {
 		e := newEnv(t)
 		long := strings.Repeat("a", 73)
-		e.want(e.do("POST", "/api/setup", "", map[string]any{"username": "admin", "password": long}), 400, "long setup password")
+		e.want(e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "admin", "password": long}), 400, "long setup password")
 		tok := e.setup()
 		e.want(e.do("POST", "/api/users", tok, map[string]any{"username": "bad", "password": long}), 400, "long account password")
 		e.want(e.do("PUT", "/api/users/me", tok, map[string]any{"password": long}), 400, "long profile password")
@@ -995,7 +996,7 @@ func TestSecurityRegressions(t *testing.T) {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				codes <- e.do("POST", "/api/setup", "", map[string]any{"username": fmt.Sprintf("admin%d", i), "password": "password123"}).Code
+				codes <- e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": fmt.Sprintf("admin%d", i), "password": "password123"}).Code
 			}(i)
 		}
 		wg.Wait()

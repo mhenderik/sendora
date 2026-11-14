@@ -18,7 +18,15 @@ const next = () => (route.query.next && String(route.query.next).startsWith('/')
 
 onMounted(async () => {
   if (session.user) return router.replace(next())
-  if (route.query.auth_error) err.value = t(String(route.query.auth_error))
+  // Only known messages from the sign-in callback are shown: arbitrary text in a
+  // crafted link must not appear as an official error on this page.
+  if (route.query.auth_error) {
+    const known = [tr('invalid state'), tr('login failed'), tr('provider not found'), tr('provider unreachable'), tr('session changed; log in again'),
+      tr('account unavailable'), tr('could not create account'), tr('could not link account'), tr('email already has an account; use its existing login'),
+      tr('invalid provider email'), tr('no account linked to this login')]
+    const msg = String(route.query.auth_error)
+    err.value = known.includes(msg) ? t(msg) : t('login failed')
+  }
   providers.value = await api('/auth/providers').catch(() => [])
 })
 
@@ -114,7 +122,13 @@ async function doVerify() {
     <p v-if="!local() && !verify && !mfa && providers.length" class="muted">{{ t('Sign in with your organisation account.') }}</p>
     <p v-if="err && !local() && !mfa" class="err">{{ err }}</p>
     <div v-if="providers.length && !verify && !mfa" class="sso">
-      <a v-for="p in providers" :key="p.uuid" :href="`/api/auth/oidc/${p.uuid}/start`">{{ p.name }}</a>
+      <a v-for="p in providers" :key="p.uuid" :href="`/api/auth/oidc/${p.uuid}/start`" :class="{ ms: p.type === 'entra' }">
+        <template v-if="p.type === 'entra'">
+          <svg class="ms-logo" viewBox="0 0 21 21" width="21" height="21" aria-hidden="true"><rect width="10" height="10" fill="#f25022"/><rect x="11" width="10" height="10" fill="#7fba00"/><rect y="11" width="10" height="10" fill="#00a4ef"/><rect x="11" y="11" width="10" height="10" fill="#ffb900"/></svg>
+          <span>{{ t('Sign in with Microsoft') }}</span>
+        </template>
+        <template v-else>{{ p.name }}</template>
+      </a>
     </div>
     <p v-if="app.boot?.registration_available && !verify && !mfa && local()" class="muted"><router-link to="/register">{{ t('Create account') }}</router-link></p>
   </div>

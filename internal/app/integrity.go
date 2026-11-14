@@ -13,13 +13,65 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-// Two preparations bound temporary disk usage to twice the per-response limit.
+// Three preparations bound temporary disk usage to three times the per-response limit.
 // Snapshots are private and removed after serving; no source descriptors are retained.
-var integritySlots = make(chan struct{}, 2)
+var integritySlots = make(chan struct{}, 3)
 var errIntegrity = errors.New("file integrity check failed")
+
+// One client address may hold at most two of the three verified-download slots:
+// a person can download two files at once, while a single slow client can never
+// block every download on the instance.
+const downloadSlotsPerClient = 2
+
+var (
+	downloadClientsMu sync.Mutex
+	downloadClients   = map[string]int{}
+)
+
+func acquireDownloadClient(ctx context.Context, client string) bool {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		downloadClientsMu.Lock()
+		if downloadClients[client] < downloadSlotsPerClient {
+			downloadClients[client]++
+			downloadClientsMu.Unlock()
+			return true
+		}
+		downloadClientsMu.Unlock()
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func releaseDownloadClient(client string) {
+	downloadClientsMu.Lock()
+	if downloadClients[client] <= 1 {
+		delete(downloadClients, client)
+	} else {
+		downloadClients[client]--
+	}
+	downloadClientsMu.Unlock()
+}
+
+// prepareClientDownload is prepareDownload limited to one slot per client.
+// On success the caller releases both: <-integritySlots and releaseDownloadClient.
+func (s *Server) prepareClientDownload(ctx context.Context, client string, files []FileInfo) (*os.File, string, error) {
+	if !acquireDownloadClient(ctx, client) {
+		return nil, "", fmt.Errorf("verified download preparation busy")
+	}
+	f, sum, err := s.prepareDownload(ctx, files)
+	if err != nil {
+		releaseDownloadClient(client)
+	}
+	return f, sum, err
+}
+
 var errSnapshotLimit = errors.New("verified download exceeds preparation limit")
 
 func validSHA256(s string) bool {
@@ -55,8 +107,10 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 
 func snapshotLimit() int64 {
 	// A single ZIP may need slightly more disk than the total source size.
-	if n, err := strconv.ParseInt(os.Getenv("FILESHARE_VERIFIED_DOWNLOAD_MAX_BYTES"), 10, 64); err == nil && n > 0 {
-		return n
+	for _, name := range []string{"SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES", "FILESHARE_VERIFIED_DOWNLOAD_MAX_BYTES"} {
+		if n, err := strconv.ParseInt(os.Getenv(name), 10, 64); err == nil && n > 0 {
+			return n
+		}
 	}
 	return 16 << 30
 }

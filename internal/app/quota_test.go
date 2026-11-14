@@ -190,7 +190,8 @@ func TestQuotaReverseOwnerAndGuestCompetition(t *testing.T) {
 	e.want(complete, 201, "guest completion")
 	quotaUsage(t, e, uid, store.StorageUsage{QuotaBytes: 4, StoredBytes: 4})
 	var storedOwner int64
-	if err := e.s.St.DB.QueryRow(`SELECT user_id FROM shares WHERE id=?`, complete.J()["id"]).Scan(&storedOwner); err != nil || storedOwner != uid {
+	// Guests do not receive the share id; find the share through its invitation.
+	if err := e.s.St.DB.QueryRow(`SELECT user_id FROM shares WHERE invite_id IS NOT NULL ORDER BY id DESC LIMIT 1`).Scan(&storedOwner); err != nil || storedOwner != uid {
 		t.Fatalf("share owner %d err=%v", storedOwner, err)
 	}
 }
@@ -437,7 +438,7 @@ func TestQuotaDefaultsAllCreationPathsAndRestart(t *testing.T) {
 	if err := e.s.St.SetSetting(store.DefaultStorageQuotaKey, "37"); err != nil {
 		t.Fatal(err)
 	}
-	setup := e.do("POST", "/api/setup", "", map[string]any{"username": "admin", "password": "password123", "email": "admin@x.io"})
+	setup := e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "admin", "password": "password123", "email": "admin@x.io"})
 	e.want(setup, 200, "setup follows configured default")
 	admin := setup.S("access_token")
 	if setup.J()["user"].(map[string]any)["quota_bytes"] != float64(37) {

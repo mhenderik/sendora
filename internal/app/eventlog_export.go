@@ -6,11 +6,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
-// csvSafe neutralises spreadsheet formula injection in exported cells.
+// csvSafe neutralises spreadsheet formula injection in exported cells. Some
+// spreadsheet programs skip leading whitespace or control characters and accept
+// full-width operators, so those are looked past before the first character is
+// checked.
 func csvSafe(v string) string {
-	if v != "" && strings.ContainsRune("=+-@\t\r", rune(v[0])) {
+	trimmed := strings.TrimLeftFunc(v, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
+	if trimmed == "" {
+		return v
+	}
+	first, _ := utf8.DecodeRuneInString(trimmed)
+	if strings.ContainsRune("=+-@|%\uFF1D\uFF0B\uFF0D\uFF20", first) || trimmed != v {
 		return "'" + v
 	}
 	return v

@@ -68,7 +68,7 @@ function again() { result.value = null; form.value.name = form.value.description
 <template>
   <div v-if="result" class="card">
     <h1>{{ t('Share created') }}</h1>
-    <input :value="result.url" readonly @focus="$event.target.select()" />
+    <input v-if="!guest" :value="result.url" readonly @focus="$event.target.select()" />
     <QrCode v-if="!guest" :value="result.url" />
     <div class="actions">
       <button v-if="!guest" @click="copy">{{ copied ? t('Copied') : t('Copy link') }}</button>

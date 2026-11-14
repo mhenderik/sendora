@@ -33,8 +33,8 @@ async function del(p) { if (confirm(t('Delete provider?'))) { await api('/auth-p
       <p v-if="edit.callback_url" class="muted">{{ t('Callback URL') }}: <code>{{ edit.callback_url }}</code></p>
       <div class="actions"><button>{{ t('Save') }}</button><button type="button" class="secondary" @click="edit = null">{{ t('Cancel') }}</button></div>
     </form>
-    <table><tr v-for="p in list" :key="p.id"><td>{{ p.name }} <span class="badge">{{ p.type }}</span> <span class="badge" :class="p.enabled ? 'on' : 'off'">{{ p.enabled ? t('Enabled') : t('Disabled') }}</span>
+    <table><tr v-for="p in list" :key="p.id"><td>{{ p.name }} <span class="badge">{{ p.type }}</span> <span class="badge" :class="p.enabled ? 'on' : 'off'">{{ p.enabled ? t('Enabled') : t('Disabled') }}</span> <span v-if="p.managed" class="badge" :title="t('Set in the server configuration (environment or Kubernetes ConfigMap); change it there.')">{{ t('Managed by configuration') }}</span>
       <div class="muted">{{ t('Callback URL') }}: <code>{{ p.callback_url }}</code></div></td>
-      <td class="actions" style="margin:0"><button class="small secondary" @click="edit = { ...p, client_secret: '' }">{{ t('Edit') }}</button><button class="small danger" @click="del(p)">{{ t('Delete') }}</button></td></tr></table>
+      <td class="actions" style="margin:0"><template v-if="!p.managed"><button class="small secondary" @click="edit = { ...p, client_secret: '' }">{{ t('Edit') }}</button><button class="small danger" @click="del(p)">{{ t('Delete') }}</button></template></td></tr></table>
   </div>
 </template>

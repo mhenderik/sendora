@@ -53,3 +53,21 @@ func validateText(s string, maxRunes int, strict bool) error {
 	}
 	return nil
 }
+
+const msgInvalidUsername = "username must be 1 to 64 characters: letters a-z, digits, dot, underscore or hyphen"
+
+// validUsername allows only plain ASCII letters, digits, dot, underscore and
+// hyphen: no look-alike letters from other alphabets, no invisible characters,
+// nothing that could pass for an email address on the sign-in form. Existing
+// accounts keep their names; this applies to new ones.
+func validUsername(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}

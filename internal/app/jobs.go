@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -66,9 +67,11 @@ func (s *Server) maintain() {
 		if rows != nil {
 			rows.Close()
 		}
-		base := s.BaseURL
-		if base == "" {
-			base = s.St.Setting("application_url")
+		// Same rules as every other email link: a configured public https URL
+		// (or a loopback address); otherwise no expiry mail with a broken link.
+		base, baseOK := s.emailBaseURL(&http.Request{Host: "invalid.invalid"})
+		if !baseOK {
+			ws = nil
 		}
 		for _, x := range ws {
 			s.St.DB.Exec(`UPDATE shares SET expiry_warned=1 WHERE id=?`, x.id)
@@ -123,12 +126,18 @@ func (s *Server) maintain() {
 	s.St.DB.Exec(`DELETE FROM revoked_access_tokens WHERE expires_at<?`, now)
 	s.St.DB.Exec(`DELETE FROM verification_attempts WHERE expires_at<?`, now)
 	s.St.DB.Exec(`DELETE FROM refresh_tokens WHERE expires_at<?`, now)
+	s.St.DB.Exec(`DELETE FROM refresh_spent WHERE expires_at<?`, now)
 	s.St.DB.Exec(`DELETE FROM password_resets WHERE expires_at<?`, now)
 	s.St.DB.Exec(`DELETE FROM email_verifications WHERE expires_at<?`, now)
 	s.St.DB.Exec(`DELETE FROM downloads WHERE created_at<?`, now.AddDate(0, 0, -90))
-	// Accounts that never proved their email (they cannot sign in) are squatting
-	// on usernames and addresses: remove them after 48 hours.
-	if res, err := s.St.DB.Exec(`DELETE FROM users WHERE email_verified=0 AND is_guest=0 AND created_at<?
+	// Self-registrations that never proved their email (they cannot sign in) are
+	// squatting on usernames and addresses: remove them after 48 hours. Only
+	// accounts still marked as a pending registration qualify, never an
+	// established account whose changed address is not verified yet, nor one
+	// linked to a sign-in provider (whose email may be unverified on purpose).
+	if res, err := s.St.DB.Exec(`DELETE FROM users WHERE pending_registration=1 AND email_verified=0 AND is_guest=0 AND created_at<?
+		AND password_hash<>''
+		AND NOT EXISTS(SELECT 1 FROM user_auth_providers WHERE user_auth_providers.user_id=users.id)
 		AND NOT EXISTS(SELECT 1 FROM shares WHERE shares.user_id=users.id)
 		AND NOT EXISTS(SELECT 1 FROM upload_sessions WHERE upload_sessions.user_id=users.id OR upload_sessions.quota_owner_id=users.id)`,
 		now.UTC().Add(-48*time.Hour).Format("2006-01-02 15:04:05")); err == nil {
@@ -136,6 +145,15 @@ func (s *Server) maintain() {
 			log.Printf("removed %d unverified account(s) older than 48 hours", n)
 		}
 	}
+	// Guests from open upload links whose single-use invitation expired unused:
+	// remove the invitation and the guest account (their uploads, if any, are
+	// shares owned by the inviter and stay).
+	s.St.DB.Exec(`DELETE FROM users WHERE is_guest=1
+		AND id IN (SELECT guest_user_id FROM reverse_invites WHERE parent_id IS NOT NULL AND completed_at IS NULL AND expires_at<?)
+		AND NOT EXISTS(SELECT 1 FROM upload_sessions WHERE upload_sessions.user_id=users.id)`, now)
+	s.St.DB.Exec(`DELETE FROM reverse_invites WHERE parent_id IS NOT NULL AND completed_at IS NULL AND expires_at<?
+		AND guest_user_id NOT IN (SELECT id FROM users)`, now)
+	s.pruneIPBans()
 	s.purgeEventLog()
 }
 

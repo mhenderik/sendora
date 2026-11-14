@@ -327,7 +327,7 @@ func (s *Server) mfaLogin(method string) http.HandlerFunc {
 			jerr(w, 401, msgMFAExpired)
 			return
 		}
-		unlock := lockStripe(&s.loginLocks, strconv.FormatInt(uid, 10))
+		unlock := onceUnlock(lockStripe(&s.loginLocks, strconv.FormatInt(uid, 10)))
 		defer unlock()
 		u, err := s.userByID(uid)
 		if err != nil || u.IsGuest || cred != s.credentialVersion(u) {
@@ -340,6 +340,7 @@ func (s *Server) mfaLogin(method string) http.HandlerFunc {
 		}
 		if u.loginLockedUntil > time.Now().Unix() {
 			s.logEvent(u.ID, u.Username, "mfa_failed", "", "account locked")
+			unlock()
 			rejectMFA(w)
 			return
 		}
@@ -353,6 +354,7 @@ func (s *Server) mfaLogin(method string) http.HandlerFunc {
 		if !good {
 			s.noteAuthFailure(u)
 			s.logEvent(u.ID, u.Username, "mfa_failed", "", method)
+			unlock()
 			rejectMFA(w)
 			return
 		}
@@ -499,12 +501,12 @@ func (s *Server) mfaFactorsChanged(w http.ResponseWriter, r *http.Request, uid i
 		jerr(w, 500, "user policy unavailable")
 		return
 	}
-	if !s.issueSession(w, r, nu) {
+	if !s.issueSessionSince(w, r, nu, s.sessionStartOf(r)) {
 		jerr(w, 401, "session changed; log in again")
 		return
 	}
 	s.fillMFA(nu)
-	out := map[string]any{"ok": true, "access_token": s.accessToken(nu), "user": nu}
+	out := map[string]any{"ok": true, "access_token": s.accessTokenAt(nu, s.requestAuthTime(r)), "user": nu}
 	for k, v := range extra {
 		out[k] = v
 	}

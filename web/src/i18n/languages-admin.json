@@ -50,7 +50,15 @@
     "Unblock": "Deblokkeren",
     "Your current address is {ip}.": "Je huidige adres is {ip}.",
     "Reply-To address (optional)": "Antwoordadres (Reply-To, optioneel)",
-    "Replies to Sendora emails go to the Reply-To address instead of the From address. Leave empty to reply to the sender.": "Antwoorden op Sendora-mails gaan naar het Reply-To-adres in plaats van naar het afzenderadres. Laat leeg om naar de afzender te antwoorden."
+    "Replies to Sendora emails go to the Reply-To address instead of the From address. Leave empty to reply to the sender.": "Antwoorden op Sendora-mails gaan naar het Reply-To-adres in plaats van naar het afzenderadres. Laat leeg om naar de afzender te antwoorden.",
+    "Sign in with Microsoft": "Aanmelden met Microsoft",
+    "Source": "Bron",
+    "Local": "Lokaal",
+    "Setup code": "Installatiecode",
+    "The one-time setup code is printed in the server log when Sendora starts without accounts (for Docker: docker compose logs sendora).": "De eenmalige installatiecode staat in de serverlog zodra Sendora start zonder accounts (voor Docker: docker compose logs sendora).",
+    "Settings set in the server configuration (environment or Kubernetes ConfigMap) are read-only here: {n}.": "Instellingen uit de serverconfiguratie (omgeving of Kubernetes ConfigMap) zijn hier alleen-lezen: {n}.",
+    "Set in the server configuration (environment or Kubernetes ConfigMap); change it there.": "Ingesteld in de serverconfiguratie (omgeving of Kubernetes ConfigMap); wijzig het daar.",
+    "Managed by configuration": "Beheerd via configuratie"
   },
   "de": {
     "{changed} of {total} texts differ from the built-in text and will be stored.": "{changed} von {total} Texten weichen vom eingebauten Text ab und werden gespeichert.",

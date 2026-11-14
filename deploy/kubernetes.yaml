@@ -20,6 +20,27 @@ spec:
     requests:
       storage: 100Gi
 ---
+# Settings of Admin -> Settings as configuration (see docs/configuration.md):
+# values here win at every start and are read-only in the admin screen.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sendora-config
+  namespace: sendora
+data:
+  SENDORA_ALLOW_SELF_REGISTRATION: "false"
+  SENDORA_IDLE_LOGOUT_MINUTES: "60"
+  # SENDORA_SMTP_HOST: smtp.example.com
+  # SENDORA_SMTP_PORT: "587"
+  # SENDORA_SMTP_TLS: starttls
+  # SENDORA_SMTP_USER: sendora@example.com
+  # SENDORA_SMTP_FROM: Sendora <sendora@example.com>
+  # SENDORA_PROVIDER_ENTRA_TYPE: entra
+  # SENDORA_PROVIDER_ENTRA_NAME: Company login
+  # SENDORA_PROVIDER_ENTRA_TENANT_ID: 00000000-0000-0000-0000-000000000000
+  # SENDORA_PROVIDER_ENTRA_CLIENT_ID: 00000000-0000-0000-0000-000000000000
+  # SENDORA_PROVIDER_ENTRA_ALLOW_REGISTRATION: "true"
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -72,6 +93,14 @@ spec:
               value: https://sendora.example.com
             - name: TZ
               value: UTC
+            # Secrets as files from the sendora-secrets Secret (create it first):
+            # - name: SENDORA_SMTP_PASSWORD_FILE
+            #   value: /run/secrets/sendora-config/smtp-password
+            # - name: SENDORA_PROVIDER_ENTRA_CLIENT_SECRET_FILE
+            #   value: /run/secrets/sendora-config/entra-client-secret
+          envFrom:
+            - configMapRef:
+                name: sendora-config
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -113,6 +142,9 @@ spec:
             - name: database-key
               mountPath: /run/secrets/sendora
               readOnly: true
+            # - name: config-secrets
+            #   mountPath: /run/secrets/sendora-config
+            #   readOnly: true
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -129,6 +161,12 @@ spec:
             items:
               - key: database.key
                 path: database.key
+        # kubectl -n sendora create secret generic sendora-secrets \
+        #   --from-file=smtp-password=./smtp-password --from-file=entra-client-secret=./entra-secret
+        # - name: config-secrets
+        #   secret:
+        #     secretName: sendora-secrets
+        #     defaultMode: 0440
 ---
 apiVersion: v1
 kind: Service

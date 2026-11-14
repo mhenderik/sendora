@@ -215,7 +215,11 @@ func TestRecipientMailAllowanceOnShareCompletion(t *testing.T) {
 	e.want(e.share(admin, map[string]string{"a.txt": "a"}, nil), 201, "no recipients is fine")
 }
 
-func TestRegistrationGivesSameAnswerForTakenUsernameAndEmail(t *testing.T) {
+// Usernames are shown to share recipients anyway; email addresses are not. A taken
+// email therefore gets the same answer as a successful registration (the old
+// combined "username or email" error still revealed addresses: a random
+// username plus someone's address failed only when the address existed).
+func TestRegistrationHidesTakenEmails(t *testing.T) {
 	e := newEnv(t)
 	admin := e.setup()
 	e.useSMTP(newSMTP(t))
@@ -223,8 +227,14 @@ func TestRegistrationGivesSameAnswerForTakenUsernameAndEmail(t *testing.T) {
 	e.want(e.do("POST", "/api/users", admin, map[string]any{"username": "taken", "password": "password123", "email": "taken@example.test"}), 201, "existing user")
 	byUser := e.do("POST", "/api/auth/register", "", map[string]any{"username": "taken", "email": "fresh@example.test", "password": "password123"})
 	byMail := e.do("POST", "/api/auth/register", "", map[string]any{"username": "freshname", "email": "taken@example.test", "password": "password123"})
-	if byUser.Code != 400 || byMail.Code != 400 || byUser.S("error") != byMail.S("error") {
-		t.Fatalf("registration reveals which one exists: %d %q vs %d %q", byUser.Code, byUser.S("error"), byMail.Code, byMail.S("error"))
+	fresh := e.do("POST", "/api/auth/register", "", map[string]any{"username": "brandnew", "email": "brandnew@example.test", "password": "password123"})
+	if byUser.Code != 400 || byMail.Code != fresh.Code || byMail.Code != 201 {
+		t.Fatalf("unexpected answers: taken username %d, taken email %d, fresh %d", byUser.Code, byMail.Code, fresh.Code)
+	}
+	var n int
+	e.s.St.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE username='freshname'`).Scan(&n)
+	if n != 0 {
+		t.Fatal("taken email created an account")
 	}
 }
 
@@ -236,7 +246,7 @@ func TestUnverifiedAccountsAreRemovedAfter48Hours(t *testing.T) {
 		verified int
 		age      string
 	}{{"old-unverified", 0, "2020-01-01 00:00:00"}, {"new-unverified", 0, time.Now().UTC().Format("2006-01-02 15:04:05")}, {"old-verified", 1, "2020-01-01 00:00:00"}} {
-		if _, err := e.s.St.DB.Exec(`INSERT INTO users(username,email,email_verified,created_at) VALUES(?,?,?,?)`, row.name, row.name+"@x.io", row.verified, row.age); err != nil {
+		if _, err := e.s.St.DB.Exec(`INSERT INTO users(username,email,email_verified,created_at,password_hash,pending_registration) VALUES(?,?,?,?,'registration-hash',1)`, row.name, row.name+"@x.io", row.verified, row.age); err != nil {
 			t.Fatal(err)
 		}
 	}

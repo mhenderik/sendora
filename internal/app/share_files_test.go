@@ -235,13 +235,13 @@ func TestAppendLimitsAndQuota(t *testing.T) {
 	}
 	e.s.St.SetSetting("max_share_size", "2048")
 	// Snapshot limit.
-	t.Setenv("FILESHARE_VERIFIED_DOWNLOAD_MAX_BYTES", fmt.Sprint(700*1024))
+	t.Setenv("SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES", fmt.Sprint(700*1024))
 	r = e.do("POST", "/api/uploads", tok, map[string]any{"files": big, "share_id": sid})
 	e.want(r, 413, "snapshot limit")
 	if !strings.Contains(r.S("error"), "downloadable") {
 		t.Fatal(r.S("error"))
 	}
-	t.Setenv("FILESHARE_VERIFIED_DOWNLOAD_MAX_BYTES", "")
+	t.Setenv("SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES", "")
 	// Quota admission and reservation.
 	uid := quotaUserID(t, e, "admin")
 	quotaSet(t, e, uid, 600*1024+10)

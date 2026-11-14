@@ -208,6 +208,20 @@ func PrepareImported(path string, key []byte, dataDir string) (*ImportSummary, e
 			db.Close()
 		}
 	}()
+	// Never run functions defined by the uploaded schema (views, triggers,
+	// generated columns) with elevated trust while the file is inspected.
+	if _, err := db.Exec(`PRAGMA trusted_schema=OFF`); err != nil {
+		return nil, err
+	}
+	// Generated (hidden) columns are never part of Sendora's schema; they could
+	// make every read of a table expensive.
+	var generated int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master m, pragma_table_xinfo(m.name) x WHERE m.type='table' AND m.sql NOT LIKE 'CREATE VIRTUAL%' AND x.hidden IN (2,3)`).Scan(&generated); err != nil {
+		return nil, err
+	}
+	if generated > 0 {
+		return nil, &ImportError{"the database contains generated columns, which Sendora never creates"}
+	}
 	// Required core tables must already exist: the idempotent schema would
 	// otherwise silently turn an unrelated database into an empty Sendora one.
 	have, err := readSchema(db)
@@ -243,6 +257,16 @@ func PrepareImported(path string, key []byte, dataDir string) (*ImportSummary, e
 	}
 	if err := clearImportedSecrets(db); err != nil {
 		return nil, err
+	}
+	// Imported table definitions may lack the uniqueness Sendora relies on (two
+	// shares with one link ID would share a storage folder). Enforce it here.
+	for _, q := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS import_shares_long_id ON shares(long_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS import_users_username ON users(username)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			return nil, &ImportError{"the database contains duplicate share links or usernames"}
+		}
 	}
 	if err := rebaseImportedFiles(db, dataDir); err != nil {
 		return nil, err
@@ -363,7 +387,7 @@ func stripForeignObjects(db *sql.DB) error {
 // reset and verification codes, revocation lists and the stored signing secret
 // (a fresh one is generated at startup unless JWT_SECRET is set).
 func clearImportedSecrets(db *sql.DB) error {
-	for _, table := range []string{"refresh_tokens", "password_resets", "email_verifications", "revoked_access_tokens", "verification_attempts", "ip_bans"} {
+	for _, table := range []string{"refresh_tokens", "password_resets", "email_verifications", "revoked_access_tokens", "verification_attempts", "ip_bans", "refresh_spent"} {
 		var present int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&present); err != nil {
 			return err

@@ -24,6 +24,8 @@ import (
 
 var secretKeys = map[string]bool{"smtp_pass": true}
 
+const msgSMTPPasswordAgain = "enter the SMTP password again when changing the server, port, user or security"
+
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	rows, _ := s.St.DB.Query(`SELECT key,value,grp FROM settings WHERE grp NOT IN ('secret','email_templates') AND key<>'jwt_secret' ORDER BY key`)
 	defer rows.Close()
@@ -38,7 +40,61 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		out[k] = v
 	}
+	out["managed_settings"] = s.managedSettingList()
 	jout(w, 200, out)
+}
+
+// normalizeSetting validates one setting value and returns its stored form. It
+// is shared by the admin screen and the configuration loader (ConfigMap /
+// environment), so both follow exactly the same rules.
+func (s *Server) normalizeSetting(k, str string) (string, error) {
+	if k == store.DefaultStorageQuotaKey {
+		if _, err := store.ParseQuotaBytes(str); err != nil {
+			return "", fmt.Errorf("invalid default storage quota")
+		}
+	}
+	if owned, err := validateShareSetting(k, str); owned && err != nil {
+		return "", err
+	}
+	if owned, err := validateAccountSetting(k, str); owned && err != nil {
+		return "", err
+	}
+	if owned, err := validateBackgroundSetting(k, str); owned && err != nil {
+		return "", err
+	}
+	if owned, err := s.validateGeneralSetting(k, &str); owned && err != nil {
+		return "", err
+	}
+	if owned, err := validateReplyToSetting(k, &str); owned && err != nil {
+		return "", err
+	}
+	if owned, err := validateIPBanSetting(k, &str); owned && err != nil {
+		return "", err
+	}
+	if owned, err := validateIdleSetting(k, str); owned && err != nil {
+		return "", err
+	}
+	if owned, err := validateMFASetting(k, str); owned && err != nil {
+		return "", err
+	}
+	if owned, err := validateLogSetting(k, str); owned && err != nil {
+		return "", err
+	}
+	if k == settingLocalLogin {
+		norm, ok := normalizeLocalLoginSetting(str)
+		if !ok {
+			return "", fmt.Errorf("invalid value for %s: must be true or false", k)
+		}
+		str = norm
+	}
+	if k == settingRegistrationDomains {
+		norm, err := normalizeRegistrationDomains(str)
+		if err != nil {
+			return "", err
+		}
+		str = norm
+	}
+	return str, nil
 }
 
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
@@ -49,8 +105,24 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "bad request")
 		return
 	}
+	// Only existing, editable settings can be written; anything else the
+	// browser sends (such as derived flags like smtp_pass_set) is ignored and
+	// never appears in the activity log.
+	editable := map[string]bool{}
+	if rows, err := s.St.DB.Query(`SELECT key FROM settings WHERE grp NOT IN ('secret','email_templates')`); err == nil {
+		for rows.Next() {
+			var k string
+			if rows.Scan(&k) == nil {
+				editable[k] = true
+			}
+		}
+		rows.Close()
+	}
 	updates := make(map[string]string, len(in))
 	for k, v := range in {
+		if !editable[k] {
+			continue
+		}
 		var str string
 		switch t := v.(type) {
 		case bool:
@@ -101,66 +173,26 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if k == store.DefaultStorageQuotaKey {
-			if _, err := store.ParseQuotaBytes(str); err != nil {
-				jerr(w, 400, "invalid default storage quota")
+		norm, err := s.normalizeSetting(k, str)
+		if err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		str = norm
+		if s.isManagedSetting(k) {
+			// Set by the deployment's configuration: the screen cannot change it.
+			if str != s.St.Setting(k) && !(secretKeys[k] && str == "") {
+				jerr(w, 400, fmt.Sprintf("%s is managed by the server configuration and cannot be changed here", k))
 				return
 			}
+			continue
 		}
-		if owned, err := validateShareSetting(k, str); owned && err != nil {
-			jerr(w, 400, err.Error())
-			return
-		}
-		if owned, err := validateAccountSetting(k, str); owned && err != nil {
-			jerr(w, 400, err.Error())
-			return
-		}
-		if owned, err := validateBackgroundSetting(k, str); owned && err != nil {
-			jerr(w, 400, err.Error())
-			return
-		}
-		if owned, err := validateReplyToSetting(k, &str); owned && err != nil {
-			jerr(w, 400, err.Error())
-			return
-		}
-		if owned, err := validateIPBanSetting(k, &str); owned && err != nil {
-			jerr(w, 400, err.Error())
-			return
-		}
-		if owned, err := validateIdleSetting(k, str); owned && err != nil {
-			jerr(w, 400, err.Error())
-			return
-		}
-		if owned, err := validateMFASetting(k, str); owned && err != nil {
-			jerr(w, 400, err.Error())
-			return
-		}
-		if owned, err := validateLogSetting(k, str); owned && err != nil {
-			jerr(w, 400, err.Error())
-			return
-		}
-		if k == settingLocalLogin {
-			norm, ok := normalizeLocalLoginSetting(str)
-			if !ok {
-				jerr(w, 400, "invalid value for "+k+": must be true or false")
+		// Only turning local login off needs the lockout check; the whole batch is rejected.
+		if k == settingLocalLogin && str == "false" && s.St.SettingBool(settingLocalLogin) {
+			if safe, msg := s.localLoginSafe(s.ctxUser(r).ID); !safe {
+				jerr(w, 400, msg)
 				return
 			}
-			str = norm
-			// Only turning it off needs the lockout check; the whole batch is rejected.
-			if str == "false" && s.St.SettingBool(settingLocalLogin) {
-				if safe, msg := s.localLoginSafe(s.ctxUser(r).ID); !safe {
-					jerr(w, 400, msg)
-					return
-				}
-			}
-		}
-		if k == settingRegistrationDomains {
-			norm, err := normalizeRegistrationDomains(str)
-			if err != nil {
-				jerr(w, 400, err.Error())
-				return
-			}
-			str = norm
 		}
 		if secretKeys[k] && str == "" {
 			continue // blank = keep
@@ -169,6 +201,17 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			continue // managed via upload endpoints
 		}
 		updates[k] = str
+	}
+	// The stored SMTP password is only ever sent to the server it was entered
+	// for: changing where or how it is sent requires typing it again, so an
+	// administrator session cannot redirect it to a server of its own.
+	if _, typed := updates["smtp_pass"]; !typed && s.St.Setting("smtp_pass") != "" {
+		for _, k := range []string{"smtp_host", "smtp_port", "smtp_user", "smtp_tls"} {
+			if v, ok := updates[k]; ok && v != s.St.Setting(k) {
+				jerr(w, 400, msgSMTPPasswordAgain)
+				return
+			}
+		}
 	}
 	// Enforcing MFA must not lock out the administrator who switches it on: they
 	// need a factor of their own (or an explicit exemption) first.

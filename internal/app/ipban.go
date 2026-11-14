@@ -194,14 +194,7 @@ func (s *Server) noteIPFailure(ip string) {
 	f := s.ipBans.fails[key]
 	if !now.Before(f.expires) {
 		if len(s.ipBans.fails) >= ipBanMaxKeys {
-			for k, v := range s.ipBans.fails {
-				if !now.Before(v.expires) {
-					delete(s.ipBans.fails, k)
-				}
-			}
-			if len(s.ipBans.fails) >= ipBanMaxKeys {
-				s.ipBans.fails = map[string]ipFail{}
-			}
+			s.evictIPFails(now)
 		}
 		f = ipFail{expires: now.Add(ipBanWindow)}
 	}
@@ -232,6 +225,47 @@ func (s *Server) noteIPFailure(ip string) {
 		key, b.until.Unix(), strikes, now.Unix())
 	// The activity log never stores addresses, so only the fact is recorded.
 	s.logEvent(0, "", "ip_banned", "", fmt.Sprintf("strike=%d minutes=%d", strikes, int(dur.Minutes())))
+}
+
+// evictIPFails makes room in the failure counters without wiping them: expired
+// counters go first, then the quarter with the fewest failures, so flooding from
+// many addresses cannot reset the counter of an address close to the threshold.
+// The caller holds ipBans.mu.
+func (s *Server) evictIPFails(now time.Time) {
+	for k, v := range s.ipBans.fails {
+		if !now.Before(v.expires) {
+			delete(s.ipBans.fails, k)
+		}
+	}
+	if len(s.ipBans.fails) < ipBanMaxKeys {
+		return
+	}
+	type entry struct {
+		key   string
+		count int
+	}
+	all := make([]entry, 0, len(s.ipBans.fails))
+	for k, v := range s.ipBans.fails {
+		all = append(all, entry{k, v.count})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].count < all[j].count })
+	for _, e := range all[:len(all)/4+1] {
+		delete(s.ipBans.fails, e.key)
+	}
+}
+
+// pruneIPBans forgets bans that have ended and whose strikes have expired, in
+// memory and in the database (run by the maintenance job).
+func (s *Server) pruneIPBans() {
+	now := time.Now()
+	s.ipBans.mu.Lock()
+	for k, b := range s.ipBans.bans {
+		if !now.Before(b.until) && now.Sub(b.lastStrike) >= ipBanMemory {
+			delete(s.ipBans.bans, k)
+		}
+	}
+	s.ipBans.mu.Unlock()
+	s.St.DB.Exec(`DELETE FROM ip_bans WHERE banned_until<? AND last_strike<?`, now.Unix(), now.Add(-ipBanMemory).Unix())
 }
 
 type ipBanInfo struct {
