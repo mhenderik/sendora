@@ -28,8 +28,8 @@ Sendora is a **single-instance** application (SQLite with process-local locks): 
 Use an image you trust and pin it by version or digest. The project's release workflow publishes images to `ghcr.io/mhenderik/sendora` when a version is tagged (see [Releases and images](#releases-and-images)). To build your own instead:
 
 ```sh
-IMAGE=registry.example.com/sendora:1.0.0
-docker build --build-arg VERSION=1.0.0 -t "$IMAGE" .
+IMAGE=registry.example.com/sendora:0.9.0
+docker build --build-arg VERSION=0.9.0 -t "$IMAGE" .
 docker push "$IMAGE"
 ```
 
@@ -175,4 +175,4 @@ Stored file locations are resolved against the server's own `DATA_DIR/shares/<sh
 
 ## Releases and images
 
-Pushing a version tag (for example `v1.0.0`) to the GitHub repository runs the release workflow (`.github/workflows/release.yml`). It builds the image for `linux/amd64` and `linux/arm64` and publishes it to the GitHub Container Registry as `ghcr.io/mhenderik/sendora:1.0.0`, `:1.0` and `:latest`. A new package on ghcr.io is private until its visibility is set to public in the package settings on GitHub; for a private package, create an `imagePullSecret` with a token that has `read:packages`.
+Pushing a version tag (for example `v0.9.0`) to the GitHub repository runs the release workflow (`.github/workflows/release.yml`). It builds the image for `linux/amd64` and `linux/arm64` and publishes it to the GitHub Container Registry as `ghcr.io/mhenderik/sendora:0.9.0`, `:0.9` and `:latest`. A new package on ghcr.io is private until its visibility is set to public in the package settings on GitHub; for a private package, create an `imagePullSecret` with a token that has `read:packages`.

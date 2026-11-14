@@ -72,7 +72,7 @@ spec:
       containers:
         - name: sendora
           # Not a published release: build/push your image and replace this.
-          image: ghcr.io/your-org/sendora:VERSION
+          image: ghcr.io/mhenderik/sendora:0.9.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

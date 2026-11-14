@@ -1,0 +1,14 @@
+# Caddy obtains and renews the certificate for SENDORA_DOMAIN automatically.
+{$SENDORA_DOMAIN} {
+	encode zstd gzip
+	# Large uploads arrive in 8 MB chunks; long downloads must not time out.
+	request_body {
+		max_size 100MB
+	}
+	reverse_proxy sendora:8080 {
+		transport http {
+			read_timeout 10m
+			write_timeout 0
+		}
+	}
+}

@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.0.0 (unreleased)
+## 0.9.0 (unreleased)
 
-First public release.
+First public release. Feature-complete, but not yet declared stable: it is vibe coded and has not been independently reviewed (see Known limitations). 1.0.0 follows after more real-world use.
 
 ### Features
 - Self-hosted file sharing: resumable chunked uploads, readable share links, QR

@@ -35,6 +35,7 @@ What that means for you:
 ## Documentation
 
 - **[Quick start](docs/quickstart.md)** — Run Sendora in Docker in a few minutes. For a build from source see [Build and development](docs/build.md).
+- **[Docker Compose files](deploy/compose/README.md)** — Ready-to-use Compose setup with the published image, optional automatic HTTPS.
 - **[Build, develop and test](docs/build.md)** — How to build Sendora from source, run it locally and run the test suites.
 - **[Configuration](docs/configuration.md)** — Environment variables and runtime settings.
 - **[Deployment](docs/deployment.md)** — Docker behind HTTPS (see the Kubernetes guide for clusters).
