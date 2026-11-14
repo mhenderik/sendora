@@ -42,8 +42,10 @@ jobs:
         run: docker build --target sqlcipher -t sendora-sqlcipher .
       - name: vet and test
         run: |
-          docker run --rm -v "$PWD":/src -w /src -e CGO_ENABLED=1 sendora-sqlcipher \
-            sh -c 'go vet ./... && go test -race -count=1 ./...'
+          # Not as root: some tests rely on file permissions being enforced.
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/src -w /src \
+            -e CGO_ENABLED=1 -e HOME=/tmp -e GOCACHE=/tmp/gocache -e GOMODCACHE=/tmp/gomod -e GOFLAGS=-buildvcs=false \
+            sendora-sqlcipher sh -c 'go vet ./... && go test -race -count=1 ./...'
 
   image:
     needs: [web, go]

@@ -662,6 +662,9 @@ func TestImportApplyFlow(t *testing.T) {
 }
 
 func TestImportApplyWithoutLocalPasswordAndBackupFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not apply to root")
+	}
 	e := newEncEnv(t)
 	admin := e.setup()
 	raw := foreignDB(t, otherKey, nil)
