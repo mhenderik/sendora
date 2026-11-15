@@ -13,7 +13,7 @@ Sendora is **vibe coded**: almost all of the code, tests and documentation were 
 What that means for you:
 
 - The code has automated tests (Go and Node) and the maintainer checked the behaviour by hand, but **no professional developer or security specialist has reviewed it**, and there has been **no external penetration test**. Treat it accordingly, especially before exposing it to the internet or putting sensitive data in it.
-- Some parts, such as passkeys (WebAuthn), single sign-on and the database encryption handling, are security-sensitive. They are tested against software test setups and have not been verified in every real-world environment (see [limitations](docs/security.md)).
+- Some parts, such as passkeys (WebAuthn), single sign-on and the database encryption handling, are security-sensitive. They are tested against software test setups and have not been verified in every real-world environment (see [limitations](https://github.com/mhenderik/sendora/wiki/Security-Notes)).
 - Design decisions follow what the assistant and the maintainer found sensible; you may disagree. Reviews, bug reports and pull requests from experienced developers are very welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)); report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 - It is provided under the MIT License **without warranty**.
 
@@ -39,26 +39,21 @@ What that means for you:
 | ![Sign-in page](docs/screenshots/login.png) | ![Share in grid view](docs/screenshots/share-gallery.png) |
 | ![My shares](docs/screenshots/my-shares.png) | ![Users](docs/screenshots/admin-users.png) |
 
-More in [docs/screenshots.md](docs/screenshots.md).
+More in the [screenshot gallery](https://github.com/mhenderik/sendora/wiki/Screenshots).
 
 ## Documentation
 
-- **[Quick start](docs/quickstart.md)** — Run Sendora in Docker in a few minutes. For a build from source see [Build and development](docs/build.md).
-- **[Quick start: Docker](docs/quickstart-docker.md)** — One `docker run` command with the published image.
-- **[Quick start: Kubernetes](docs/quickstart-kubernetes.md)** — Bare-minimum manifest, port-forward, first administrator.
-- **[Docker Compose files](deploy/compose/README.md)** — Ready-to-use Compose setup with the published image, optional automatic HTTPS.
-- **[Build, develop and test](docs/build.md)** — How to build Sendora from source, run it locally and run the test suites.
-- **[Configuration](docs/configuration.md)** — Environment variables and runtime settings.
-- **[Deployment](docs/deployment.md)** — Docker behind HTTPS (see the Kubernetes guide for clusters).
-- **[Kubernetes](docs/kubernetes.md)** — Step-by-step Kubernetes deployment: ConfigMap and Secrets, first-run setup, Ingress, upgrades, backups and troubleshooting.
-- **[Backups, restore and migration](docs/backup-and-migration.md)** — Where the data lives, how to back it up and how to move or import a database.
-- **[Accounts and authentication](docs/authentication.md)** — Two-step verification, password policy, lockout, automatic sign-out and Microsoft Entra ID.
-- **[Email, registration and templates](docs/email.md)** — Public registration, SMTP, welcome mail, editable templates and notification semantics.
-- **[Translations](docs/translations.md)** — Translate the interface and the emails through JSON files.
-- **[Sharing, uploads and downloads](docs/sharing.md)** — Share options, editing, the activity log and the integrity guarantees of uploads and downloads.
-- **[Security and limitations](docs/security.md)** — Operational security notes and the current limitations.
+The complete documentation is in the **[wiki](https://github.com/mhenderik/sendora/wiki)**.
 
-Start with the [quick start](docs/quickstart.md). The full index is in [docs/README.md](docs/README.md).
+| Get started | Run and administer | Develop |
+|---|---|---|
+| [Quick start: Docker](docs/quickstart-docker.md) | [Configuration](https://github.com/mhenderik/sendora/wiki/Configuration) | [Development setup](https://github.com/mhenderik/sendora/wiki/Development-Setup) |
+| [Quick start: Kubernetes](docs/quickstart-kubernetes.md) | [Hardening guide](https://github.com/mhenderik/sendora/wiki/Hardening-Guide) | [Architecture](https://github.com/mhenderik/sendora/wiki/Architecture) |
+| [Docker Compose files](deploy/compose/README.md) | [Accounts and authentication](https://github.com/mhenderik/sendora/wiki/Accounts-and-Authentication) | [Code layout](https://github.com/mhenderik/sendora/wiki/Code-Layout) |
+| [Docker deployment](https://github.com/mhenderik/sendora/wiki/Docker-Deployment) | [Sharing and transfers](https://github.com/mhenderik/sendora/wiki/Sharing-and-Transfers) | [Testing](https://github.com/mhenderik/sendora/wiki/Testing) |
+| [Kubernetes deployment](https://github.com/mhenderik/sendora/wiki/Kubernetes-Deployment) | [Email and notifications](https://github.com/mhenderik/sendora/wiki/Email-and-Notifications) | [CI and releases](https://github.com/mhenderik/sendora/wiki/CI-and-Releases) |
+| [Build from source](https://github.com/mhenderik/sendora/wiki/Installation-From-Source) | [Upgrades and backups](https://github.com/mhenderik/sendora/wiki/Upgrades-and-Backups) | [How to extend](https://github.com/mhenderik/sendora/wiki/How-To-Extend) |
+| [Settings table](docs/configuration.md) | [Troubleshooting](https://github.com/mhenderik/sendora/wiki/Troubleshooting) · [Security notes](https://github.com/mhenderik/sendora/wiki/Security-Notes) | [Translations](https://github.com/mhenderik/sendora/wiki/Translations) |
 
 ## Bundled background photos
 

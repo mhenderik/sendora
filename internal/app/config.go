@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"regexp"
 	"sort"
@@ -33,6 +34,48 @@ var configExcluded = map[string]bool{"jwt_secret": true, "ui_logo": true, "ui_fa
 var configAliases = map[string][]string{"smtp_pass": {"SENDORA_SMTP_PASSWORD"}}
 
 func settingEnvName(key string) string { return "SENDORA_" + strings.ToUpper(key) }
+
+// JWTSecretFromEnv returns the session-signing secret from JWT_SECRET or the file
+// named by JWT_SECRET_FILE ("" = generate and store one in the database).
+func JWTSecretFromEnv() (string, error) {
+	v, _, err := readConfigValue("JWT_SECRET")
+	return strings.TrimSpace(v), err
+}
+
+// serverEnvNames are the SENDORA_* variables read outside the settings loader.
+var serverEnvNames = map[string]bool{
+	"SENDORA_DB_KEY_FILE": true, "SENDORA_DB_INITIALIZE": true, "SENDORA_TRUSTED_PROXIES": true,
+	"SENDORA_SETUP_CODE": true, "SENDORA_FORCE_LOCAL_LOGIN": true, "SENDORA_DISABLE_IP_BANS": true,
+	"SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES": true,
+}
+
+// warnConfig logs configuration that is probably a mistake: SENDORA_* variables
+// that nothing reads (a typo silently changes nothing), and local login switched
+// off while no enabled sign-in provider exists (everyone would be locked out).
+func (s *Server) warnConfig(settingKeys []string) {
+	known := map[string]bool{}
+	for k := range serverEnvNames {
+		known[k] = true
+	}
+	for _, k := range settingKeys {
+		for _, n := range append([]string{settingEnvName(k)}, configAliases[k]...) {
+			known[n], known[n+"_FILE"] = true, true
+		}
+	}
+	for _, kv := range os.Environ() {
+		name := strings.SplitN(kv, "=", 2)[0]
+		if strings.HasPrefix(name, "SENDORA_") && !strings.HasPrefix(name, "SENDORA_PROVIDER_") && !known[name] {
+			log.Printf("WARNING: environment variable %s is not a Sendora setting and is ignored (typo?)", name)
+		}
+	}
+	if s.isManagedSetting(settingLocalLogin) && !s.St.SettingBool(settingLocalLogin) {
+		var n int
+		s.St.DB.QueryRow(`SELECT COUNT(*) FROM auth_providers WHERE enabled=1`).Scan(&n)
+		if n == 0 && os.Getenv("SENDORA_FORCE_LOCAL_LOGIN") != "true" {
+			log.Printf("WARNING: local login is switched off by the configuration but no sign-in provider is enabled: nobody can sign in (recovery: SENDORA_FORCE_LOCAL_LOGIN=true)")
+		}
+	}
+}
 
 // readConfigValue returns the value of NAME or of the file named by NAME_FILE.
 func readConfigValue(name string) (string, bool, error) {
@@ -106,7 +149,11 @@ func (s *Server) applyConfig() error {
 			break
 		}
 	}
-	return s.applyProviderConfig()
+	if err := s.applyProviderConfig(); err != nil {
+		return err
+	}
+	s.warnConfig(keys)
+	return nil
 }
 
 var providerFields = []string{"CLIENT_SECRET", "ALLOW_REGISTRATION", "TRUST_EMAIL", "ISSUER_URL", "TENANT_ID", "CLIENT_ID", "ENABLED", "NAME", "TYPE", "ICON"}

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Documentation moved to the [wiki](https://github.com/mhenderik/sendora/wiki):
+  configuration reference, Docker and Kubernetes deployment, hardening guide,
+  security notes, upgrades and backups, developer docs. The repository keeps the
+  quick starts and the configuration table.
+- `JWT_SECRET_FILE` is supported (read the signing secret from a mounted file).
+- Startup warnings for unknown `SENDORA_*` variables (typos) and for a
+  configuration that switches local login off without an enabled provider.
+- Compose Caddyfile: backup import allows up to 4GB, other requests 100MB.
 - Quick starts: one-command Docker, bare-minimum Kubernetes manifest
   (`deploy/kubernetes-minimal.yaml`, 2Gi volume, storage class check and a
   hostPath test volume); screenshots in the documentation.

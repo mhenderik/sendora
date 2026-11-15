@@ -86,4 +86,4 @@ tar -czf sendora-backup-$(date +%F).tar.gz data
 docker compose start
 ```
 
-More: [docs/backup-and-migration.md](../../docs/backup-and-migration.md).
+More: [Upgrades and backups](https://github.com/mhenderik/sendora/wiki/Upgrades-and-Backups).

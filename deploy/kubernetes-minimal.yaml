@@ -1,5 +1,5 @@
 # Bare-minimum Sendora on Kubernetes for a first try (docs/quickstart-kubernetes.md).
-# For production use deploy/kubernetes.yaml and docs/kubernetes.md instead.
+# For production use deploy/kubernetes.yaml and https://github.com/mhenderik/sendora/wiki/Kubernetes-Deployment instead.
 #
 #   kubectl create namespace sendora
 #   kubectl -n sendora create secret generic sendora-db-key --from-file=database.key=./database.key

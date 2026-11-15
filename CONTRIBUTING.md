@@ -11,7 +11,7 @@ cd sendora
 
 Requirements: Go (see `go.mod`), Node 22, and an official **SQLCipher 4.20.0** with
 `pkg-config` (the Docker build compiles it; see the `Dockerfile`). The
-[build guide](docs/build.md) has the commands. In short:
+[build guide](https://github.com/mhenderik/sendora/wiki/Installation-From-Source) has the commands. In short:
 
 ```sh
 export CGO_ENABLED=1
@@ -41,7 +41,7 @@ touching authentication, shares, uploads, quotas, or the database.
   then run `node web/scripts/i18n-keys.mjs` to refresh `keys.json`. Dutch must stay
   complete (a test checks it); other languages may be partial. Example language
   files live in `custom-translations/`.
-- Keep the documentation in `docs/` accurate: it is the user documentation.
+- Keep the documentation accurate: the [wiki](https://github.com/mhenderik/sendora/wiki) is the user documentation (and `docs/` holds the quick starts and the settings table).
 - No personal data, real hostnames or credentials in code, tests or examples
   (use `example.com` and similar).
 

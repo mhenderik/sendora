@@ -20,7 +20,7 @@ spec:
     requests:
       storage: 100Gi
 ---
-# Settings of Admin -> Settings as configuration (see docs/configuration.md):
+# Settings of Admin -> Settings as configuration (see https://github.com/mhenderik/sendora/wiki/Configuration):
 # values here win at every start and are read-only in the admin screen.
 apiVersion: v1
 kind: ConfigMap
@@ -86,7 +86,7 @@ spec:
       #         mountPath: /data
       containers:
         - name: sendora
-          # Not a published release: build/push your image and replace this.
+          # Published release image (pin a version or digest; see the releases on GitHub).
           image: ghcr.io/mhenderik/sendora:0.9.0
           imagePullPolicy: IfNotPresent
           ports:

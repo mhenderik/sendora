@@ -127,7 +127,7 @@ func loopbackHost(host string) bool {
 
 func New(st *store.Store, static fs.FS, version string) *Server {
 	s := &Server{St: st, Static: static, Version: version, Started: time.Now(), BaseURL: strings.TrimRight(os.Getenv("APP_URL"), "/"), mailSlots: make(chan struct{}, 8), mailQueue: make(chan mailJob, 256), authSlots: make(chan struct{}, 16), downloadMailWake: make(chan struct{}, 1), importExec: execSelf, importExit: os.Exit, importDone: make(chan struct{})}
-	sec := os.Getenv("JWT_SECRET")
+	sec, _ := JWTSecretFromEnv() // validated in main
 	if sec == "" {
 		sec = st.Setting("jwt_secret")
 		if sec == "" {

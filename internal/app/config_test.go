@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"log"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -102,4 +103,37 @@ func TestConfigRejectsUnknownProviderVariable(t *testing.T) {
 		}
 	}()
 	New(st, fstest.MapFS{"index.html": {Data: []byte("x")}}, "test")
+}
+
+func TestJWTSecretFromFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "jwt")
+	os.WriteFile(p, []byte(strings.Repeat("s", 40)+"\n"), 0o600)
+	t.Setenv("JWT_SECRET_FILE", p)
+	got, err := JWTSecretFromEnv()
+	if err != nil || got != strings.Repeat("s", 40) {
+		t.Fatalf("got %q %v", got, err)
+	}
+	t.Setenv("JWT_SECRET_FILE", filepath.Join(t.TempDir(), "missing"))
+	if _, err := JWTSecretFromEnv(); err == nil {
+		t.Fatal("missing file accepted")
+	}
+}
+
+func TestConfigWarnsAboutUnknownVariables(t *testing.T) {
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	t.Setenv("SENDORA_SMPT_HOST", "typo.example.com")
+	t.Setenv("SENDORA_LOCAL_LOGIN_ENABLED", "false")
+	newEnv(t)
+	out := buf.String()
+	if !strings.Contains(out, "SENDORA_SMPT_HOST is not a Sendora setting") {
+		t.Fatalf("no warning for a misspelled variable: %s", out)
+	}
+	if !strings.Contains(out, "local login is switched off") {
+		t.Fatalf("no lockout warning: %s", out)
+	}
+	if strings.Contains(out, "SENDORA_LOCAL_LOGIN_ENABLED is not") {
+		t.Fatal("a real setting was reported as unknown")
+	}
 }

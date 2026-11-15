@@ -1,6 +1,6 @@
 # Quick start: Kubernetes (bare minimum)
 
-The minimum to try Sendora in a cluster with [`deploy/kubernetes-minimal.yaml`](../deploy/kubernetes-minimal.yaml): a 2Gi volume, one pod and a service, reached through `kubectl port-forward`. For production (ConfigMap, Secrets, Ingress with HTTPS, hardened pod) follow the full [Kubernetes guide](kubernetes.md).
+The minimum to try Sendora in a cluster with [`deploy/kubernetes-minimal.yaml`](../deploy/kubernetes-minimal.yaml): a 2Gi volume, one pod and a service, reached through `kubectl port-forward`. For production (ConfigMap, Secrets, Ingress with HTTPS, hardened pod) follow the full [Kubernetes guide](https://github.com/mhenderik/sendora/wiki/Kubernetes-Deployment).
 
 [Back to the documentation index](README.md)
 
@@ -80,4 +80,4 @@ This deletes the volume and all data (depending on your StorageClass reclaim pol
 
 ## Next steps
 
-The minimal manifest runs an init container as root once to give the volume to the app user, leaves `APP_URL` unset so any local port-forward address works (set it to your public https:// address when you add an Ingress), and has no HTTPS, mail or sign-in providers configured. Moving on to a real deployment: [Kubernetes guide](kubernetes.md).
+The minimal manifest runs an init container as root once to give the volume to the app user, leaves `APP_URL` unset so any local port-forward address works (set it to your public https:// address when you add an Ingress), and has no HTTPS, mail or sign-in providers configured. Moving on to a real deployment: [Kubernetes guide](https://github.com/mhenderik/sendora/wiki/Kubernetes-Deployment).

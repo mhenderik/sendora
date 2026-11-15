@@ -1,19 +1,10 @@
 # Sendora documentation
 
-- [Quick start](quickstart.md) — Run Sendora in Docker in a few minutes. For a build from source see [Build and development](build.md).
-- [Quick start: Docker](quickstart-docker.md) — One `docker run` command with the published image.
-- [Quick start: Kubernetes](quickstart-kubernetes.md) — Bare-minimum manifest, port-forward, first administrator.
-- [Build, develop and test](build.md) — How to build Sendora from source, run it locally and run the test suites.
-- [Configuration](configuration.md) — Environment variables and runtime settings.
-- [Deployment](deployment.md) — Docker behind HTTPS (see the Kubernetes guide for clusters).
-- [Kubernetes](kubernetes.md) — Step-by-step Kubernetes deployment: ConfigMap and Secrets, first-run setup, Ingress, upgrades, backups and troubleshooting.
-- [Backups, restore and migration](backup-and-migration.md) — Where the data lives, how to back it up and how to move or import a database.
-- [Accounts and authentication](authentication.md) — Two-step verification, password policy, lockout, automatic sign-out and Microsoft Entra ID.
-- [Email, registration and templates](email.md) — Public registration, SMTP, welcome mail, editable templates and notification semantics.
-- [Translations](translations.md) — Translate the interface and the emails through JSON files.
-- [Sharing, uploads and downloads](sharing.md) — Share options, editing, the activity log and the integrity guarantees of uploads and downloads.
-- [Security and limitations](security.md) — Operational security notes and the current limitations.
+The complete documentation lives in the **[wiki](https://github.com/mhenderik/sendora/wiki)**. This folder keeps only:
 
-- [Screenshots](screenshots.md) — The interface with demo data.
+- [Quick start: Docker](quickstart-docker.md) — one `docker run` command with the published image
+- [Quick start: Kubernetes](quickstart-kubernetes.md) — bare-minimum manifest, port-forward, first administrator
+- [Configuration settings](configuration.md) — every `SENDORA_*` variable and setting
+- [Screenshots](screenshots/) — images used by the README and the wiki
 
-Other project files: [README](../README.md), [Security policy](../SECURITY.md), [Contributing](../CONTRIBUTING.md), [Changelog](../CHANGELOG.md), [Third-party notices](../THIRD_PARTY_NOTICES.md), [Example translations](../custom-translations/README.md).
+Main wiki pages: [Installation: Docker Compose](https://github.com/mhenderik/sendora/wiki/Installation-Docker-Compose) · [Docker deployment](https://github.com/mhenderik/sendora/wiki/Docker-Deployment) · [Kubernetes deployment](https://github.com/mhenderik/sendora/wiki/Kubernetes-Deployment) · [Installation: From source](https://github.com/mhenderik/sendora/wiki/Installation-From-Source) · [Configuration](https://github.com/mhenderik/sendora/wiki/Configuration) · [Hardening guide](https://github.com/mhenderik/sendora/wiki/Hardening-Guide) · [Accounts and authentication](https://github.com/mhenderik/sendora/wiki/Accounts-and-Authentication) · [Sharing and transfers](https://github.com/mhenderik/sendora/wiki/Sharing-and-Transfers) · [Email and notifications](https://github.com/mhenderik/sendora/wiki/Email-and-Notifications) · [Translations](https://github.com/mhenderik/sendora/wiki/Translations) · [Upgrades and backups](https://github.com/mhenderik/sendora/wiki/Upgrades-and-Backups) · [Security notes](https://github.com/mhenderik/sendora/wiki/Security-Notes) · [Troubleshooting](https://github.com/mhenderik/sendora/wiki/Troubleshooting) · [FAQ](https://github.com/mhenderik/sendora/wiki/FAQ)
