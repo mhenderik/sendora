@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Quick starts: one-command Docker, bare-minimum Kubernetes manifest
-  (`deploy/kubernetes-minimal.yaml`); screenshots in the documentation.
+  (`deploy/kubernetes-minimal.yaml`, 2Gi volume, storage class check and a
+  hostPath test volume); screenshots in the documentation.
 - Kubernetes example: optional init container for storage that cannot give the
   volume to UID 10001 (kind, minikube, k3s local-path).
 - Fixed: "Max expiry 0 = no maximum" was refused by the settings validation.

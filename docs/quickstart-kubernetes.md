@@ -1,10 +1,38 @@
 # Quick start: Kubernetes (bare minimum)
 
-The minimum to try Sendora in a cluster with [`deploy/kubernetes-minimal.yaml`](../deploy/kubernetes-minimal.yaml): a volume, one pod and a service, reached through `kubectl port-forward`. For production (ConfigMap, Secrets, Ingress with HTTPS, hardened pod) follow the full [Kubernetes guide](kubernetes.md).
+The minimum to try Sendora in a cluster with [`deploy/kubernetes-minimal.yaml`](../deploy/kubernetes-minimal.yaml): a 2Gi volume, one pod and a service, reached through `kubectl port-forward`. For production (ConfigMap, Secrets, Ingress with HTTPS, hardened pod) follow the full [Kubernetes guide](kubernetes.md).
 
 [Back to the documentation index](README.md)
 
 Requirements: `kubectl` access to a cluster with a default StorageClass (any local cluster such as kind, minikube, k3s or Docker Desktop works) and `openssl`.
+
+## 0. Storage
+
+The manifest asks the cluster's **default StorageClass** for a 2Gi volume. Check that there is one:
+
+```sh
+kubectl get storageclass      # one class should show "(default)"
+```
+
+No default class? Either add `storageClassName: <name>` under the PVC's `spec:` in the manifest, or, for a test on one node, create a hostPath volume that the claim binds to:
+
+```yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: sendora-test-pv
+spec:
+  capacity:
+    storage: 2Gi
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  claimRef: { namespace: sendora, name: sendora-data }
+  hostPath:
+    path: /mnt/data/sendora
+    type: DirectoryOrCreate
+```
+
+hostPath volumes live on one node and are meant for tests. Neither hostPath nor most NFS provisioners enforce the size: to really limit storage, set the default storage quota under Admin → Settings (for example 2 GB).
 
 ## 1. Database key and Secret
 

@@ -12,10 +12,13 @@ metadata:
   name: sendora-data
   namespace: sendora
 spec:
+  # No storageClassName: uses the cluster's default StorageClass. Without one, set
+  # it here (kubectl get storageclass) or create a matching PersistentVolume
+  # (see docs/quickstart-kubernetes.md).
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      storage: 10Gi
+      storage: 2Gi # enough for a first try; Sendora's quota is the real limit
 ---
 apiVersion: apps/v1
 kind: Deployment
