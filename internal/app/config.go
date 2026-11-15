@@ -43,6 +43,10 @@ func JWTSecretFromEnv() (string, error) {
 }
 
 // serverEnvNames are the SENDORA_* variables read outside the settings loader.
+// k8sServiceLinkRe matches the variables Kubernetes injects for a Service named
+// "sendora" (enableServiceLinks), which are not settings.
+var k8sServiceLinkRe = regexp.MustCompile(`^SENDORA_(SERVICE_(HOST|PORT)(_[A-Z0-9_]+)?|PORT(_\d+_(TCP|UDP|SCTP)(_(PROTO|PORT|ADDR))?)?)$`)
+
 var serverEnvNames = map[string]bool{
 	"SENDORA_DB_KEY_FILE": true, "SENDORA_DB_INITIALIZE": true, "SENDORA_TRUSTED_PROXIES": true,
 	"SENDORA_SETUP_CODE": true, "SENDORA_FORCE_LOCAL_LOGIN": true, "SENDORA_DISABLE_IP_BANS": true,
@@ -64,7 +68,7 @@ func (s *Server) warnConfig(settingKeys []string) {
 	}
 	for _, kv := range os.Environ() {
 		name := strings.SplitN(kv, "=", 2)[0]
-		if strings.HasPrefix(name, "SENDORA_") && !strings.HasPrefix(name, "SENDORA_PROVIDER_") && !known[name] {
+		if strings.HasPrefix(name, "SENDORA_") && !strings.HasPrefix(name, "SENDORA_PROVIDER_") && !known[name] && !k8sServiceLinkRe.MatchString(name) {
 			log.Printf("WARNING: environment variable %s is not a Sendora setting and is ignored (typo?)", name)
 		}
 	}

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Kubernetes: the startup check no longer warns about the `SENDORA_SERVICE_*` /
+  `SENDORA_PORT_*` variables Kubernetes injects for a Service named `sendora`;
+  the example manifests set `enableServiceLinks: false`.
+
 ## 0.9.1 (2026-11-15)
 
 - `localhost`, `127.0.0.1` and `[::1]` count as the same origin when `APP_URL`

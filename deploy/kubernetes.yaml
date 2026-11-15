@@ -60,6 +60,7 @@ spec:
         app: sendora
     spec:
       automountServiceAccountToken: false
+      enableServiceLinks: false
       terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true

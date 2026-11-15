@@ -125,6 +125,14 @@ func TestConfigWarnsAboutUnknownVariables(t *testing.T) {
 	defer log.SetOutput(os.Stderr)
 	t.Setenv("SENDORA_SMPT_HOST", "typo.example.com")
 	t.Setenv("SENDORA_LOCAL_LOGIN_ENABLED", "false")
+	t.Setenv("SENDORA_SERVICE_HOST", "x")
+	t.Setenv("SENDORA_SERVICE_PORT", "x")
+	t.Setenv("SENDORA_SERVICE_PORT_HTTP", "x")
+	t.Setenv("SENDORA_PORT", "x")
+	t.Setenv("SENDORA_PORT_80_TCP", "x")
+	t.Setenv("SENDORA_PORT_80_TCP_PROTO", "x")
+	t.Setenv("SENDORA_PORT_80_TCP_PORT", "x")
+	t.Setenv("SENDORA_PORT_80_TCP_ADDR", "x")
 	newEnv(t)
 	out := buf.String()
 	if !strings.Contains(out, "SENDORA_SMPT_HOST is not a Sendora setting") {
@@ -132,6 +140,9 @@ func TestConfigWarnsAboutUnknownVariables(t *testing.T) {
 	}
 	if !strings.Contains(out, "local login is switched off") {
 		t.Fatalf("no lockout warning: %s", out)
+	}
+	if strings.Contains(out, "SENDORA_SERVICE_") || strings.Contains(out, "SENDORA_PORT") {
+		t.Fatalf("warned about Kubernetes service links: %s", out)
 	}
 	if strings.Contains(out, "SENDORA_LOCAL_LOGIN_ENABLED is not") {
 		t.Fatal("a real setting was reported as unknown")
