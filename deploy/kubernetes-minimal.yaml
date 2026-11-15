@@ -39,6 +39,8 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       # Quick-start convenience: make the volume owned by the app user. The full
       # manifest leaves this to the storage administrator instead of running as root.
       initContainers:
@@ -48,11 +50,20 @@ spec:
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
           volumeMounts:
             - { name: data, mountPath: /data }
       containers:
         - name: sendora
           image: ghcr.io/mhenderik/sendora:0.9.0
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - { name: http, containerPort: 8080 }
           env:

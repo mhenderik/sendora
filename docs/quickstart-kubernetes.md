@@ -32,7 +32,7 @@ spec:
     type: DirectoryOrCreate
 ```
 
-hostPath volumes live on one node and are meant for tests. Neither hostPath nor most NFS provisioners enforce the size: to really limit storage, set the default storage quota under Admin → Settings (for example 2 GB).
+hostPath volumes live on one node and are meant for tests. On **Talos Linux** only `/var` is writable and `/var/mnt` is reserved for mounted disks: use a path such as `/var/local/sendora` there. With several nodes, add a `nodeAffinity` to the PV so the pod always lands on the node that holds the data. Neither hostPath nor most NFS provisioners enforce the size: to really limit storage, set the default storage quota under Admin → Settings (for example 2 GB).
 
 ## 1. Database key and Secret
 
