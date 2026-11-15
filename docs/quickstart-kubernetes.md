@@ -80,4 +80,4 @@ This deletes the volume and all data (depending on your StorageClass reclaim pol
 
 ## Next steps
 
-The minimal manifest runs an init container as root once to give the volume to the app user, uses `APP_URL=http://localhost:8080` for the port-forward, and has no HTTPS, mail or sign-in providers configured. Moving on to a real deployment: [Kubernetes guide](kubernetes.md).
+The minimal manifest runs an init container as root once to give the volume to the app user, leaves `APP_URL` unset so any local port-forward address works (set it to your public https:// address when you add an Ingress), and has no HTTPS, mail or sign-in providers configured. Moving on to a real deployment: [Kubernetes guide](kubernetes.md).

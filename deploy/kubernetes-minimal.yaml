@@ -71,7 +71,9 @@ spec:
             # "true" only for the first start of a new, empty volume; set it to
             # "false" afterwards (see the quick start).
             - { name: SENDORA_DB_INITIALIZE, value: "true" }
-            - { name: APP_URL, value: "http://localhost:8080" }
+            # No APP_URL here: through kubectl port-forward Sendora then accepts
+            # whatever local address you open (localhost or 127.0.0.1, any port).
+            # Set APP_URL to the public https:// address once you add an Ingress.
           volumeMounts:
             - { name: data, mountPath: /data }
             - { name: database-key, mountPath: /run/secrets/sendora, readOnly: true }
