@@ -10,7 +10,7 @@ const (
 	// ImportMarker exists in the data dir from just before the database swap until
 	// the first successful start afterwards.
 	ImportMarker = "import-pending"
-	// PreImportSuffix is appended to fileshare.db to keep the previous database.
+	// PreImportSuffix is appended to sendora.db to keep the previous database.
 	PreImportSuffix = ".pre-import"
 )
 
@@ -39,13 +39,16 @@ func removeIfExists(p string) error {
 	return nil
 }
 
-// SwapImportedDatabase replaces fileshare.db by the prepared copy at newPath. The
+// SwapImportedDatabase replaces sendora.db by the prepared copy at newPath. The
 // live store MUST already be closed. Sequence: write marker, move the old database
-// to fileshare.db.pre-import, remove the old -wal/-shm, move the new file into
+// to sendora.db.pre-import, remove the old -wal/-shm, move the new file into
 // place (0600, fsync file and directory), then clear DataDir/uploads/*. On failure
 // before completion the previous database is put back and the marker removed.
 func SwapImportedDatabase(dataDir, newPath string) error {
-	db := filepath.Join(dataDir, "fileshare.db")
+	db, err := DBPath(dataDir)
+	if err != nil {
+		return err
+	}
 	pre := db + PreImportSuffix
 	marker := filepath.Join(dataDir, ImportMarker)
 	if err := os.WriteFile(marker, []byte("pending\n"), 0o600); err != nil {
@@ -117,8 +120,8 @@ func clearUploads(dataDir string) error {
 
 // OpenEncryptedRecovering is OpenEncrypted plus recovery from an interrupted or
 // failed import swap. With the marker present: if the database opens, marker and
-// fileshare.db.pre-import are removed; if it does not, the previous database is
-// restored from fileshare.db.pre-import (when present) and opened instead.
+// sendora.db.pre-import are removed; if it does not, the previous database is
+// restored from sendora.db.pre-import (when present) and opened instead.
 func OpenEncryptedRecovering(dataDir string, key []byte, initialize bool, logf func(string, ...any)) (*Store, error) {
 	if logf == nil {
 		logf = func(string, ...any) {}
@@ -127,7 +130,10 @@ func OpenEncryptedRecovering(dataDir string, key []byte, initialize bool, logf f
 	if _, err := os.Stat(marker); err != nil {
 		return OpenEncrypted(dataDir, key, initialize)
 	}
-	db := filepath.Join(dataDir, "fileshare.db")
+	db, err := DBPath(dataDir)
+	if err != nil {
+		return nil, err
+	}
 	pre := db + PreImportSuffix
 	st, err := OpenEncrypted(dataDir, key, false)
 	if err == nil {

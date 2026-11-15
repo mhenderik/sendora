@@ -38,7 +38,7 @@ func TestEncryptedBackupAPIAndLegacyRetention(t *testing.T) {
 	if _, err := store.VerifyDatabase(filepath.Join(st.DataDir, "backups", name), nil); err == nil {
 		t.Fatal("backup readable without key")
 	}
-	legacy := filepath.Join(st.DataDir, "backups", "fileshare-20200101-000000.db")
+	legacy := filepath.Join(st.DataDir, "backups", "sendora-plain-20200101-000000.db")
 	if err := os.WriteFile(legacy, []byte("legacy-placeholder"), 0600); err != nil {
 		t.Fatal(err)
 	}

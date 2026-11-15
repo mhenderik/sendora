@@ -115,7 +115,10 @@ func OpenEncrypted(dataDir string, key []byte, initialize bool) (*Store, error) 
 	if len(key) != 32 {
 		return nil, errors.New("database key must contain 32 bytes")
 	}
-	p := filepath.Join(dataDir, "fileshare.db")
+	p, err := DBPath(dataDir)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.Open(p)
 	if os.IsNotExist(err) {
 		if !initialize {

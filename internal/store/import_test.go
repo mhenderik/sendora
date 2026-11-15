@@ -23,7 +23,7 @@ func preparedCopy(t *testing.T, mutate func(*Store)) string {
 		mutate(st)
 	}
 	st.Close()
-	return filepath.Join(dir, "fileshare.db")
+	return filepath.Join(dir, "sendora.db")
 }
 
 func TestPrepareImportedCountsAndStaleUploads(t *testing.T) {
@@ -125,7 +125,7 @@ func TestSwapImportedDatabaseFiles(t *testing.T) {
 	if _, err := PrepareImported(staged, impKeyA, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	db := filepath.Join(dir, "fileshare.db")
+	db := filepath.Join(dir, "sendora.db")
 	oldBytes, _ := os.ReadFile(db)
 	// Stale sidecars from the old database must go; uploads are emptied.
 	os.WriteFile(db+"-wal", []byte("w"), 0o600)
@@ -176,7 +176,7 @@ func TestSwapMissingNewFileRollsBack(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ImportMarker)); err == nil {
 		t.Fatal("marker kept")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "fileshare.db"+PreImportSuffix)); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, "sendora.db"+PreImportSuffix)); err == nil {
 		t.Fatal(".pre-import kept")
 	}
 	st, err := OpenEncrypted(dir, impKeyA, false)
@@ -199,7 +199,7 @@ func TestRecoveryRestoresPreviousDatabaseWhenImportedOneFails(t *testing.T) {
 	}
 	o.Close()
 	staged := filepath.Join(dir, "backups", ".import-bad.new")
-	data, _ := os.ReadFile(filepath.Join(other, "fileshare.db"))
+	data, _ := os.ReadFile(filepath.Join(other, "sendora.db"))
 	os.WriteFile(staged, data, 0o600)
 	if err := SwapImportedDatabase(dir, staged); err != nil {
 		t.Fatal(err)
@@ -214,7 +214,7 @@ func TestRecoveryRestoresPreviousDatabaseWhenImportedOneFails(t *testing.T) {
 	if userNames(t, st) != "liveuser" {
 		t.Fatal("previous database not restored")
 	}
-	for _, p := range []string{ImportMarker, "fileshare.db" + PreImportSuffix} {
+	for _, p := range []string{ImportMarker, "sendora.db" + PreImportSuffix} {
 		if _, err := os.Stat(filepath.Join(dir, p)); err == nil {
 			t.Fatalf("%s kept", p)
 		}
@@ -243,7 +243,7 @@ func TestRecoveryCleansUpAfterSuccessfulImport(t *testing.T) {
 	if userNames(t, st) != "importedadmin" {
 		t.Fatal("imported database not used")
 	}
-	for _, p := range []string{ImportMarker, "fileshare.db" + PreImportSuffix} {
+	for _, p := range []string{ImportMarker, "sendora.db" + PreImportSuffix} {
 		if _, err := os.Stat(filepath.Join(dir, p)); err == nil {
 			t.Fatalf("%s kept", p)
 		}
@@ -253,13 +253,13 @@ func TestRecoveryCleansUpAfterSuccessfulImport(t *testing.T) {
 func TestRecoveryWithoutMarkerIsPlainOpen(t *testing.T) {
 	dir, _ := liveDir(t)
 	// A stray .pre-import without marker is left alone; a missing DB is not recreated.
-	os.WriteFile(filepath.Join(dir, "fileshare.db"+PreImportSuffix), []byte("x"), 0o600)
+	os.WriteFile(filepath.Join(dir, "sendora.db"+PreImportSuffix), []byte("x"), 0o600)
 	st, err := OpenEncryptedRecovering(dir, impKeyA, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	st.Close()
-	if _, err := os.Stat(filepath.Join(dir, "fileshare.db"+PreImportSuffix)); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "sendora.db"+PreImportSuffix)); err != nil {
 		t.Fatal("unmarked .pre-import removed")
 	}
 	if _, err := OpenEncryptedRecovering(t.TempDir(), impKeyA, false, nil); err == nil {

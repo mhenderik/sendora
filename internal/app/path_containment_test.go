@@ -41,7 +41,7 @@ func TestTamperedRecordsNeverEscapeShareDirectory(t *testing.T) {
 	e.s.St.DB.QueryRow(`SELECT MIN(id) FROM files WHERE share_id=?`, aid).Scan(&fileID)
 
 	// 1) disk_path pointing elsewhere (absolute, traversal) must not be read.
-	for _, evil := range []string{"/etc/hosts", outside, "../../canary.txt", "../../fileshare.db", ""} {
+	for _, evil := range []string{"/etc/hosts", outside, "../../canary.txt", "../../sendora.db", ""} {
 		if _, err := e.s.St.DB.Exec(`UPDATE files SET disk_path=? WHERE id=?`, evil, fileID); err != nil {
 			t.Fatal(err)
 		}
@@ -79,7 +79,7 @@ func TestTamperedRecordsNeverEscapeShareDirectory(t *testing.T) {
 		}
 		e.do("DELETE", fmt.Sprintf("/api/shares/%d", bid), admin, nil)
 		os.RemoveAll(real)
-		for _, must := range []string{secret, filepath.Join(data, "fileshare.db"), victimFile(t, data, vlid)} {
+		for _, must := range []string{secret, filepath.Join(data, "sendora.db"), victimFile(t, data, vlid)} {
 			if _, err := os.Stat(must); err != nil {
 				t.Fatalf("long_id %q deletion destroyed %s: %v", lid, must, err)
 			}
@@ -94,7 +94,7 @@ func TestTamperedRecordsNeverEscapeShareDirectory(t *testing.T) {
 	e.s.St.DB.QueryRow(`SELECT id FROM users WHERE username='tamper'`).Scan(&uid)
 	e.s.St.DB.Exec(`UPDATE shares SET long_id='..' WHERE user_id=?`, uid)
 	e.do("DELETE", fmt.Sprintf("/api/users/%d", uid), admin, nil)
-	for _, must := range []string{secret, filepath.Join(data, "fileshare.db"), victimFile(t, data, vlid)} {
+	for _, must := range []string{secret, filepath.Join(data, "sendora.db"), victimFile(t, data, vlid)} {
 		if _, err := os.Stat(must); err != nil {
 			t.Fatalf("user deletion destroyed %s: %v", must, err)
 		}

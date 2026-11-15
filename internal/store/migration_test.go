@@ -11,7 +11,7 @@ import (
 
 func TestAdditiveMigrationPreservesExistingData(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "fileshare.db"))
+	db, err := sql.Open("sqlite", filepath.Join(dir, "sendora.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,13 @@
 - Startup warnings for unknown `SENDORA_*` variables (typos) and for a
   configuration that switches local login off without an enabled provider.
 - Compose Caddyfile: backup import allows up to 4GB, other requests 100MB.
+- The database file is now `sendora.db`. On the first start after the upgrade,
+  Sendora renames an existing `fileshare.db` (with its `-wal`, `-shm` and
+  `.pre-import` files) once and logs it; with both names present it refuses to
+  start. Update scripts that call `sendora-db -source .../fileshare.db`.
+- Removed: the `FILESHARE_VERIFIED_DOWNLOAD_MAX_BYTES` alias (use
+  `SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES`), and listing of old `fileshare-*.db`
+  plaintext backups in the admin screen.
 - Quick starts: one-command Docker, bare-minimum Kubernetes manifest
   (`deploy/kubernetes-minimal.yaml`, 2Gi volume, storage class check and a
   hostPath test volume); screenshots in the documentation.

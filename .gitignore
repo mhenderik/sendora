@@ -1,7 +1,6 @@
 # Runtime data and secrets: never commit
 /data/
 /sendora-data/
-/fileshare-data/
 *.db
 *.db-wal
 *.db-shm
@@ -15,7 +14,6 @@ database.key
 # Build output
 /sendora
 /sendora-db
-/fileshare
 web/dist/
 coverage/
 *.test

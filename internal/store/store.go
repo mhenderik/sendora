@@ -186,7 +186,10 @@ func openStore(dataDir string, key []byte) (*Store, error) {
 			return nil, err
 		}
 	}
-	p := filepath.Join(dataDir, "fileshare.db")
+	p, err := DBPath(dataDir)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err

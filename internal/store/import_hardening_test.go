@@ -97,7 +97,7 @@ func TestPrepareImportedRebasesDiskPaths(t *testing.T) {
 	p := preparedCopy(t, func(st *Store) {
 		st.DB.Exec(`INSERT INTO shares(user_id,long_id) VALUES(1,?)`, lid)
 		st.DB.Exec(`INSERT INTO files(share_id,name,full_path,disk_path) VALUES(1,'a','a','/etc/hosts')`)
-		st.DB.Exec(`INSERT INTO files(share_id,name,full_path,disk_path) VALUES(1,'b','b','../../fileshare.db')`)
+		st.DB.Exec(`INSERT INTO files(share_id,name,full_path,disk_path) VALUES(1,'b','b','../../sendora.db')`)
 		st.DB.Exec(`INSERT INTO files(share_id,name,full_path,disk_path) VALUES(1,'c','c','/old/env/data/shares/cccccccccccccccc/0_c.txt')`)
 	})
 	if _, err := PrepareImported(p, impKeyA, dataDir); err != nil {
@@ -113,7 +113,7 @@ func TestPrepareImportedRebasesDiskPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	want := []string{"hosts", "fileshare.db", "0_c.txt"}
+	want := []string{"hosts", "sendora.db", "0_c.txt"}
 	i := 0
 	for rows.Next() {
 		var got string

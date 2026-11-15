@@ -1,7 +1,7 @@
 # Never send local data, secrets or build output into the image build.
 **/data
 **/sendora-data
-**/fileshare-data
+**/sendora-data
 **/*.db
 **/*.db-wal
 **/*.db-shm

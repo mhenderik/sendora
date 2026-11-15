@@ -682,7 +682,7 @@ func TestBranding(t *testing.T) {
 	if !strings.Contains(string(e.do("GET", "/api/backgrounds", "", nil).Body), bg.S("name")) {
 		t.Fatal("bg list")
 	}
-	e.want(e.do("GET", "/api/backgrounds/..%2f..%2ffileshare.db", "", nil), 404, "bg traversal")
+	e.want(e.do("GET", "/api/backgrounds/..%2f..%2fsendora.db", "", nil), 404, "bg traversal")
 	e.want(e.do("DELETE", "/api/backgrounds/"+bg.S("name"), tok, nil), 200, "del bg")
 	e.want(e.do("DELETE", "/api/settings/branding/logo", tok, nil), 200, "del logo")
 	e.want(e.do("GET", "/api/branding/logo", "", nil), 404, "logo gone")
@@ -707,7 +707,7 @@ func TestBackups(t *testing.T) {
 		t.Fatal("not sqlite")
 	}
 	e.want(e.do("GET", "/api/backups/..%2fjwt", tok, nil), 404, "traversal")
-	e.want(e.do("GET", "/api/backups/fileshare.db", tok, nil), 404, "live db not downloadable")
+	e.want(e.do("GET", "/api/backups/sendora.db", tok, nil), 404, "live db not downloadable")
 	e.want(e.do("DELETE", "/api/backups/"+n, tok, nil), 200, "delete")
 	e.want(e.do("GET", "/api/backups/"+n, tok, nil), 404, "gone")
 }

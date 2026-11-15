@@ -100,7 +100,7 @@ func foreignDB(t *testing.T, key []byte, mutate func(*store.Store)) []byte {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "fileshare.db"))
+	b, err := os.ReadFile(filepath.Join(dir, "sendora.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestImportRejections(t *testing.T) {
 		st, _ := store.OpenEncrypted(dir, otherKey, true)
 		st.DB.Exec(`DROP TABLE files`)
 		st.Close()
-		b, _ := os.ReadFile(filepath.Join(dir, "fileshare.db"))
+		b, _ := os.ReadFile(filepath.Join(dir, "sendora.db"))
 		return b
 	}()
 	hexOther := impPart{"key_hex", "", []byte(hex.EncodeToString(otherKey))}
@@ -464,7 +464,7 @@ func TestImportApplyFlow(t *testing.T) {
 	e.s.importExit = func(c int) { rec.mu.Lock(); rec.exit = append(rec.exit, c); rec.mu.Unlock() }
 	e.s.importExec = func() error {
 		rec.add("exec")
-		db := filepath.Join(dataDir, "fileshare.db")
+		db := filepath.Join(dataDir, "sendora.db")
 		for _, p := range []string{db + "-wal", db + "-shm"} {
 			if _, err := os.Stat(p); err == nil {
 				t.Errorf("%s still present at exec", p)
@@ -604,7 +604,7 @@ func TestImportApplyFlow(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, store.ImportMarker)); err == nil {
 		t.Fatal("marker kept after successful start")
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "fileshare.db"+store.PreImportSuffix)); err == nil {
+	if _, err := os.Stat(filepath.Join(dataDir, "sendora.db"+store.PreImportSuffix)); err == nil {
 		t.Fatal(".pre-import kept after successful start")
 	}
 	s2 := New(st2, fstest.MapFS{"index.html": {Data: []byte("x")}}, "test")

@@ -569,7 +569,7 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 
 // ---------- backups ----------
 
-var backupRe = regexp.MustCompile(`^(?:fileshare-\d{8}-\d{6}|sendora-(?:encrypted|preimport)-\d{8}-\d{6}-[a-f0-9]{12})\.db$`)
+var backupRe = regexp.MustCompile(`^(?:sendora-plain-\d{8}-\d{6}|sendora-(?:encrypted|preimport)-\d{8}-\d{6}-[a-f0-9]{12})\.db$`)
 
 func (s *Server) makeBackup() (string, error) { return s.makeBackupAs("sendora-encrypted-") }
 
@@ -590,7 +590,7 @@ func (s *Server) makeBackupAs(prefix string) (string, error) {
 		return name, nil
 	}
 	// Explicit plaintext fixtures only; production entrypoint requires SQLCipher.
-	name := "fileshare-" + time.Now().Format("20060102-150405") + ".db"
+	name := "sendora-plain-" + time.Now().Format("20060102-150405") + ".db"
 	p := filepath.Join(s.St.DataDir, "backups", name)
 	if _, err := s.St.DB.Exec(`VACUUM INTO ?`, p); err != nil {
 		return "", err

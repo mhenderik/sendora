@@ -107,10 +107,8 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 
 func snapshotLimit() int64 {
 	// A single ZIP may need slightly more disk than the total source size.
-	for _, name := range []string{"SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES", "FILESHARE_VERIFIED_DOWNLOAD_MAX_BYTES"} {
-		if n, err := strconv.ParseInt(os.Getenv(name), 10, 64); err == nil && n > 0 {
-			return n
-		}
+	if n, err := strconv.ParseInt(os.Getenv("SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES"), 10, 64); err == nil && n > 0 {
+		return n
 	}
 	return 16 << 30
 }

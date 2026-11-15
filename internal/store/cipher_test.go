@@ -25,7 +25,7 @@ func TestCipherInitializationAndFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.DB.Close()
-	original, _ := os.ReadFile(filepath.Join(dir, "fileshare.db"))
+	original, _ := os.ReadFile(filepath.Join(dir, "sendora.db"))
 	if bytes.HasPrefix(original, []byte("SQLite format 3")) || bytes.Contains(original, []byte("private-marker")) {
 		t.Fatal("plaintext database")
 	}
@@ -33,7 +33,7 @@ func TestCipherInitializationAndFailClosed(t *testing.T) {
 		if _, err := OpenEncrypted(dir, wrong, false); err == nil {
 			t.Fatal("accepted missing/wrong key")
 		}
-		now, _ := os.ReadFile(filepath.Join(dir, "fileshare.db"))
+		now, _ := os.ReadFile(filepath.Join(dir, "sendora.db"))
 		if !bytes.Equal(original, now) {
 			t.Fatal("failed open changed database")
 		}
@@ -107,7 +107,7 @@ func TestCipherPlaintextMigrationAndBackup(t *testing.T) {
 		t.Fatal(version, err)
 	}
 	before, _ := os.ReadFile(destination)
-	if err := ExportDatabase(filepath.Join(dir, "fileshare.db"), destination, nil, key); err == nil {
+	if err := ExportDatabase(filepath.Join(dir, "sendora.db"), destination, nil, key); err == nil {
 		t.Fatal("overwrote export")
 	}
 	after, _ := os.ReadFile(destination)
