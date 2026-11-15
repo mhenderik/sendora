@@ -212,6 +212,7 @@
  "Issuer URL",
  "It is required for your account.",
  "Keep an activity log (administrators only, no IP addresses)",
+ "Kubernetes: kubectl -n sendora logs deploy/sendora. Without containers: the service output or journal. You can also choose your own code with SENDORA_SETUP_CODE (at least 12 characters).",
  "Language",
  "Language added; translate the templates below.",
  "Language code",

@@ -41,7 +41,7 @@ docker run -d --name sendora -p 127.0.0.1:8080:8080 \
 docker logs sendora | grep "setup code"
 ```
 
-Open http://localhost:8080, enter the setup code and create the administrator account.
+Open http://localhost:8080, enter the setup code and create the administrator account. The code is printed only while no account exists and changes on every restart: always use the last line. More ways to find it: [First-run setup code](https://github.com/mhenderik/sendora/wiki/Accounts-and-Authentication#first-run-setup-code).
 
 ## 4. Later starts
 

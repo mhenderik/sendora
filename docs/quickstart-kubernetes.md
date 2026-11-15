@@ -60,7 +60,7 @@ kubectl -n sendora logs deploy/sendora | grep "setup code"
 kubectl -n sendora port-forward svc/sendora 8080:80
 ```
 
-Open http://localhost:8080, enter the setup code and create the administrator account.
+Open http://localhost:8080, enter the setup code and create the administrator account. The code is printed only while no account exists and changes on every pod restart: use the last line, from the log of the running pod (also when Argo CD or Flux deploys Sendora). More details: [First-run setup code](https://github.com/mhenderik/sendora/wiki/Accounts-and-Authentication#first-run-setup-code).
 
 ## 4. After the first start
 

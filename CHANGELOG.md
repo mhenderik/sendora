@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Setup page: a second hint says where the setup code is on Kubernetes and without
+  containers, and that `SENDORA_SETUP_CODE` sets a fixed code. The documentation
+  has a section "First-run setup code" (wiki) that the quick starts link to.
 - Kubernetes: the startup check no longer warns about the `SENDORA_SERVICE_*` /
   `SENDORA_PORT_*` variables Kubernetes injects for a Service named `sendora`;
   the example manifests set `enableServiceLinks: false`.
