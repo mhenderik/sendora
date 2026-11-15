@@ -30,7 +30,7 @@ What that means for you:
 - Optional administrator activity log with a retention of at most 24 hours (no IP addresses) and CSV export, and an optional external-login-only mode with lockout protection.
 - Branding uploads (logo, favicon, backgrounds) that can each be deleted again, plus a choice of five bundled CC0 background photos (and an illustration), or no background at all, bundled/custom themes, and English, Dutch, German, French, and Spanish menus with per-account preferences.
 - SHA-256 upload checks and server-prepared download snapshots with browser-side verification.
-- Optional multi-factor authentication for local accounts: authenticator-app codes (TOTP) with one-time recovery codes, set globally and overridable per user (passkeys are planned).
+- Optional multi-factor authentication for local accounts: authenticator-app codes (TOTP) with one-time recovery codes, and passkeys or security keys (WebAuthn), set globally and overridable per user.
 
 ## Screenshots
 

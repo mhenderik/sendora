@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -239,7 +240,33 @@ func (s *Server) sameOrigin(r *http.Request, origin string) bool {
 		expected = scheme + "://" + r.Host
 	}
 	e, err := url.Parse(expected)
-	return err == nil && u.Scheme == e.Scheme && strings.EqualFold(u.Host, e.Host)
+	if err != nil || u.Scheme != e.Scheme {
+		return false
+	}
+	if strings.EqualFold(u.Host, e.Host) {
+		return true
+	}
+	// localhost, 127.0.0.0/8 and ::1 reach the same local server: treat them as
+	// one origin when the configured address is loopback, on the same port.
+	return isLoopbackHost(u.Hostname()) && isLoopbackHost(e.Hostname()) && originPort(u) == originPort(e)
+}
+
+func isLoopbackHost(h string) bool {
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+func originPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	return "80"
 }
 
 func (s *Server) secureCookies(r *http.Request) bool {

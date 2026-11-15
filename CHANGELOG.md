@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.9.1 (2026-11-15)
 
+- `localhost`, `127.0.0.1` and `[::1]` count as the same origin when `APP_URL`
+  is a loopback address (same scheme and port), so local and port-forward
+  tests work from either address.
 - Documentation moved to the [wiki](https://github.com/mhenderik/sendora/wiki):
   configuration reference, Docker and Kubernetes deployment, hardening guide,
   security notes, upgrades and backups, developer docs. The repository keeps the

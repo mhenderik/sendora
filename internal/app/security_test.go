@@ -164,3 +164,30 @@ func TestResourceAndFileSecurity(t *testing.T) {
 		t.Fatal("legacy secret group leaks signing key")
 	}
 }
+
+func TestSameOriginLoopbackAliases(t *testing.T) {
+	e := newEnv(t)
+	r := httptest.NewRequest(http.MethodPost, "http://localhost:9090/api/auth/login", nil)
+	cases := []struct {
+		base, origin string
+		want         bool
+	}{
+		{"http://localhost:9090", "http://localhost:9090", true},
+		{"http://localhost:9090", "http://127.0.0.1:9090", true},
+		{"http://localhost:9090", "http://[::1]:9090", true},
+		{"http://127.0.0.1:9090", "http://LOCALHOST:9090", true},
+		{"http://localhost", "http://127.0.0.1:80", true},
+		{"http://localhost:9090", "http://127.0.0.1:9091", false},  // other port
+		{"http://localhost:9090", "https://127.0.0.1:9090", false}, // other scheme
+		{"http://localhost:9090", "http://localhost.attacker.example:9090", false},
+		{"http://localhost:9090", "http://192.168.1.10:9090", false},
+		{"https://files.example.com", "https://127.0.0.1", false}, // public APP_URL: no aliasing
+		{"https://files.example.com", "https://localhost", false},
+	}
+	for _, c := range cases {
+		e.s.BaseURL = c.base
+		if got := e.s.sameOrigin(r, c.origin); got != c.want {
+			t.Errorf("base %s origin %s: got %v, want %v", c.base, c.origin, got, c.want)
+		}
+	}
+}
