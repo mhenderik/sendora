@@ -7,7 +7,7 @@ export const emailLanguages = reactive({ ...languages })
 // Optional per-page title prefix (upload progress, share name); App.vue combines it with the application name.
 export const pageTitle = ref('')
 
-export const app = reactive({ boot: null, theme: null, backgrounds: [] })
+export const app = reactive({ boot: null, theme: null, backgrounds: [], version: '' })
 
 // Pick the higher-contrast foreground for both bright and dark custom accents.
 export function contrastText(color) {

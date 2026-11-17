@@ -833,7 +833,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	}
 	u.QuotaBytes, u.QuotaInheritsDefault = usage.QuotaBytes, usage.QuotaInheritsDefault
 	s.fillMFA(u)
-	jout(w, 200, map[string]any{"user": u, "providers": linked, "has_password": u.passwordHash != "", "quota_inherits_default": usage.QuotaInheritsDefault, "quota_bytes": usage.QuotaBytes, "storage_used_bytes": usage.StoredBytes, "storage_reserved_bytes": usage.ReservedBytes, "storage_available_bytes": usage.AvailableBytes})
+	jout(w, 200, map[string]any{"version": s.Version, "user": u, "providers": linked, "has_password": u.passwordHash != "", "quota_inherits_default": usage.QuotaInheritsDefault, "quota_bytes": usage.QuotaBytes, "storage_used_bytes": usage.StoredBytes, "storage_reserved_bytes": usage.ReservedBytes, "storage_available_bytes": usage.AvailableBytes})
 }
 
 func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {

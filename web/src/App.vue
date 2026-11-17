@@ -22,6 +22,14 @@ watchEffect(() => {
   document.title = pageTitle.value ? pageTitle.value + ' – ' + name : name
 })
 
+// The running version is shown in the footer to signed-in users only; public pages never expose it.
+watch(() => session.user?.id, async id => {
+  app.version = ''
+  if (!id) return
+  try { const v = (await api('/users/me')).version; if (session.user?.id === id) app.version = v || '' } catch {}
+}, { immediate: true })
+const versionLabel = computed(() => !session.user || !app.version ? '' : /^\d/.test(app.version) ? 'v' + app.version : app.version)
+
 const languageBusy = ref(false), languageError = ref('')
 watch(() => [session.user?.id, session.user?.ui_language], () => {
   if (session.user?.ui_language) setLang(session.user.ui_language)
@@ -116,7 +124,7 @@ watch(() => app.boot?.idle_logout_minutes, () => { if (monitor) monitor.setLimit
     </div>
     <main><p v-if="languageError" class="err" role="alert">{{ languageError }}</p><router-view :key="route.fullPath" /></main>
     <footer class="foot">
-      <p>{{ t('© {year} Sendora contributors', { year: new Date().getFullYear() }) }} · {{ t('Open source') }} · MIT License</p>
+      <p>{{ t('© {year} Sendora contributors', { year: new Date().getFullYear() }) }} · {{ t('Open source') }} · MIT License<template v-if="versionLabel"> · {{ versionLabel }}</template></p>
       <select v-if="app.boot?.show_language_selector && !session.user" :value="lang" @change="chooseLanguage($event.target.value)" :disabled="languageBusy" :aria-label="t('Language')">
         <option v-for="(n, k) in languages" :key="k" :value="k">{{ n }}</option>
       </select>
