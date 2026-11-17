@@ -21,7 +21,25 @@ sudo chown 10001:10001 data && sudo chmod 700 data
 sudo chown root:10001 database.key && sudo chmod 0440 database.key
 ```
 
-(Docker Desktop on macOS and Windows handles this itself.)
+(Docker Desktop on macOS handles this itself. On Windows use the PowerShell steps below.)
+
+### Windows (PowerShell)
+
+On Windows (Docker Desktop, Windows PowerShell 5.1 or PowerShell 7) keep the key and the data in Docker volumes instead of Windows folders. Sendora refuses a key file that other users could read, and files from a Windows folder cannot show that reliably; volumes created from inside Docker can. The key is created inside a small throw-away container:
+
+```powershell
+docker volume create sendora-key
+docker volume create sendora-data
+docker run --rm -v sendora-key:/k alpine sh -c "umask 077 && head -c 32 /dev/urandom > /k/database.key && chown -R 10001:10001 /k"
+```
+
+Copy the key to the current folder, then store that copy somewhere safe (password manager, offline storage):
+
+```powershell
+docker run --rm -v sendora-key:/k -v "${PWD}:/out" alpine cp /k/database.key /out/database.key
+```
+
+Do not delete the `sendora-key` volume: without the key the data cannot be read.
 
 ## 2. Start
 
@@ -33,6 +51,21 @@ docker run -d --name sendora -p 127.0.0.1:8080:8080 \
   -e SENDORA_DB_INITIALIZE=true \
   -e APP_URL=http://localhost:8080 \
   ghcr.io/mhenderik/sendora:0.1.3
+```
+
+### Windows (PowerShell)
+
+The backtick (`` ` ``) continues a command on the next line:
+
+```powershell
+docker run -d --name sendora -p 127.0.0.1:8080:8080 `
+  -v sendora-data:/data `
+  -v sendora-key:/run/secrets:ro `
+  -e SENDORA_DB_KEY_FILE=/run/secrets/database.key `
+  -e SENDORA_DB_INITIALIZE=true `
+  -e APP_URL=http://localhost:8080 `
+  ghcr.io/mhenderik/sendora:0.1.3
+docker logs sendora | Select-String "setup code"
 ```
 
 ## 3. Create the administrator
@@ -57,7 +90,19 @@ docker run -d --name sendora --restart unless-stopped -p 127.0.0.1:8080:8080 \
   ghcr.io/mhenderik/sendora:0.1.3
 ```
 
-Any admin setting can be added as `-e SENDORA_<SETTING>=value` (see [Configuration](configuration.md#settings-from-a-configmap-or-environment-variables)). To stop: `docker rm -f sendora`; your data stays in `data/`.
+Windows (PowerShell):
+
+```powershell
+docker rm -f sendora
+docker run -d --name sendora --restart unless-stopped -p 127.0.0.1:8080:8080 `
+  -v sendora-data:/data `
+  -v sendora-key:/run/secrets:ro `
+  -e SENDORA_DB_KEY_FILE=/run/secrets/database.key `
+  -e APP_URL=http://localhost:8080 `
+  ghcr.io/mhenderik/sendora:0.1.3
+```
+
+Any admin setting can be added as `-e SENDORA_<SETTING>=value` (see [Configuration](configuration.md#settings-from-a-configmap-or-environment-variables)). To stop: `docker rm -f sendora`; your data stays in `data/` (on Windows: in the `sendora-data` volume).
 
 ## Next steps
 
