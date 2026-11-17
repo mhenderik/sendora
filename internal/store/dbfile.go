@@ -10,13 +10,13 @@ import (
 // DBFile is the name of the database inside the data directory.
 const DBFile = "sendora.db"
 
-// legacyDBFile is the database name used by 0.9.0. It is only read to migrate.
+// legacyDBFile is the database name used by earlier releases. It is only read to migrate.
 const legacyDBFile = "fileshare.db"
 
 // dbSidecars are the files that belong to the database and move with it.
 var dbSidecars = []string{"-wal", "-shm", PreImportSuffix}
 
-// DBPath returns the database path in dataDir, first renaming a 0.9.0 database
+// DBPath returns the database path in dataDir, first renaming an old database
 // (and its -wal, -shm and .pre-import files) once. Sidecars move before the main
 // file, so an interrupted rename resumes at the next start without separating
 // the database from its write-ahead log. With both names present it refuses to
