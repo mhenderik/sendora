@@ -32,7 +32,7 @@ docker run -d --name sendora -p 127.0.0.1:8080:8080 \
   -e SENDORA_DB_KEY_FILE=/run/secrets/database.key \
   -e SENDORA_DB_INITIALIZE=true \
   -e APP_URL=http://localhost:8080 \
-  ghcr.io/mhenderik/sendora:0.1.2
+  ghcr.io/mhenderik/sendora:0.1.3
 ```
 
 ## 3. Create the administrator
@@ -54,7 +54,7 @@ docker run -d --name sendora --restart unless-stopped -p 127.0.0.1:8080:8080 \
   -v "$PWD/database.key:/run/secrets/database.key:ro" \
   -e SENDORA_DB_KEY_FILE=/run/secrets/database.key \
   -e APP_URL=http://localhost:8080 \
-  ghcr.io/mhenderik/sendora:0.1.2
+  ghcr.io/mhenderik/sendora:0.1.3
 ```
 
 Any admin setting can be added as `-e SENDORA_<SETTING>=value` (see [Configuration](configuration.md#settings-from-a-configmap-or-environment-variables)). To stop: `docker rm -f sendora`; your data stays in `data/`.

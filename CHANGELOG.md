@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.3 (2026-11-17)
+
 - The running version is shown in the footer for signed-in users (`/api/users/me`
   returns `version`). Public pages and endpoints still do not expose it.
 
