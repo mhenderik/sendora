@@ -194,8 +194,9 @@ func TestAppendAccessRules(t *testing.T) {
 	// Listing/removal rules.
 	e.want(e.do("GET", fmt.Sprintf("/api/shares/%d/files", sid), bob, nil), 404, "list other")
 	e.want(e.do("GET", fmt.Sprintf("/api/shares/%d/files", sid), "", nil), 401, "list anon")
-	if n := len(e.listFiles(admin, sid)); n != 2 {
-		t.Fatalf("admin list %d", n)
+	e.want(e.do("GET", fmt.Sprintf("/api/shares/%d/files", sid), admin, nil), 404, "admin cannot list another user's files")
+	if n := len(e.listFiles(alice, sid)); n != 2 {
+		t.Fatalf("owner list %d", n)
 	}
 	// Guest cannot append.
 	inv := e.do("POST", "/api/reverse-shares/invite", alice, map[string]any{"name": "g"})
@@ -373,8 +374,9 @@ func TestRemoveShareFile(t *testing.T) {
 	}
 	e.want(e.do("GET", fmt.Sprintf("/api/shares/%d/downloads", sid), alice, nil), 200, "history readable")
 	quotaUsage(t, e, uid, store.StorageUsage{QuotaBytes: 10000000000, QuotaInheritsDefault: true, StoredBytes: 6, AvailableBytes: 10000000000 - 6})
-	// Admin may remove; last file is refused.
-	e.want(del(admin, byPath["c.txt"].ID), 200, "admin remove")
+	// Admin may not remove another user's file; the owner may. Last file is refused.
+	e.want(del(admin, byPath["c.txt"].ID), 404, "admin remove")
+	e.want(del(alice, byPath["c.txt"].ID), 200, "owner remove")
 	last := del(alice, byPath["a.txt"].ID)
 	e.want(last, 409, "last file")
 	if last.S("error") != "a share needs at least one file" {

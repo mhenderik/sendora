@@ -8,6 +8,8 @@ func (s *Store) migrateIntegrity() error {
 		{"upload_files", "sha256", "TEXT NOT NULL DEFAULT ''"},
 		{"files", "sha256", "TEXT NOT NULL DEFAULT ''"},
 		{"files", "integrity", "TEXT NOT NULL DEFAULT 'server_baseline'"},
+		// enc=1: the stored file is chunked AES-256-GCM (internal/filecrypt).
+		{"files", "enc", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		rows, err := s.DB.Query("PRAGMA table_info(" + column.table + ")")
 		if err != nil {

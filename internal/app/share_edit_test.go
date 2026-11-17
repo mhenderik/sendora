@@ -232,8 +232,9 @@ func TestEditShareOwnership(t *testing.T) {
 		t.Fatal("modified by non-owner")
 	}
 	e.want(e.do("PUT", p, alice, map[string]any{"name": "mine"}), 200, "owner")
-	e.want(e.do("PUT", p, admin, map[string]any{"name": "by admin", "password": "adminset"}), 200, "admin")
-	if s := e.shareRow(id); s.Name != "by admin" || !s.Protected || !s.userID.Valid {
+	// Administrators have no access to other users' shares.
+	e.want(e.do("PUT", p, admin, map[string]any{"name": "by admin", "password": "adminset"}), 404, "admin")
+	if s := e.shareRow(id); s.Name != "mine" || s.Protected || !s.userID.Valid {
 		t.Fatalf("%+v", s)
 	}
 }

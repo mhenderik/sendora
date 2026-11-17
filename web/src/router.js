@@ -19,7 +19,6 @@ const routes = [
       { path: '', redirect: '/admin/stats' },
       { path: 'stats', component: () => import('./views/admin/Stats.vue') },
       { path: 'users', component: () => import('./views/admin/Users.vue') },
-      { path: 'shares', component: () => import('./views/admin/AllShares.vue') },
       { path: 'settings', component: () => import('./views/admin/SettingsView.vue') },
       { path: 'branding', component: () => import('./views/admin/Branding.vue') },
       { path: 'themes', component: () => import('./views/admin/Themes.vue') },

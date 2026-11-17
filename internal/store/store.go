@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
+	"github.com/mhenderik/sendora/internal/filecrypt"
 )
 
 type Store struct {
@@ -17,6 +18,7 @@ type Store struct {
 	DataDir     string
 	Path        string
 	cipherKey   []byte
+	fileKey     []byte
 	settingsGen atomic.Uint64
 }
 
@@ -215,6 +217,12 @@ func openStore(dataDir string, key []byte) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{DB: db, DataDir: dataDir, Path: p, cipherKey: append([]byte(nil), key...)}
+	if len(key) == 32 {
+		if s.fileKey, err = filecrypt.MasterKey(key); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 	if err := s.runMigrations(); err != nil {
 		db.Close()
 		return nil, err

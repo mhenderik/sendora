@@ -88,7 +88,7 @@ spec:
       containers:
         - name: sendora
           # Published release image (pin a version or digest; see the releases on GitHub).
-          image: ghcr.io/mhenderik/sendora:0.9.1
+          image: ghcr.io/mhenderik/sendora:0.1.2
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

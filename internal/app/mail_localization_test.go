@@ -275,7 +275,7 @@ func TestRepeatedDownloadStartsAndHistory(t *testing.T) {
 	if items[0].(map[string]any)["id"].(float64) <= items[1].(map[string]any)["id"].(float64) || items[0].(map[string]any)["created_at"] == "" {
 		t.Fatal("history order/time", items)
 	}
-	e.want(e.do("GET", history, admin, nil), 200, "admin history")
+	e.want(e.do("GET", history, admin, nil), 404, "admin cannot read another user's download history")
 	for _, query := range []string{"?limit=0", "?offset=-1", "?limit=no"} {
 		e.want(e.do("GET", history+query, owner, nil), 400, "invalid pagination")
 	}
@@ -303,7 +303,7 @@ func TestRepeatedDownloadStartsAndHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r = e.do("GET", history+"?limit=1000", admin, nil)
+	r = e.do("GET", history+"?limit=1000", owner, nil)
 	if len(r.J()["downloads"].([]any)) != 100 || r.J()["limit"] != float64(100) || strings.Contains(string(r.Body), "private") {
 		t.Fatal(string(r.Body))
 	}

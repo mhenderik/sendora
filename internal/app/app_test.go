@@ -328,7 +328,7 @@ func TestUsersAndPermissions(t *testing.T) {
 	e.want(e.do("GET", "/api/settings", bob, nil), 403, "non-admin settings")
 	e.want(e.do("GET", "/api/stats", bob, nil), 403, "non-admin stats")
 	e.want(e.do("GET", "/api/backups", bob, nil), 403, "non-admin backups")
-	e.want(e.do("GET", "/api/shares/all", bob, nil), 403, "non-admin all shares")
+	e.want(e.do("GET", "/api/shares/all", admin, nil), 404, "admin has no all-shares list")
 	e.want(e.do("POST", "/api/users", admin, map[string]any{"username": "bob", "password": "password123"}), 400, "dup user")
 	e.want(e.do("POST", "/api/users", admin, map[string]any{"username": "x", "password": "123"}), 400, "short pw")
 

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/mhenderik/sendora/internal/filecrypt"
 	"github.com/mhenderik/sendora/internal/store"
 	"io"
 	"log"
@@ -35,6 +36,7 @@ type FileInfo struct {
 	SHA256    string `json:"sha256"`
 	Integrity string `json:"integrity"`
 	diskPath  string
+	enc       bool
 }
 
 type Share struct {
@@ -90,7 +92,7 @@ func (s *Server) shareByID(id int64) (*Share, error) {
 }
 
 func (s *Server) shareFiles(shareID int64) []FileInfo {
-	rows, err := s.St.DB.Query(`SELECT f.id,f.name,f.full_path,f.size,f.type,f.disk_path,f.sha256,f.integrity,s.long_id FROM files f JOIN shares s ON s.id=f.share_id WHERE f.share_id=? ORDER BY f.full_path,f.id`, shareID)
+	rows, err := s.St.DB.Query(`SELECT f.id,f.name,f.full_path,f.size,f.type,f.disk_path,f.sha256,f.integrity,f.enc,s.long_id FROM files f JOIN shares s ON s.id=f.share_id WHERE f.share_id=? ORDER BY f.full_path,f.id`, shareID)
 	out := []FileInfo{}
 	if err != nil {
 		return out
@@ -99,7 +101,7 @@ func (s *Server) shareFiles(shareID int64) []FileInfo {
 	for rows.Next() {
 		var f FileInfo
 		var lid string
-		if rows.Scan(&f.ID, &f.Name, &f.FullPath, &f.Size, &f.Type, &f.diskPath, &f.SHA256, &f.Integrity, &lid) != nil {
+		if rows.Scan(&f.ID, &f.Name, &f.FullPath, &f.Size, &f.Type, &f.diskPath, &f.SHA256, &f.Integrity, &f.enc, &lid) != nil {
 			return nil
 		}
 		// The recorded directory is never trusted: only the base name is used, under
@@ -466,7 +468,7 @@ func (s *Server) previewShareFile(w http.ResponseWriter, r *http.Request) {
 			jerr(w, 415, "preview not supported for this file type")
 			return
 		}
-		in, err := openDownloadFile(f.diskPath)
+		in, modTime, err := s.openStoredFile(f)
 		if err != nil {
 			jerr(w, 404, "file missing")
 			return
@@ -476,11 +478,6 @@ func (s *Server) previewShareFile(w http.ResponseWriter, r *http.Request) {
 		n, _ := io.ReadFull(in, head)
 		if !previewSniffOK(mime, head[:n]) {
 			jerr(w, 415, "preview not supported for this file type")
-			return
-		}
-		st, err := in.Stat()
-		if err != nil {
-			jerr(w, 404, "file missing")
 			return
 		}
 		// Log only the first request of a media session, not every Range chunk, so a
@@ -498,10 +495,38 @@ func (s *Server) previewShareFile(w http.ResponseWriter, r *http.Request) {
 		h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 		h.Set("Cache-Control", "no-store")
 		defer func() { _ = http.NewResponseController(rw).Flush() }()
-		http.ServeContent(rw, r, "", st.ModTime(), in)
+		http.ServeContent(rw, r, "", modTime, in)
 		return
 	}
 	jerr(w, 404, "file not found")
+}
+
+// openStoredFile opens a share file for reading plaintext: encrypted files are
+// decrypted on the fly and stay seekable, so Range requests keep working.
+func (s *Server) openStoredFile(f FileInfo) (io.ReadSeekCloser, time.Time, error) {
+	file, err := openDownloadFile(f.diskPath)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	st, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, time.Time{}, err
+	}
+	if !f.enc {
+		return file, st.ModTime(), nil
+	}
+	key := s.St.FileKey()
+	if key == nil {
+		file.Close()
+		return nil, time.Time{}, errIntegrity
+	}
+	r, err := filecrypt.NewReader(file, st.Size(), f.Size, key)
+	if err != nil {
+		file.Close()
+		return nil, time.Time{}, errIntegrity
+	}
+	return r, st.ModTime(), nil
 }
 
 func openDownloadFile(p string) (*os.File, error) {
@@ -597,15 +622,13 @@ func (s *Server) myShares(w http.ResponseWriter, r *http.Request) {
 	s.listShares(w, `WHERE s.user_id=? AND s.status<>'deleted'`, s.ctxUser(r).ID)
 }
 
-func (s *Server) allShares(w http.ResponseWriter, r *http.Request) {
-	s.listShares(w, `WHERE s.status<>'deleted'`)
-}
-
+// ownedShare returns the share only to its uploader. Administrators have no
+// access to other users' shares, files or download history.
 func (s *Server) ownedShare(w http.ResponseWriter, r *http.Request) *Share {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	sh, err := s.shareByID(id)
 	u := s.ctxUser(r)
-	if err != nil || (!u.Admin && (!sh.userID.Valid || sh.userID.Int64 != u.ID)) {
+	if err != nil || !sh.userID.Valid || sh.userID.Int64 != u.ID {
 		jerr(w, 404, "share not found")
 		return nil
 	}
@@ -733,7 +756,7 @@ func (s *Server) setShareExpiry(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "provide either expires_at or never")
 		return
 	}
-	admin := s.ctxUser(r).Admin
+	admin := s.ctxUser(r).Admin // exemption from the maximum expiry applies to own shares only
 	max := s.St.SettingInt("max_expiry_time", 30)
 	now := time.Now()
 	var exp any
@@ -760,7 +783,7 @@ func (s *Server) setShareExpiry(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	res, err := s.St.DB.Exec(`UPDATE shares SET expires_at=?, status='active', expiry_warned=0
-		WHERE id=? AND status<>'deleted' AND (?=1 OR user_id=?)`, exp, sh.ID, admin, s.ctxUser(r).ID)
+		WHERE id=? AND status<>'deleted' AND user_id=?`, exp, sh.ID, s.ctxUser(r).ID)
 	if err != nil {
 		jerr(w, 500, "database error")
 		return
@@ -935,8 +958,8 @@ func (s *Server) editShare(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(sets) > 0 {
 		u := s.ctxUser(r)
-		args = append(args, sh.ID, u.Admin, u.ID)
-		res, err := s.St.DB.Exec(`UPDATE shares SET `+strings.Join(sets, ", ")+` WHERE id=? AND status<>'deleted' AND (?=1 OR user_id=?)`, args...)
+		args = append(args, sh.ID, u.ID)
+		res, err := s.St.DB.Exec(`UPDATE shares SET `+strings.Join(sets, ", ")+` WHERE id=? AND status<>'deleted' AND user_id=?`, args...)
 		if err != nil {
 			jerr(w, 500, "database error")
 			return

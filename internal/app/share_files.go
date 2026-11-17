@@ -94,6 +94,7 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 		expected, checksum, integrity string
 		size, rec                     int64
 		disk                          string
+		enc                           bool
 	}
 	rows, err := s.St.DB.Query(`SELECT idx,name,full_path,type,size,received,sha256 FROM upload_files WHERE session_id=? ORDER BY idx`, id)
 	if err != nil {
@@ -155,17 +156,18 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 	for i := range files {
 		f := &files[i]
 		disk := filepath.Join(dest, randHex(8)+"_"+f.name)
-		if err := stageUploadFile(filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part"), disk, f.size); err != nil {
-			os.Remove(disk) // partial copy under our own fresh random name
-			jerr(w, 500, "storage error")
-			return
-		}
+		checksum, enc, err := stageUploadFile(r.Context(), filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part"), disk, f.size, s.St.FileKey())
 		f.disk = disk
-		checksum, err := hashDisk(r.Context(), disk, f.size)
 		if err != nil {
-			jerr(w, 409, "uploaded file integrity check failed")
+			os.Remove(disk) // partial copy under our own fresh random name
+			if errors.Is(err, errIntegrity) {
+				jerr(w, 409, "uploaded file integrity check failed")
+			} else {
+				jerr(w, 500, "storage error")
+			}
 			return
 		}
+		f.enc = enc
 		if f.expected != "" && checksum != f.expected {
 			jerr(w, 409, "upload checksum mismatch")
 			return
@@ -246,7 +248,7 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 		}
 		used[strings.ToLower(np)] = true
 		name := path.Base(np)
-		ires, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity) VALUES(?,?,?,?,?,?,?,?)`, shareID, name, np, f.size, f.typ, f.disk, f.checksum, f.integrity)
+		ires, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity,enc) VALUES(?,?,?,?,?,?,?,?,?)`, shareID, name, np, f.size, f.typ, f.disk, f.checksum, f.integrity, f.enc)
 		if err != nil {
 			jerr(w, 500, "file metadata write failed")
 			return
@@ -320,11 +322,7 @@ func (s *Server) deleteShareFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	admin := 0
-	if u.Admin {
-		admin = 1
-	}
-	res, err := tx.Exec(`UPDATE shares SET id=id WHERE id=? AND status<>'deleted' AND (?=1 OR user_id=?)`, sh.ID, admin, u.ID)
+	res, err := tx.Exec(`UPDATE shares SET id=id WHERE id=? AND status<>'deleted' AND user_id=?`, sh.ID, u.ID)
 	if err != nil {
 		jerr(w, 500, "database error")
 		return

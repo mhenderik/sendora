@@ -318,7 +318,6 @@ func (s *Server) Router() http.Handler {
 				r.Post("/backgrounds", s.uploadBackground)
 				r.Delete("/backgrounds/{file}", s.deleteBackground)
 
-				r.Get("/shares/all", s.allShares)
 				r.Get("/stats", s.stats)
 				r.Get("/ip-bans", s.listIPBansHandler)
 				r.Delete("/ip-bans", s.deleteIPBanHandler)

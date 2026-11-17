@@ -5,6 +5,8 @@ import { api, fmtBytes, fmtDate } from '../api'
 import { t, tr } from '../i18n'
 import { app, pageTitle } from '../state'
 import QrCode from '../components/QrCode.vue'
+import FileTree from '../components/FileTree.vue'
+import { buildTree } from '../folder-tree.mjs'
 import { verifiedDownload, nativeDownload, canStreamToDisk, BLOB_LIMIT } from '../download'
 
 const route = useRoute()
@@ -12,6 +14,7 @@ const id = route.params.id
 const share = ref(null), state = ref('loading'), pw = ref(''), err = ref(''), token = ref('')
 const hdr = () => (token.value ? { 'X-Share-Token': token.value } : {})
 const tree = computed(() => [...(share.value?.files || [])])
+const folderTree = computed(() => buildTree(tree.value.map(f => ({ path: f.full_path || f.name, size: f.size, file: f }))))
 
 async function load() {
   try {
@@ -74,7 +77,7 @@ onBeforeUnmount(() => { pageTitle.value = ''; document.body.style.overflow = '';
 </script>
 
 <template>
-  <div class="card narrow" style="max-width:720px">
+  <div class="card narrow wide">
     <p v-if="state === 'loading'" class="muted">…</p>
     <template v-else-if="state === 'missing'"><h1>{{ t('Share not found') }}</h1></template>
     <template v-else-if="state === 'expired'"><h1>{{ t('This share has expired') }}</h1><p v-if="notice" class="ok">{{ t(notice) }}</p><p v-if="err" class="err">{{ err }}</p></template>
@@ -97,15 +100,16 @@ onBeforeUnmount(() => { pageTitle.value = ''; document.body.style.overflow = '';
             <span v-else class="ico" aria-hidden="true">{{ icon(f) }}</span>
           </div>
           <figcaption><b class="name">{{ f.name }}</b><span class="muted">{{ fmtBytes(f.size) }}</span></figcaption>
-          <div class="actions" style="margin:0"><button v-if="canPreview(f)" class="small secondary" @click="preview = f">{{ t('Preview') }}</button>
+          <div class="actions tile-actions"><button v-if="canPreview(f)" class="small secondary" @click="preview = f">{{ t('Preview') }}</button>
             <button class="small secondary" :disabled="downloading" @click="one(f)">{{ t('Download') }}</button></div>
         </figure>
       </div>
-      <div v-else class="table-wrap"><table>
-        <tr v-for="f in tree" :key="f.id"><td>{{ f.full_path }}</td><td>{{ fmtBytes(f.size) }}</td>
-          <td class="actions" style="margin:0"><button v-if="canPreview(f)" class="small secondary" @click="preview = f">{{ t('Preview') }}</button>
-            <button class="small secondary" :disabled="downloading" @click="one(f)">{{ t('Download') }}</button></td></tr>
-      </table></div>
+      <FileTree v-else :root="folderTree">
+        <template #file-actions="{ file: item }">
+          <button v-if="canPreview(item.file)" class="small secondary" @click="preview = item.file">{{ t('Preview') }}</button>
+          <button class="small secondary" :disabled="downloading" @click="one(item.file)">{{ t('Download') }}</button>
+        </template>
+      </FileTree>
       <Teleport to="body"><div v-if="preview" class="lightbox" role="dialog" aria-modal="true" :aria-label="preview.name" @click.self="preview = null">
         <div class="lb-bar">
           <span class="lb-title">{{ preview.name }} <span class="muted">({{ previewIndex + 1 }}/{{ previewable.length }})</span></span>
@@ -134,21 +138,23 @@ onBeforeUnmount(() => { pageTitle.value = ''; document.body.style.overflow = '';
   </div>
 </template>
 <style scoped>
-.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin: 12px 0 }
-.tile { margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0 }
-.thumb { aspect-ratio: 1 / 1; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #fff }
+.wide { max-width: 760px }
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; margin: 16px 0 }
+.tile { margin: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 10px; border-radius: 18px; background: var(--glass-soft); border: 1px solid var(--glass-border) }
+.tile-actions { margin: 0; gap: 6px }
+.thumb { aspect-ratio: 1 / 1; border-radius: 12px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--text) 6%, var(--surface)) }
 .thumb img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in }
 .ico { font-size: 40px }
 figcaption { display: flex; flex-direction: column; min-width: 0 }
 .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px }
-.thumb img { cursor: zoom-in }
 .lightbox { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; background: rgba(0, 0, 0, .88); color: #fff }
-.lb-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; flex-wrap: wrap }
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) { .lightbox { background: rgba(8, 10, 16, .72); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px) } }
+.lb-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; flex-wrap: wrap }
 .lb-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60vw; font-weight: 600 }
 .lb-title .muted { color: #cbd5e1 }
 .lb-actions { display: flex; gap: 8px }
 .lb-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 16px }
-.lb-media { max-width: 96vw; max-height: calc(100vh - 130px); object-fit: contain; border-radius: 4px; background: #000 }
+.lb-media { max-width: 96vw; max-height: calc(100vh - 130px); object-fit: contain; border-radius: 16px; background: #000; box-shadow: 0 20px 60px rgba(0, 0, 0, .5) }
 .lb-audio { width: min(640px, 92vw) }
 .lb-note { margin: 0; padding: 8px 16px 12px; text-align: center; color: #cbd5e1; font-size: 12px }
 </style>

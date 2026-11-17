@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { api, session, fmtBytes } from '../api'
 import { app, emailLanguages, pageTitle } from '../state'
 import { t, lang, tr } from '../i18n'
@@ -7,12 +7,30 @@ import { collect, fromInput, uploadAll } from '../uploader'
 import { begin as beginTransfer } from '../transfers.mjs'
 import { sharePolicy, passwordProblems } from '../sharepolicy.mjs'
 import QrCode from '../components/QrCode.vue'
+import FileTree from '../components/FileTree.vue'
+import { buildTree, bytesDonePerFile } from '../folder-tree.mjs'
 
 const entries = ref([]), over = ref(false), busy = ref(false), pct = ref(0), err = ref(''), result = ref(null), copied = ref(false)
 const form = ref({ name: '', description: '', password: '', expires_in_days: app.boot?.default_expiry_time || 7, download_limit: '', recipients: '', message: '', email_language: session.user?.language || lang.value })
 const guest = computed(() => session.user?.is_guest)
 const total = computed(() => entries.value.reduce((a, e) => a + e.file.size, 0))
 const maxMB = computed(() => app.boot?.max_share_size)
+const tree = computed(() => buildTree(entries.value.map(entry => ({ path: entry.path, size: entry.file.size, entry }))))
+const doneBytes = ref(0), started = ref(false)
+// Uploads run file after file in list order, so the overall byte count gives per-file progress.
+const doneByPath = computed(() => {
+  const list = entries.value
+  const per = bytesDonePerFile(list.map(e => e.file.size), doneBytes.value)
+  return Object.fromEntries(list.map((e, i) => [e.path, per[i]]))
+})
+const doneOf = item => doneByPath.value[item.entry.path] || 0
+const available = ref(null)
+onMounted(async () => {
+  if (guest.value) return
+  try { available.value = (await api('/users/me')).storage_available_bytes ?? null } catch {}
+})
+const overQuota = computed(() => available.value != null && total.value > available.value)
+const overMax = computed(() => !!maxMB.value && total.value > maxMB.value * 1024 * 1024)
 const fileIn = ref(), dirIn = ref(), phase = ref(tr('Uploading…'))
 let ctrl = null
 const completing = ref(false)
@@ -33,16 +51,17 @@ function add(list) {
     if (!entries.value.some(existing => existing.path === entry.path)) entries.value.push(entry)
   }
 }
-function remove(i) { entries.value.splice(i, 1) }
+function removeFile(node) { entries.value = entries.value.filter(e => e.path !== node.path) }
+function removeFolder(node) { entries.value = entries.value.filter(e => !e.path.startsWith(node.path + '/')) }
 function cancel() { if (!completing.value) ctrl?.abort() }
 
 async function go() {
   if (problems.value.length) { err.value = t('Password policy: ') + problems.value.map(hint).join(', '); return }
-  err.value = ''; busy.value = true; pct.value = 0; ctrl = new AbortController()
+  err.value = ''; busy.value = true; pct.value = 0; doneBytes.value = 0; started.value = true; ctrl = new AbortController()
   const endTransfer = beginTransfer() // covers checksums, upload and completion
   try {
     const f = { ...form.value }
-    const id = await uploadAll([...entries.value], (d, tot) => (pct.value = tot ? Math.round(d / tot * 100) : 100), ctrl.signal, value => (phase.value = value))
+    const id = await uploadAll([...entries.value], (d, tot) => { doneBytes.value = d; pct.value = tot ? Math.round(d / tot * 100) : 100 }, ctrl.signal, value => (phase.value = value))
     if (ctrl.signal.aborted) {
       await api('/uploads/' + id, { method: 'DELETE' })
       throw new DOMException('Cancelled', 'AbortError')
@@ -59,7 +78,7 @@ async function go() {
     })
     entries.value = []
   } catch (e) { err.value = e.name === 'AbortError' || e.message === 'aborted' ? t('Cancelled') : e.message }
-  finally { endTransfer(); busy.value = false; completing.value = false; ctrl = null }
+  finally { endTransfer(); busy.value = false; started.value = false; completing.value = false; ctrl = null }
 }
 async function copy() { await navigator.clipboard.writeText(result.value.url); copied.value = true; setTimeout(() => (copied.value = false), 1500) }
 function again() { result.value = null; form.value.name = form.value.description = form.value.password = '' }
@@ -85,11 +104,13 @@ function again() { result.value = null; form.value.name = form.value.description
       <input ref="dirIn" type="file" webkitdirectory hidden @change="add(fromInput($event.target.files)); $event.target.value = ''" />
       <div class="actions"><button class="secondary small" @click="dirIn.click()">{{ t('Add folder') }}</button>
         <span v-if="maxMB" class="muted">{{ t('Max {n} MB per share', { n: maxMB }) }}</span></div>
-      <div v-if="entries.length" class="table-wrap"><table>
-        <tr v-for="(e, i) in entries" :key="e.path"><td>{{ e.path }}</td><td>{{ fmtBytes(e.file.size) }}</td>
-          <td><button class="link" :disabled="busy" @click="remove(i)">✕</button></td></tr>
-        <tr><td><b>{{ entries.length }} {{ t('Files') }}</b></td><td colspan="2"><b>{{ fmtBytes(total) }}</b></td></tr>
-      </table></div>
+      <div v-if="entries.length" class="summary" aria-live="polite">
+        <div class="chip"><b>{{ entries.length }}</b><span>{{ entries.length === 1 ? t('1 file') : t('{n} files', { n: entries.length }) }}</span></div>
+        <div v-if="tree.folders" class="chip"><b>{{ tree.folders }}</b><span>{{ tree.folders === 1 ? t('1 folder') : t('{n} folders', { n: tree.folders }) }}</span></div>
+        <div class="chip" :class="{ bad: overQuota || overMax }"><b>{{ fmtBytes(total) }}<template v-if="available != null"> / {{ fmtBytes(available) }}</template></b><span>{{ t('Size') }}</span></div>
+        <div v-if="!guest" class="chip"><b>{{ form.expires_in_days }}</b><span>{{ t('Expires in (days)') }}</span></div>
+      </div>
+      <FileTree v-if="entries.length" :root="tree" :done-of="started ? doneOf : null" removable :locked="busy" @remove-file="removeFile" @remove-folder="removeFolder" />
     </div>
     <form v-if="entries.length" class="card" @submit.prevent="go">
       <div class="row">

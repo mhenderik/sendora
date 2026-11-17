@@ -1,7 +1,13 @@
 package app
 
 import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -17,6 +23,7 @@ import (
 	"unicode"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mhenderik/sendora/internal/filecrypt"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -475,6 +482,7 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 		name, fp, typ                 string
 		expected, checksum, integrity string
 		size, rec                     int64
+		enc                           bool
 	}
 	rows, err := s.St.DB.Query(`SELECT idx,name,full_path,type,size,received,sha256 FROM upload_files WHERE session_id=? ORDER BY idx`, id)
 	if err != nil {
@@ -578,15 +586,16 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 	for i := range files {
 		f := &files[i]
 		disk := filepath.Join(dest, fmt.Sprintf("%d_%s", f.idx, f.name))
-		if err := stageUploadFile(filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part"), disk, f.size); err != nil {
-			jerr(w, 500, "storage error")
-			return
-		}
-		checksum, err := hashDisk(r.Context(), disk, f.size)
+		checksum, enc, err := stageUploadFile(r.Context(), filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part"), disk, f.size, s.St.FileKey())
 		if err != nil {
-			jerr(w, 409, "uploaded file integrity check failed")
+			if errors.Is(err, errIntegrity) {
+				jerr(w, 409, "uploaded file integrity check failed")
+			} else {
+				jerr(w, 500, "storage error")
+			}
 			return
 		}
+		f.enc = enc
 		if f.expected != "" && checksum != f.expected {
 			jerr(w, 409, "upload checksum mismatch")
 			return
@@ -632,7 +641,7 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 	sid, _ := res.LastInsertId()
 	for _, f := range files {
 		disk := filepath.Join(dest, fmt.Sprintf("%d_%s", f.idx, f.name))
-		if _, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity) VALUES(?,?,?,?,?,?,?,?)`, sid, f.name, f.fp, f.size, f.typ, disk, f.checksum, f.integrity); err != nil {
+		if _, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity,enc) VALUES(?,?,?,?,?,?,?,?,?)`, sid, f.name, f.fp, f.size, f.typ, disk, f.checksum, f.integrity, f.enc); err != nil {
 			jerr(w, 500, "file metadata write failed")
 			return
 		}
@@ -732,35 +741,58 @@ func (s *Server) removeUploadSession(id string) error {
 	return err
 }
 
-func stageUploadFile(src, dest string, size int64) error {
+// stageUploadFile moves one finished upload part into its final place. With a
+// file key it encrypts on the way (one streaming pass, no extra read) and always
+// returns the SHA-256 of the plaintext computed during that same pass.
+func stageUploadFile(ctx context.Context, src, dest string, size int64, key []byte) (checksum string, enc bool, err error) {
 	in, err := os.Open(src)
 	if err != nil {
 		if os.IsNotExist(err) && size == 0 {
-			return os.WriteFile(dest, nil, 0o600)
+			in = nil
+		} else {
+			return "", false, err
 		}
-		return err
 	}
-	defer in.Close()
-	st, err := in.Stat()
-	if err != nil {
-		return err
-	}
-	if !st.Mode().IsRegular() || st.Size() != size {
-		return errIntegrity
+	var reader io.Reader = bytes.NewReader(nil)
+	if in != nil {
+		defer in.Close()
+		st, err := in.Stat()
+		if err != nil {
+			return "", false, err
+		}
+		if !st.Mode().IsRegular() || st.Size() != size {
+			return "", false, errIntegrity
+		}
+		reader = contextReader{ctx, io.LimitReader(in, size+1)}
 	}
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return err
+		return "", false, err
 	}
-	n, copyErr := io.Copy(out, io.LimitReader(in, size+1))
+	h := sha256.New()
+	var n int64
+	var copyErr error
+	if len(key) == 32 {
+		enc = true
+		w := bufio.NewWriterSize(out, 256<<10)
+		n, copyErr = filecrypt.Encrypt(w, reader, key, h)
+		if copyErr == nil {
+			copyErr = w.Flush()
+		}
+	} else {
+		n, copyErr = io.Copy(io.MultiWriter(out, h), reader)
+	}
 	closeErr := out.Close()
 	if copyErr != nil {
-		return copyErr
+		return "", false, copyErr
 	}
 	if n != size {
-		return errIntegrity
+		return "", false, errIntegrity
 	}
-	return closeErr
+	if closeErr != nil {
+		return "", false, closeErr
+	}
+	return hex.EncodeToString(h.Sum(nil)), enc, nil
 }
 
 func nameOf(u *User) string {

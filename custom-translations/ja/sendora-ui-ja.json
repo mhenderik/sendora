@@ -261,7 +261,6 @@
     "Optional password": "パスワード(任意)",
     "Other key (64 hex characters)": "その他のキー(16進数64文字)",
     "Other key (key file, 32 bytes)": "その他のキー(キーファイル、32バイト)",
-    "Owner": "所有者",
     "Passkey": "パスキー",
     "Passkey added.": "パスキーを追加しました。",
     "Passkey name": "パスキー名",

@@ -808,5 +808,13 @@
   "this login provider is managed by the server configuration and cannot be changed here": "deze aanmeldprovider wordt beheerd via de serverconfiguratie en kan hier niet worden gewijzigd",
   "%s is managed by the server configuration and cannot be changed here": "%s wordt beheerd via de serverconfiguratie en kan hier niet worden gewijzigd",
   "total size exceeds the download limit of %d MB": "totale grootte overschrijdt de downloadlimiet van %d MB",
-  "Kubernetes: kubectl -n sendora logs deploy/sendora. Without containers: the service output or journal. You can also choose your own code with SENDORA_SETUP_CODE (at least 12 characters).": "Kubernetes: kubectl -n sendora logs deploy/sendora. Zonder containers: de uitvoer of het journal van de service. Je kunt ook zelf een code kiezen met SENDORA_SETUP_CODE (minimaal 12 tekens)."
+  "Kubernetes: kubectl -n sendora logs deploy/sendora. Without containers: the service output or journal. You can also choose your own code with SENDORA_SETUP_CODE (at least 12 characters).": "Kubernetes: kubectl -n sendora logs deploy/sendora. Zonder containers: de uitvoer of het journal van de service. Je kunt ook zelf een code kiezen met SENDORA_SETUP_CODE (minimaal 12 tekens).",
+  "1 file": "1 bestand",
+  "{n} files": "{n} bestanden",
+  "1 folder": "1 map",
+  "{n} folders": "{n} mappen",
+  "Expand all": "Alles uitklappen",
+  "Collapse all": "Alles inklappen",
+  "Remove folder": "Map verwijderen",
+  "Remove file": "Bestand verwijderen"
 }

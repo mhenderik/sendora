@@ -146,8 +146,8 @@ func TestSetShareExpiry(t *testing.T) {
 	e.want(e.do("POST", "/api/shares/"+id+"/expire", alice, nil), 200, "expire")
 	os.RemoveAll(filepath.Join(e.s.St.DataDir, "shares", sh.S("long_id")))
 	e.want(e.do("PUT", url, alice, at(time.Hour)), 409, "cleaned")
-	// admin: never and beyond max
-	sh2 := e.share(alice, map[string]string{"a.txt": "abc"}, nil)
+	// admin: no access to another user's share, but may set "never" on their own
+	sh2 := e.share(admin, map[string]string{"a.txt": "abc"}, nil)
 	id2 := fmt.Sprint(int64(sh2.J()["id"].(float64)))
 	e.want(e.do("PUT", "/api/shares/"+id2+"/expiry", admin, map[string]any{"never": true}), 200, "admin never")
 	var n int
@@ -158,7 +158,10 @@ func TestSetShareExpiry(t *testing.T) {
 	e.want(e.do("PUT", "/api/shares/"+id2+"/expiry", admin, at(90*24*time.Hour)), 200, "admin beyond max")
 	// max 0 = unlimited for owner
 	e.s.St.SetSetting("max_expiry_time", "0")
-	e.want(e.do("PUT", "/api/shares/"+id2+"/expiry", alice, map[string]any{"never": true}), 200, "owner never when unlimited")
+	sh3 := e.share(alice, map[string]string{"a.txt": "abc"}, nil)
+	id3 := fmt.Sprint(int64(sh3.J()["id"].(float64)))
+	e.want(e.do("PUT", "/api/shares/"+id3+"/expiry", admin, map[string]any{"never": true}), 404, "admin cannot change another user's expiry")
+	e.want(e.do("PUT", "/api/shares/"+id3+"/expiry", alice, map[string]any{"never": true}), 200, "owner never when unlimited")
 }
 
 // ---- preview ----

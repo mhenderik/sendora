@@ -113,28 +113,11 @@ func snapshotLimit() int64 {
 	return 16 << 30
 }
 
-func hashDisk(ctx context.Context, p string, size int64) (string, error) {
-	f, err := openDownloadFile(p)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	n, err := io.Copy(h, contextReader{ctx, io.LimitReader(f, size+1)})
-	if err != nil {
-		return "", err
-	}
-	if n != size {
-		return "", errIntegrity
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 // copyVerifiedSource verifies the bytes actually copied, eliminating the gap
 // between hashing a mutable source and streaming it. Legacy files get a first
 // baseline only; that cannot establish what their original uploader sent.
 func (s *Server) copyVerifiedSource(ctx context.Context, dst io.Writer, f FileInfo) error {
-	in, err := openDownloadFile(f.diskPath)
+	in, _, err := s.openStoredFile(f)
 	if err != nil {
 		return err
 	}
