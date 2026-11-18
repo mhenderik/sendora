@@ -8,7 +8,8 @@ import { t, tr } from '../../i18n'
 
 const KEYS = ['mfa_policy', 'mfa_reminder_days', 'mfa_totp_enabled', 'mfa_webauthn_enabled',
   'account_password_require_upper', 'account_password_require_lower', 'account_password_require_digit', 'account_password_require_symbol', 'account_password_min_length',
-  'audit_retention_days', 'audit_log_ip', 'provider_session_max_hours']
+  'audit_retention_days', 'audit_log_ip', 'provider_session_max_hours',
+  'audit_forward_stdout', 'audit_forward_syslog', 'audit_forward_syslog_tls', 'audit_forward_webhook_url']
 const s = ref(null), managed = ref([]), msg = ref(''), err = ref(''), busy = ref(false)
 const m = k => managed.value.includes(k)
 const accountFlags = [['account_password_require_upper', tr('Require an uppercase letter')], ['account_password_require_lower', tr('Require a lowercase letter')], ['account_password_require_digit', tr('Require a digit')], ['account_password_require_symbol', tr('Require a symbol')]]
@@ -58,6 +59,12 @@ async function save() {
     <label for="audit-retention">{{ t('Audit log retention (days, 90-365)') }}</label><input id="audit-retention" :disabled="m('audit_retention_days')" v-model="s.audit_retention_days" type="number" min="90" max="365" />
     <label class="check"><input :disabled="m('audit_log_ip')" type="checkbox" :checked="s.audit_log_ip === 'true'" @change="s.audit_log_ip = String($event.target.checked)" /> {{ t('Store the IP address of each audit log entry') }}</label>
     <p class="muted">{{ t('The audit log is always on and tamper-evident; it cannot be switched off or edited. Entries older than the retention period are deleted automatically. Every change to these settings is itself recorded.') }}</p>
+    <h3 style="margin-top:12px">{{ t('Forward the audit log to another system') }}</h3>
+    <label class="check"><input :disabled="m('audit_forward_stdout')" type="checkbox" :checked="s.audit_forward_stdout === 'true'" @change="s.audit_forward_stdout = String($event.target.checked)" /> {{ t('Write each audit log entry to standard output as one JSON line') }}</label>
+    <label for="audit-syslog">{{ t('Syslog server (host:port, empty = off)') }}</label><input id="audit-syslog" :disabled="m('audit_forward_syslog')" v-model="s.audit_forward_syslog" placeholder="logs.example.com:6514" />
+    <label class="check"><input :disabled="m('audit_forward_syslog_tls')" type="checkbox" :checked="s.audit_forward_syslog_tls !== 'false'" @change="s.audit_forward_syslog_tls = String($event.target.checked)" /> {{ t('Use TLS for syslog (certificate is verified)') }}</label>
+    <label for="audit-webhook">{{ t('Webhook URL (https, empty = off)') }}</label><input id="audit-webhook" :disabled="m('audit_forward_webhook_url')" v-model="s.audit_forward_webhook_url" placeholder="https://collector.example.com/sendora" />
+    <p class="muted">{{ t('Each entry is sent with its sequence number and hashes, so the receiving system can check that nothing was removed or changed; every five minutes the latest position of the log is sent as well. Do not put credentials in the webhook URL: the bearer token is read from the file named by SENDORA_AUDIT_FORWARD_WEBHOOK_TOKEN_FILE. Delivery problems never block Sendora; they are counted in the audit log status.') }}</p>
 
     <p v-if="msg" class="ok" role="status">{{ msg }}</p><p v-if="err" class="err" role="alert">{{ err }}</p>
     <div class="actions"><button :disabled="busy">{{ t('Save') }}</button></div>

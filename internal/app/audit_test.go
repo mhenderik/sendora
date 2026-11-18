@@ -544,7 +544,7 @@ func TestAuditorIsReadOnlyAndNeverAdmin(t *testing.T) {
 	public := func(p string) bool {
 		return !strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/api/auth/") || strings.HasPrefix(p, "/api/shares/{id}") && !strings.HasPrefix(p, "/api/shares/{id}/") ||
 			strings.HasPrefix(p, "/api/shares/{id}/unlock") || strings.HasPrefix(p, "/api/shares/{id}/download") || strings.HasPrefix(p, "/api/shares/{id}/preview") ||
-			p == "/api/health" || p == "/api/bootstrap" || p == "/api/setup" || strings.HasPrefix(p, "/api/i18n") || p == "/api/themes/active" ||
+			p == "/api/health" || p == "/api/health/ready" || p == "/api/metrics" || p == "/api/bootstrap" || p == "/api/setup" || strings.HasPrefix(p, "/api/i18n") || p == "/api/themes/active" ||
 			strings.HasPrefix(p, "/api/backgrounds") && !strings.HasPrefix(p, "/api/backgrounds") || strings.HasPrefix(p, "/api/branding") || p == "/api/reverse-shares/accept"
 	}
 	checked := 0
@@ -758,7 +758,7 @@ func TestAuditCriticalRoutesAreGuarded(t *testing.T) {
 		"POST /api/users": false, "PUT /api/users/{id}": false, "DELETE /api/users/{id}": false,
 		"POST /api/users/{id}/force-reset-password": false, "POST /api/users/{id}/mfa/reset": false, "PUT /api/settings": false,
 		"POST /api/auth-providers": false, "PUT /api/auth-providers/{id}": false, "DELETE /api/auth-providers/{id}": false,
-		"POST /api/backups": false, "DELETE /api/backups/{name}": false, "POST /api/backups/import": false, "POST /api/backups/import/apply": false,
+		"POST /api/backups": false, "GET /api/backups/{name}": false, "DELETE /api/backups/{name}": false, "POST /api/backups/import": false, "POST /api/backups/import/apply": false,
 		"POST /api/users/{id}/disable": false, "POST /api/users/{id}/enable": false, "POST /api/users/{id}/sessions/revoke": false,
 		"GET /api/access-review/export": false,
 	}

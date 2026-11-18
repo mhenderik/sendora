@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ const jobsStopWait = 5 * time.Second
 func (s *Server) RunJobs(ctx context.Context) {
 	s.RunDownloadMail(ctx)
 	s.auditStartup()
+	s.fwd.startHeartbeat(s, ctx)
 	// Verify the whole chain once in the background (in chunks that free the
 	// database connection in between); status requests then only check new records.
 	go func() {
@@ -45,12 +47,9 @@ func (s *Server) RunJobs(ctx context.Context) {
 				return
 			case now := <-t.C:
 				s.maintain()
-				if s.St.SettingBool("backups_enabled") && now.Sub(lastBackup) > 24*time.Hour {
-					if _, err := s.makeBackup(); err != nil {
-						log.Println("backup failed:", err)
-					} else {
+				if s.St.SettingBool("backups_enabled") && now.Sub(lastBackup) > autoBackupInterval {
+					if s.autoBackup() {
 						lastBackup = now
-						s.pruneBackups()
 					}
 				}
 			}
@@ -90,8 +89,35 @@ func (s *Server) GracefulStop(timeout time.Duration, stopJobs func(), shutdown f
 	})
 }
 
-// recordStop writes system_stop once per process.
-func (s *Server) recordStop() { s.stopRecorded.Do(s.auditShutdown) }
+// recordStop writes system_stop once per process, then forwards the final
+// chain head and drains the forwarding queues (bounded).
+func (s *Server) recordStop() {
+	s.stopRecorded.Do(func() {
+		s.auditShutdown()
+		s.fwd.stop(s, forwardStopWait)
+	})
+}
+
+// autoBackupInterval is the period of the automatic backup.
+const autoBackupInterval = 24 * time.Hour
+
+// autoBackup makes the periodic backup and prunes old ones, recording both in
+// the audit log as system actions. It reports whether the backup succeeded.
+func (s *Server) autoBackup() bool {
+	name, err := s.makeBackup()
+	if err != nil {
+		log.Println("backup failed:", err)
+		// The error text may contain paths; it stays in the server log.
+		s.logEvent(0, "system", "backup_failed_auto", "", "automatic backup failed; details are in the server log")
+		return false
+	}
+	s.ops.lastAutoBackup.Store(time.Now().Unix())
+	s.logEvent(0, "system", "backup_created_auto", name, "")
+	for _, n := range s.pruneBackups() {
+		s.logEvent(0, "system", "backup_pruned", n, "backup_keep="+strconv.Itoa(s.St.SettingInt("backup_keep", 7)))
+	}
+	return true
+}
 
 func (s *Server) maintain() {
 	now := time.Now()
@@ -147,10 +173,19 @@ func (s *Server) maintain() {
 		if rows != nil {
 			rows.Close()
 		}
+		removed, failed := 0, 0
 		for _, id := range ids {
-			if _, err := s.removeShareIf(id, `status<>'active' AND COALESCE(expires_at,created_at)<?`, now.AddDate(0, 0, -keep)); err != nil {
+			ok, err := s.removeShareIf(id, `status<>'active' AND COALESCE(expires_at,created_at)<?`, now.AddDate(0, 0, -keep))
+			switch {
+			case err != nil:
+				failed++
 				log.Printf("expired share cleanup: %v", err)
+			case ok:
+				removed++
 			}
+		}
+		if removed > 0 || failed > 0 {
+			s.logEvent(0, "system", "share_files_purged", "", fmt.Sprintf("%d shares removed, %d failed (expired more than %d days ago)", removed, failed, keep))
 		}
 	}
 
@@ -187,27 +222,37 @@ func (s *Server) maintain() {
 	s.St.DB.Exec(`DELETE FROM password_resets WHERE expires_at<?`, now)
 	s.St.DB.Exec(`DELETE FROM email_verifications WHERE expires_at<?`, now)
 	s.St.DB.Exec(`DELETE FROM downloads WHERE datetime(created_at)<?`, now.UTC().AddDate(0, 0, -90).Format("2006-01-02 15:04:05"))
+	// Recipient addresses are kept only while audit_log_ip is on; switching it
+	// off empties the stored ones at the next run.
+	if err := s.St.BlankDownloadIPs(); err != nil {
+		log.Printf("download address clean-up: %v", err)
+	}
 	// Self-registrations that never proved their email (they cannot sign in) are
 	// squatting on usernames and addresses: remove them after 48 hours. Only
 	// accounts still marked as a pending registration qualify, never an
 	// established account whose changed address is not verified yet, nor one
 	// linked to a sign-in provider (whose email may be unverified on purpose).
-	if res, err := s.St.DB.Exec(`DELETE FROM users WHERE pending_registration=1 AND email_verified=0 AND is_guest=0 AND created_at<?
+	if gone := s.deleteUsersReturning(`DELETE FROM users WHERE pending_registration=1 AND email_verified=0 AND is_guest=0 AND created_at<?
 		AND password_hash<>''
 		AND NOT EXISTS(SELECT 1 FROM user_auth_providers WHERE user_auth_providers.user_id=users.id)
 		AND NOT EXISTS(SELECT 1 FROM shares WHERE shares.user_id=users.id)
-		AND NOT EXISTS(SELECT 1 FROM upload_sessions WHERE upload_sessions.user_id=users.id OR upload_sessions.quota_owner_id=users.id)`,
-		now.UTC().Add(-48*time.Hour).Format("2006-01-02 15:04:05")); err == nil {
-		if n, _ := res.RowsAffected(); n > 0 {
-			log.Printf("removed %d unverified account(s) older than 48 hours", n)
+		AND NOT EXISTS(SELECT 1 FROM upload_sessions WHERE upload_sessions.user_id=users.id OR upload_sessions.quota_owner_id=users.id)
+		RETURNING id,username`,
+		now.UTC().Add(-48*time.Hour).Format("2006-01-02 15:04:05")); len(gone) > 0 {
+		log.Printf("removed %d unverified account(s) older than 48 hours", len(gone))
+		for _, target := range gone {
+			s.logEvent(0, "system", "account_removed_auto", target, "reason=email not verified within 48 hours of registration")
 		}
 	}
 	// Guests from open upload links whose single-use invitation expired unused:
 	// remove the invitation and the guest account (their uploads, if any, are
 	// shares owned by the inviter and stay).
-	s.St.DB.Exec(`DELETE FROM users WHERE is_guest=1
+	for _, target := range s.deleteUsersReturning(`DELETE FROM users WHERE is_guest=1
 		AND id IN (SELECT guest_user_id FROM reverse_invites WHERE parent_id IS NOT NULL AND completed_at IS NULL AND expires_at<?)
-		AND NOT EXISTS(SELECT 1 FROM upload_sessions WHERE upload_sessions.user_id=users.id)`, now)
+		AND NOT EXISTS(SELECT 1 FROM upload_sessions WHERE upload_sessions.user_id=users.id)
+		RETURNING id,username`, now) {
+		s.logEvent(0, "system", "account_removed_auto", target, "reason=guest invitation expired unused")
+	}
 	s.St.DB.Exec(`DELETE FROM reverse_invites WHERE parent_id IS NOT NULL AND completed_at IS NULL AND expires_at<?
 		AND guest_user_id NOT IN (SELECT id FROM users)`, now)
 	s.pruneIPBans()
@@ -218,10 +263,36 @@ func (s *Server) maintain() {
 // pre-import backups (sendora-preimport-*): only this pattern is pruned.
 var backupFile = regexp.MustCompile(`^sendora-encrypted-\d{8}-\d{6}-[a-f0-9]{12}\.db$`)
 
-func (s *Server) pruneBackups() {
+// deleteUsersReturning runs a DELETE ... RETURNING id,username and labels each
+// removed account as "user#ID (username)". The rows are read completely before
+// it returns, so the single connection is free for the audit records.
+func (s *Server) deleteUsersReturning(query string, args ...any) []string {
+	rows, err := s.St.DB.Query(query, args...)
+	if err != nil {
+		log.Printf("account clean-up: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id int64
+		var name string
+		if rows.Scan(&id, &name) == nil {
+			out = append(out, "user#"+strconv.FormatInt(id, 10)+" ("+name+")")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("account clean-up: %v", err)
+	}
+	return out
+}
+
+// pruneBackups removes the oldest automatic backups beyond backup_keep and
+// returns the names it removed.
+func (s *Server) pruneBackups() []string {
 	keep := s.St.SettingInt("backup_keep", 7)
 	if keep <= 0 {
-		return
+		return nil
 	}
 	ents, _ := os.ReadDir(filepath.Join(s.St.DataDir, "backups"))
 	var names []string
@@ -231,8 +302,12 @@ func (s *Server) pruneBackups() {
 		}
 	}
 	sort.Strings(names)
+	var removed []string
 	for len(names) > keep {
-		os.Remove(filepath.Join(s.St.DataDir, "backups", names[0]))
+		if err := os.Remove(filepath.Join(s.St.DataDir, "backups", names[0])); err == nil {
+			removed = append(removed, names[0])
+		}
 		names = names[1:]
 	}
+	return removed
 }

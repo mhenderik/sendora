@@ -37,6 +37,8 @@ func (s *Store) SettingsChanged() { s.settingsGen.Add(1) }
 // The legacy driver name is confined to plaintext migration fixtures/tools.
 func init() { sql.Register("sqlite", &sqlite3.SQLiteDriver{}) }
 
+// schema is the base schema. downloads.ip: see download_ip.go (empty unless
+// audit_log_ip is on).
 const schema = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -241,7 +243,7 @@ func initSchema(db *sql.DB) error {
 // runMigrations is the additive migration sequence shared by openStore and
 // PrepareImported. Order matters: seed runs between the policy and brand steps.
 func (s *Store) runMigrations() error {
-	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders, s.migrateAudit, s.migrateAccounts} {
+	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders, s.migrateAudit, s.migrateAccounts, s.migrateDownloadIP} {
 		if err := step(); err != nil {
 			return err
 		}
@@ -298,6 +300,10 @@ var defaults = []struct{ Key, Grp, Val string }{
 	{"local_login_enabled", "system", "true"},
 	{"audit_retention_days", "system", "90"},
 	{"audit_log_ip", "system", "false"},
+	{"audit_forward_stdout", "system", "false"},
+	{"audit_forward_syslog", "system", ""},
+	{"audit_forward_syslog_tls", "system", "true"},
+	{"audit_forward_webhook_url", "system", ""},
 	{"smtp_host", "email", ""},
 	{"smtp_port", "email", "587"},
 	{"smtp_user", "email", ""},

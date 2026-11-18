@@ -42,6 +42,8 @@ func secretFileVars() (files, plain []string) {
 			}
 		}
 	}
+	// Token files without a plain-variable form (audit forwarding, metrics).
+	files = append(files, forwardTokenEnv, metricsTokenEnv)
 	sort.Strings(files)
 	sort.Strings(plain)
 	return files, plain

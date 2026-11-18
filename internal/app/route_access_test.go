@@ -91,6 +91,9 @@ var bogusToken = map[string]any{"token": "bogus-token-value"}
 var routeTable = []routeSpec{
 	// ---- public ----
 	rs("GET /api/health", polPublic),
+	rs("GET /api/health/ready", polPublic),
+	// Off (404) unless SENDORA_METRICS_TOKEN_FILE is set; then its own bearer token, never a session.
+	rs("GET /api/metrics", polPublic),
 	rs("GET /api/bootstrap", polPublic),
 	rs("GET /api/i18n/languages", polPublic),
 	rs("GET /api/i18n/{code}", polPublic),

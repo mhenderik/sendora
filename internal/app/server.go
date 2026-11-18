@@ -62,6 +62,8 @@ type Server struct {
 	downloadMailWake  chan struct{}
 	downloadMailOnce  sync.Once
 	audit             auditState
+	fwd               auditForwarder // off-host audit forwarding (audit_forward.go)
+	ops               opsState       // readiness and metrics (ops.go)
 	uiKeys            uiKeyCache
 	mfaUsed           mfaTracker
 	waCeremonies      waCeremonies
@@ -238,6 +240,8 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.Recoverer, s.security, s.maintenanceMode, s.auditMiddleware)
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", s.health)
+		r.Get("/health/ready", s.ready)
+		r.Get("/metrics", s.metrics)
 		r.Get("/bootstrap", s.bootstrap)
 		r.Get("/i18n/languages", s.publicUILanguages)
 		r.Get("/i18n/{code}", s.publicUIDictionary)
@@ -380,7 +384,8 @@ func (s *Server) Router() http.Handler {
 
 				r.Get("/backups", s.listBackups)
 				r.With(s.critical("backup_created", "backup")).Post("/backups", s.createBackup)
-				r.Get("/backups/{name}", s.downloadBackup)
+				// A backup is a full copy of the database: recorded BEFORE it is served.
+				r.With(s.critical("backup_downloaded", "backup", s.backupDownloadInfo)).Get("/backups/{name}", s.downloadBackup)
 				r.With(s.critical("backup_deleted", "backup")).Delete("/backups/{name}", s.deleteBackup)
 				r.With(s.critical("db_import_prepared", "backup")).Post("/backups/import", s.prepareImport)
 				r.With(s.critical("db_import_applied", "backup")).Post("/backups/import/apply", s.applyImport)

@@ -85,10 +85,11 @@ func auditReqFrom(ctx context.Context) *auditReq {
 }
 
 type auditState struct {
-	fails    atomic.Int64
-	appended atomic.Int64
-	reqs     sync.Map // goroutine id -> *auditReq
-	hook     atomic.Pointer[func() error]
+	fails      atomic.Int64
+	appended   atomic.Int64
+	lastFailed atomic.Bool // the most recent write failed (readiness check)
+	reqs       sync.Map    // goroutine id -> *auditReq
+	hook       atomic.Pointer[func() error]
 
 	viewMu sync.Mutex
 	viewed map[int64]time.Time
@@ -166,13 +167,19 @@ func classifyAction(action string) (category, outcome string) {
 	case action == "login_lockout", action == "access_denied", strings.HasSuffix(action, "_denied"):
 		outcome = "denied"
 	}
+	if action == "backup_failed_auto" {
+		outcome = "failed"
+	}
 	switch action {
 	case "login_ok", "login_failed", "login_lockout", "logout", "mfa_login_ok", "mfa_failed", "mfa_enrolled", "mfa_removed",
-		"session_reuse_detected", "password_changed", "password_reset", "session_revoked", "session_expired_provider":
+		"session_reuse_detected", "password_changed", "password_reset", "session_revoked", "session_expired_provider",
+		"session_expired", "session_expired_idle":
 		return catAuth, outcome
-	case "ip_banned", "ip_unbanned", "access_denied", "file_decrypt_failed", "key_fingerprint_changed", "audit_viewed", "audit_exported", "access_review_exported":
+	case "ip_banned", "ip_unbanned", "access_denied", "file_decrypt_failed", "key_fingerprint_changed", "audit_viewed", "audit_exported", "access_review_exported",
+		"backup_downloaded":
 		return catSecurity, outcome
-	case "system_start", "system_stop", "audit_purged", "audit_purge_failed":
+	case "system_start", "system_stop", "audit_purged", "audit_purge_failed",
+		"backup_created_auto", "backup_failed_auto", "backup_pruned", "share_files_purged", "account_removed_auto":
 		return catSystem, outcome
 	case "mfa_reset_requested", "mfa_reset_confirmed":
 		return catAccount, outcome
@@ -246,15 +253,19 @@ func (s *Server) auditWrite(e auditEntry, st *auditReq) error {
 				continue
 			}
 		}
-		if _, err = s.St.AuditAppend(rec); err == nil {
+		var stored store.AuditRecord
+		if stored, err = s.St.AuditAppend(rec); err == nil {
 			s.audit.appended.Add(1)
+			s.audit.lastFailed.Store(false)
 			if st != nil {
 				st.wrote.Store(true)
 			}
+			s.fwd.forward(s, &stored) // asynchronous; never blocks or fails the caller
 			return nil
 		}
 	}
 	s.audit.fails.Add(1)
+	s.audit.lastFailed.Store(true)
 	log.Printf("AUDIT WRITE FAILED (action %s): %v", rec.Action, err)
 	return err
 }
@@ -263,6 +274,7 @@ func (s *Server) auditWrite(e auditEntry, st *auditReq) error {
 // transaction or rows are open on the single database connection. A failure is
 // reported on stderr and counted, never raised.
 func (s *Server) logEvent(actorID int64, actorName, action, target, detail string) {
+	s.ops.countAction(action)
 	st := s.currentAuditReq()
 	cat, outcome := classifyAction(action)
 	e := auditEntry{Category: cat, Action: action, Target: target, Outcome: outcome, Detail: detail,
@@ -314,19 +326,33 @@ func (s *Server) auditCritical(w http.ResponseWriter, r *http.Request, action, t
 	return true
 }
 
+// criticalInfo names the target and detail of a critical record from the
+// request. ok=false means the addressed object does not exist: the request is
+// answered 404 without running the handler (so nothing is served unrecorded).
+type criticalInfo func(r *http.Request) (target, detail string, ok bool)
+
 // critical is the route middleware that audits an action before it runs. noun
-// labels the target ("user" gives "user#<id>" when the route has an {id}).
-func (s *Server) critical(action, noun string) func(http.Handler) http.Handler {
+// labels the target ("user" gives "user#<id>" when the route has an {id});
+// an optional criticalInfo replaces that label and adds a detail.
+func (s *Server) critical(action, noun string, info ...criticalInfo) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			target := noun
+			target, detail := noun, ""
 			for _, p := range []string{"id", "name"} {
 				if v := chi.URLParam(r, p); v != "" {
 					target = noun + "#" + clip(v, 60)
 					break
 				}
 			}
-			if !s.auditCritical(w, r, action, target, "") {
+			if len(info) > 0 {
+				t, d, ok := info[0](r)
+				if !ok {
+					jerr(w, 404, "not found")
+					return
+				}
+				target, detail = t, d
+			}
+			if !s.auditCritical(w, r, action, target, detail) {
 				return
 			}
 			next.ServeHTTP(w, r)

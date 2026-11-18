@@ -351,7 +351,10 @@
     "session not found",
     "session ended",
     "your sign-in through the identity provider has expired; sign in again",
-    "access review unavailable"
+    "access review unavailable",
+    "audit_forward_syslog must be host:port",
+    "audit log forwarding to link-local or cloud metadata addresses is not allowed",
+    "audit_forward_webhook_url must be an https:// URL without credentials (http only for localhost)"
   ],
   "dynamic": [
     "%d file(s) in %d share(s) are missing on disk and cannot be downloaded after the import.",
