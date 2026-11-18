@@ -41,7 +41,7 @@ RUN /tmp/sqlcipher-source/configure --disable-tcl --with-tempstore=yes \
 
 FROM sqlcipher AS build
 WORKDIR /src
-ARG VERSION=0.1.3
+ARG VERSION=0.1.4
 COPY go.mod go.sum ./
 # go.mod replaces mattn/go-sqlite3 with this SQLCipher linkage fork.
 COPY third_party/ ./third_party/

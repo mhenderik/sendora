@@ -37,7 +37,7 @@ Ready-to-use Compose files that run the published image `ghcr.io/mhenderik/sendo
    sudo chown root:10001 database.key && sudo chmod 0440 database.key
    ```
 
-   (Docker Desktop on macOS and Windows maps ownership itself.)
+   (Docker Desktop on macOS handles ownership itself. **On Windows** a key in a normal folder is refused: Docker Desktop shows it to the container with the permissions `rwxrwxrwx`, and Sendora rejects a key that other users could read. These Compose files have not been tested on Windows; the tested way to run Sendora on Windows is the [single-container steps with Docker volumes](../../docs/quickstart-docker.md#windows-powershell).)
 
 3. Start with database creation allowed, read the one-time setup code and create the administrator account:
 

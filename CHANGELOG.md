@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.4 (2026-11-18)
+
+- A wrong or missing database key is now reported as `database cannot be read with
+  supplied key`. It used to be reported as `required SQLCipher 4.20.0 engine
+  unavailable`, which sent operators looking for a missing engine.
+- Documentation for Windows (tested on Windows 11 with Docker Desktop, in Windows
+  PowerShell 5.1 and PowerShell 7.7): the bash key command does not work there and a
+  key in a Windows folder is refused, so the Docker steps use Docker volumes, with
+  back-up and restore of the key; the Kubernetes steps create the key with PowerShell.
+
 ## 0.1.3 (2026-11-17)
 
 - The running version is shown in the footer for signed-in users (`/api/users/me`

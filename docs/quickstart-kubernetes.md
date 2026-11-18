@@ -4,7 +4,7 @@ The minimum to try Sendora in a cluster with [`deploy/kubernetes-minimal.yaml`](
 
 [Back to the documentation index](README.md)
 
-Requirements: `kubectl` access to a cluster with a default StorageClass (any local cluster such as kind, minikube, k3s or Docker Desktop works) and `openssl`.
+Requirements: `kubectl` access to a cluster with a default StorageClass (any local cluster such as kind, minikube, k3s or Docker Desktop works) and `openssl` (on Windows use the PowerShell steps in section 1).
 
 ## 0. Storage
 
@@ -38,6 +38,17 @@ hostPath volumes live on one node and are meant for tests. On **Talos Linux** on
 
 ```sh
 (umask 077; set -C; openssl rand 32 > database.key)
+kubectl create namespace sendora
+kubectl -n sendora create secret generic sendora-db-key --from-file=database.key=./database.key
+```
+
+On **Windows (PowerShell)** there is no `openssl`, and in Windows PowerShell 5.1 the `>` redirect re-encodes the key (32 bytes became 72 in a test), so do not use `openssl rand 32 > database.key` there. Create the key with .NET instead. The key creation was tested in Windows PowerShell 5.1 and PowerShell 7.7 (the file is exactly 32 bytes); the `kubectl` commands are the same as above:
+
+```powershell
+$key = New-Object byte[] 32
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($key); $rng.Dispose()
+[System.IO.File]::WriteAllBytes("$PWD\database.key", $key)
 kubectl create namespace sendora
 kubectl -n sendora create secret generic sendora-db-key --from-file=database.key=./database.key
 ```
