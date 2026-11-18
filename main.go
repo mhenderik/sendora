@@ -29,6 +29,10 @@ func env(k, def string) string {
 }
 
 func main() {
+	// "sendora healthcheck": container HEALTHCHECK probe against the running server.
+	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheck())
+	}
 	if err := app.DisableCoreDumps(); err != nil {
 		log.Printf("WARNING: could not disable core dumps: %v", err)
 	}

@@ -1,7 +1,6 @@
 # Never send local data, secrets or build output into the image build.
 **/data
 **/sendora-data
-**/sendora-data
 **/*.db
 **/*.db-wal
 **/*.db-shm
@@ -15,7 +14,11 @@
 **/*.temp
 **/~*
 **/.DS_Store
-web/node_modules
+**/node_modules
 web/dist
 .git
 .github
+# Local tooling state (for example agent worktrees with their own data).
+.claude
+.idea
+.vscode
