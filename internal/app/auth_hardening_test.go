@@ -212,9 +212,11 @@ func TestWeakSetupCodesAreRefused(t *testing.T) {
 }
 
 func TestPasswordHashesUseCostTwelveAndUpgrade(t *testing.T) {
-	if c, _ := bcrypt.Cost(dummyHash); c != bcryptCost || bcryptCost != 12 {
-		t.Fatalf("dummy hash cost %d", c)
+	if c, _ := bcrypt.Cost(dummyHash); c != bcryptCost || bcryptCost != 12 || defaultHashCost != 12 {
+		t.Fatalf("dummy hash cost %d, default cost %d", c, defaultHashCost)
 	}
+	hashCost = bcryptCost
+	defer func() { hashCost = bcrypt.MinCost }()
 	e := newEnv(t)
 	admin := e.setup()
 	var h string

@@ -1120,7 +1120,7 @@ func (s *Server) editShare(w http.ResponseWriter, r *http.Request) {
 				bad(err.Error())
 				return
 			}
-			h, err := bcrypt.GenerateFromPassword([]byte(pw), bcryptCost)
+			h, err := bcrypt.GenerateFromPassword([]byte(pw), hashCost)
 			if err != nil {
 				bad("share password must not exceed 72 bytes")
 				return

@@ -331,7 +331,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "unsupported UI language")
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(c.Password), bcryptCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(c.Password), hashCost)
 	if err != nil {
 		jerr(w, 400, "invalid password (8-72 bytes required)")
 		return
@@ -681,7 +681,7 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAccountPassword(w, r, b.Password, s.resetTokenIdentity(b.Token)...) {
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(b.Password), hashCost)
 	if err != nil {
 		jerr(w, 400, "invalid password")
 		return
@@ -810,7 +810,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	hash, _ := bcrypt.GenerateFromPassword([]byte(c.Password), bcryptCost)
+	hash, _ := bcrypt.GenerateFromPassword([]byte(c.Password), hashCost)
 	res, err := s.St.DB.Exec(`INSERT INTO users(username,name,email,password_hash,email_verified,language,ui_language,pending_registration,password_changed_at) VALUES(?,?,?,?,?,?,?,?,?)`,
 		c.Username, c.Name, c.Email, string(hash), !verify, c.Language, c.UILanguage, verify, time.Now().UTC())
 	if err != nil {
@@ -1068,7 +1068,7 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 		if s.refusePasswordReuse(w, u.ID, u.passwordHash, b.Password) {
 			return
 		}
-		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
+		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), hashCost)
 		if err != nil {
 			jerr(w, 400, "invalid password")
 			return
@@ -1274,7 +1274,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "invalid quota choice")
 		return
 	}
-	h, _ := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
+	h, _ := bcrypt.GenerateFromPassword([]byte(b.Password), hashCost)
 	q := `INSERT INTO users(username,name,email,password_hash,admin,must_change_password,language,ui_language,password_changed_at) VALUES(?,?,?,?,?,?,?,?,?)`
 	args := []any{b.Username, b.Name, b.Email, string(h), b.Admin, b.MustChangePassword, b.Language, b.UILanguage, time.Now().UTC()}
 	if b.QuotaBytes != nil {
@@ -1408,7 +1408,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		if s.refusePasswordReuse(w, id, target.passwordHash, b.Password) {
 			return
 		}
-		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
+		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), hashCost)
 		if err != nil {
 			jerr(w, 400, "invalid password")
 			return

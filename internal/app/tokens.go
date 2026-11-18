@@ -13,6 +13,10 @@ import (
 // Older hashes are upgraded transparently after a successful check.
 const bcryptCost = 12
 
+// hashCost is the cost actually used; always bcryptCost outside tests (the
+// tests lower it so the suite stays fast under -race).
+var hashCost = bcryptCost
+
 // Token and version purposes: every purpose signs with its own HKDF subkey, so
 // a token (or version string) minted for one purpose can never verify as another.
 const (
@@ -33,12 +37,12 @@ func (s *Server) key(purpose string) []byte {
 }
 
 func hashPassword(pw string) ([]byte, error) {
-	return bcrypt.GenerateFromPassword([]byte(pw), bcryptCost)
+	return bcrypt.GenerateFromPassword([]byte(pw), hashCost)
 }
 
 func passwordHashIsWeak(hash string) bool {
 	c, err := bcrypt.Cost([]byte(hash))
-	return err == nil && c < bcryptCost
+	return err == nil && c < hashCost
 }
 
 // rehashPassword upgrades an account hash that was made with a lower cost. It
