@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,6 +150,9 @@ func TestVerifyFilesStatuses(t *testing.T) {
 	os.WriteFile(e.disk("emptytag"), st, 0o600)
 
 	os.WriteFile(e.disk("stray"), []byte("orphan"), 0o600)
+	// A directory inside a share directory is not a stored file: no orphan.
+	os.MkdirAll(e.disk("subdir"), 0o700)
+	os.WriteFile(filepath.Join(e.disk("subdir"), "inner"), []byte("x"), 0o600)
 
 	rep, err := VerifyFiles(e.st.Path, e.dir, e.key, false)
 	if err != nil {
@@ -212,5 +216,55 @@ func TestKeyFingerprint(t *testing.T) {
 	e := newVFEnv(t)
 	if e.st.KeyFingerprint() != KeyFingerprint(e.key) || !strings.HasPrefix(e.st.CipherVersion(), "4.20.0") {
 		t.Fatal("store fingerprint or cipher version")
+	}
+}
+
+// The streaming form checks rows in parallel but reports them in row id order,
+// with the same verdicts as a single worker, and reports progress.
+func TestVerifyFilesStreamOrder(t *testing.T) {
+	e := newVFEnv(t)
+	bad := map[int64]bool{}
+	for i := 0; i < 60; i++ {
+		plain := make([]byte, 100+i*37)
+		rand.Read(plain)
+		name := fmt.Sprintf("f%02d", i)
+		id, st := e.add(name, "v2", plain)
+		if i%7 == 3 {
+			st[len(st)-1] ^= 1
+			os.WriteFile(e.disk(name), st, 0o600)
+			bad[id] = true
+		}
+	}
+	collect := func(workers int) ([]FileCheck, FilesSummary, []int) {
+		var got []FileCheck
+		var progress []int
+		sum, err := VerifyFilesStream(e.st.Path, e.dir, e.key, VerifyOptions{
+			Workers:  workers,
+			File:     func(c FileCheck) { got = append(got, c) },
+			Progress: func(done, total int) { progress = append(progress, done*1000+total) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got, sum, progress
+	}
+	one, sum1, _ := collect(1)
+	many, sum4, progress := collect(4)
+	if len(many) != 60 || sum1 != sum4 || sum4.Failed != len(bad) || sum4.OK != 60-len(bad) {
+		t.Fatalf("summary %+v vs %+v (%d rows)", sum4, sum1, len(many))
+	}
+	for i := range many {
+		if i > 0 && many[i].ID <= many[i-1].ID {
+			t.Fatalf("rows out of order at %d", i)
+		}
+		if many[i] != one[i] {
+			t.Fatalf("row %d differs between 1 and 4 workers: %+v %+v", i, many[i], one[i])
+		}
+		if many[i].Problem() != bad[many[i].ID] {
+			t.Fatalf("row %d: %s", many[i].ID, many[i].Status)
+		}
+	}
+	if len(progress) != 60 || progress[0] != 1060 || progress[59] != 60060 {
+		t.Fatalf("progress %v", progress)
 	}
 }

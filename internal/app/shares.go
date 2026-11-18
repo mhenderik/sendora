@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/mhenderik/sendora/internal/filecrypt"
 	"github.com/mhenderik/sendora/internal/store"
@@ -182,10 +183,12 @@ func (s *Server) unlockShare(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 404, "share not found")
 		return
 	}
-	// A per-share budget on top of the per-address limits: many addresses
-	// guessing one share's password are throttled together.
-	throttleKey := strconv.FormatInt(sh.ID, 10)
-	if wait, blocked := s.shareThrottle.blocked(throttleKey); blocked {
+	// Budgets on top of the per-address limits: one per client (address, IPv6
+	// /64) and share, and a higher one per share for guesses from many
+	// addresses. An attempt is reserved before bcrypt, so parallel guesses
+	// cannot overrun either budget.
+	keys := shareUnlockKeys(sh.ID, ipBanKey(s.clientIP(r)))
+	if wait, ok := s.shareThrottle.reserveAttempt(keys, time.Now()); !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		jerr(w, 429, "too many failed attempts for this share; try again later")
 		return
@@ -193,14 +196,103 @@ func (s *Server) unlockShare(w http.ResponseWriter, r *http.Request) {
 	var b struct{ Password string }
 	decode(r, &b)
 	if bcrypt.CompareHashAndPassword([]byte(sh.hash), []byte(b.Password)) != nil {
-		s.shareThrottle.fail(throttleKey, shareUnlockLimit, shareUnlockWindow, shareUnlockBlock)
+		s.shareThrottle.failAttempt(keys, time.Now())
 		time.Sleep(300 * time.Millisecond)
 		jerr(w, 401, "wrong password")
 		return
 	}
-	s.shareThrottle.clear(throttleKey)
+	s.shareThrottle.releaseAttempt(keys)
+	s.shareThrottle.clear(keys[0].key)
 	s.rehashShare(sh, b.Password)
 	jout(w, 200, map[string]any{"token": s.shareToken(sh)})
+}
+
+// shareUnlockShareLimit is the failure budget of a whole share within
+// shareUnlockWindow. A single client (address, IPv6 /64) is blocked for one
+// share after shareUnlockLimit failures; the share itself only at this higher
+// threshold, which takes guesses from several addresses, so one client
+// guessing cannot lock out every real recipient.
+const shareUnlockShareLimit = 50
+
+// unlockKey is one throttle budget an unlock attempt counts against.
+type unlockKey struct {
+	key   string
+	limit int
+}
+
+// shareUnlockKeys returns the client budget first, then the share budget.
+func shareUnlockKeys(shareID int64, client string) []unlockKey {
+	id := strconv.FormatInt(shareID, 10)
+	return []unlockKey{{"c:" + id + ":" + client, shareUnlockLimit}, {"s:" + id, shareUnlockShareLimit}}
+}
+
+// reserveAttempt atomically counts one attempt against every key before the
+// password is checked. It refuses (with the time to wait) when a key is
+// blocked or its budget is already used up by failures and attempts still in
+// progress, so parallel guesses cannot exceed the budget. A reserved attempt
+// ends with failAttempt or releaseAttempt.
+func (t *failThrottle) reserveAttempt(keys []unlockKey, now time.Time) (time.Duration, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.m == nil {
+		t.m = map[string]*failEntry{}
+	}
+	if len(t.m)+len(keys) > maxThrottleKeys {
+		t.evict(now)
+	}
+	entries := make([]*failEntry, len(keys))
+	for i, k := range keys {
+		e := t.m[k.key]
+		if e != nil && !now.Before(e.windowEnds) && !now.Before(e.blockedUntil) {
+			e = nil // window and block are over: start afresh
+		}
+		if e != nil {
+			if wait := e.blockedUntil.Sub(now); wait > 0 {
+				return wait, false
+			}
+			if e.count >= k.limit {
+				return e.windowEnds.Sub(now), false
+			}
+		}
+		entries[i] = e
+	}
+	for i, k := range keys {
+		e := entries[i]
+		if e == nil {
+			e = &failEntry{windowEnds: now.Add(shareUnlockWindow)}
+			t.m[k.key] = e
+		}
+		e.count++
+	}
+	return 0, true
+}
+
+// failAttempt keeps a reserved attempt counted as a failure and blocks every
+// key whose budget is now used up.
+func (t *failThrottle) failAttempt(keys []unlockKey, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, k := range keys {
+		e := t.m[k.key]
+		if e == nil || e.count < k.limit {
+			continue
+		}
+		e.blockedUntil = now.Add(shareUnlockBlock)
+		if e.windowEnds.Before(e.blockedUntil) {
+			e.windowEnds = e.blockedUntil
+		}
+	}
+}
+
+// releaseAttempt gives back a reserved attempt that succeeded.
+func (t *failThrottle) releaseAttempt(keys []unlockKey) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, k := range keys {
+		if e := t.m[k.key]; e != nil && e.count > 0 {
+			e.count--
+		}
+	}
 }
 
 // rehashShare upgrades a share password hash made with a lower bcrypt cost.
@@ -320,6 +412,7 @@ func (w *downloadWriter) Write(p []byte) (int, error) {
 
 func (s *Server) downloadResponse(w http.ResponseWriter, r *http.Request, sh *Share, fileID *int64, jobID int64) http.ResponseWriter {
 	shareID, ip := sh.ID, s.clientIP(r)
+	rangeHeader := r.Header.Get("Range")
 	recorded := &downloadWriter{ResponseWriter: w, started: func() error {
 		startedAt := time.Now().UTC()
 		tx, err := s.St.DB.Begin()
@@ -345,7 +438,11 @@ func (s *Server) downloadResponse(w http.ResponseWriter, r *http.Request, sh *Sh
 		if fileID != nil {
 			detail = "file#" + strconv.FormatInt(*fileID, 10)
 		}
-		s.logEvent(0, "public", "download_started", "share#"+strconv.FormatInt(shareID, 10), detail)
+		// The downloads table keeps every start; the audit log only the first
+		// request of a download, so range requests cannot flood it.
+		if s.downloadLogAllowed(shareID, rangeHeader) {
+			s.logEvent(0, "public", "download_started", "share#"+strconv.FormatInt(shareID, 10), detail)
+		}
 		return nil
 	}}
 	return &idleResponseWriter{ResponseWriter: recorded, controller: http.NewResponseController(recorded), timeout: s.transferTimeout()}
@@ -408,14 +505,14 @@ func (s *Server) downloadShare(w http.ResponseWriter, r *http.Request) {
 	w = s.downloadResponse(w, r, sh, nil, jobID)
 	setDownloadChecksum(w, checksum)
 	if len(files) == 1 {
-		serveOpenDisk(w, r, snapshot, files[0].Name)
+		serveSnapshot(w, r, snapshot, files[0].Name)
 		return
 	}
 	name := safeName(sh.Name)
 	if name == "" {
 		name = "share"
 	}
-	serveOpenDisk(w, r, snapshot, name+".zip")
+	serveSnapshot(w, r, snapshot, name+".zip")
 
 }
 
@@ -445,7 +542,7 @@ func (s *Server) downloadShareFile(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			defer s.releaseDownloadMail(jobID)
-			serveOpenDisk(s.downloadResponse(w, r, sh, &id, jobID), r, in, f.Name)
+			serveSnapshot(s.downloadResponse(w, r, sh, &id, jobID), r, in, f.Name)
 			return
 		}
 	}
@@ -516,8 +613,16 @@ func (s *Server) previewShareFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer in.Close()
+		// A chunk that fails authentication ends the response mid-stream (the
+		// headers are already sent); record it, rate-limited per file.
+		fileID := f.ID
+		content := corruptWatch{ReadSeeker: in, onCorrupt: func() { s.noteDecryptFailure(fileID) }}
 		head := make([]byte, 512)
-		n, _ := io.ReadFull(in, head)
+		n, err := io.ReadFull(content, head)
+		if errors.Is(err, filecrypt.ErrCorrupt) {
+			integrityError(w, errIntegrity)
+			return
+		}
 		if !previewSniffOK(mime, head[:n]) {
 			jerr(w, 415, "preview not supported for this file type")
 			return
@@ -537,7 +642,7 @@ func (s *Server) previewShareFile(w http.ResponseWriter, r *http.Request) {
 		h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 		h.Set("Cache-Control", "no-store")
 		defer func() { _ = http.NewResponseController(rw).Flush() }()
-		http.ServeContent(rw, r, "", modTime, in)
+		http.ServeContent(rw, r, "", modTime, content)
 		return
 	}
 	jerr(w, 404, "file not found")
@@ -561,13 +666,13 @@ func (s *Server) openStoredFile(f FileInfo) (io.ReadSeekCloser, time.Time, error
 	key := s.St.FileKey()
 	if key == nil {
 		file.Close()
-		s.auditDecryptFailed(f.ID)
+		s.noteDecryptFailure(f.ID)
 		return nil, time.Time{}, errIntegrity
 	}
 	r, err := filecrypt.NewReader(file, st.Size(), f.Size, key, f.encID)
 	if err != nil {
 		file.Close()
-		s.auditDecryptFailed(f.ID)
+		s.noteDecryptFailure(f.ID)
 		return nil, time.Time{}, errIntegrity
 	}
 	return r, st.ModTime(), nil
@@ -602,6 +707,15 @@ func serveOpenDisk(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 		jerr(w, 404, "file missing")
 		return
 	}
+	serveAttachment(w, r, f, st.ModTime(), name)
+}
+
+// serveSnapshot serves one reader of a verified snapshot as an attachment.
+func serveSnapshot(w http.ResponseWriter, r *http.Request, snap *snapshotReader, name string) {
+	serveAttachment(w, r, snap, snap.ModTime(), name)
+}
+
+func serveAttachment(w http.ResponseWriter, r *http.Request, content io.ReadSeeker, modTime time.Time, name string) {
 	if _, ok := w.(*idleResponseWriter); !ok {
 		w = &idleResponseWriter{ResponseWriter: w, controller: http.NewResponseController(w), timeout: 60 * time.Second}
 	}
@@ -614,7 +728,7 @@ func serveOpenDisk(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename*=UTF-8''%s`, urlEscape(name)))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "application/octet-stream")
-	http.ServeContent(w, r, name, st.ModTime(), f)
+	http.ServeContent(w, r, name, modTime, content)
 }
 
 func urlEscape(s string) string {

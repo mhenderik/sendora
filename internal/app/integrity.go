@@ -7,19 +7,78 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/mhenderik/sendora/internal/filecrypt"
 )
 
 // Three preparations bound temporary disk usage to three times the per-response limit.
 // Snapshots are private and removed after serving; no source descriptors are retained.
 var integritySlots = make(chan struct{}, 3)
 var errIntegrity = errors.New("file integrity check failed")
+
+// decryptFailureInterval limits file_decrypt_failed audit records to one per
+// file per interval, so a client repeating requests (or a media player
+// issuing range after range) for a modified file cannot flood the audit log.
+const decryptFailureInterval = 10 * time.Minute
+
+type decryptFailureKey struct {
+	s  *Server
+	id int64
+}
+
+var decryptFailures = struct {
+	sync.Mutex
+	at map[decryptFailureKey]time.Time
+}{at: map[decryptFailureKey]time.Time{}}
+
+// noteDecryptFailure records that a stored file could not be decrypted or
+// failed authentication (row id only), at most once per file per interval.
+func (s *Server) noteDecryptFailure(fileID int64) {
+	decryptFailures.Lock()
+	now := time.Now()
+	if len(decryptFailures.at) > 4096 {
+		for k, t := range decryptFailures.at {
+			if now.Sub(t) >= decryptFailureInterval {
+				delete(decryptFailures.at, k)
+			}
+		}
+	}
+	k := decryptFailureKey{s, fileID}
+	last, seen := decryptFailures.at[k]
+	allowed := !seen || now.Sub(last) >= decryptFailureInterval
+	if allowed {
+		decryptFailures.at[k] = now
+	}
+	decryptFailures.Unlock()
+	if allowed {
+		s.auditDecryptFailed(fileID)
+	}
+}
+
+// corruptWatch reports an authentication failure seen while streaming an
+// encrypted file (preview and range responses fail mid-stream, after the
+// headers were sent, so this is the only place it can be noticed).
+type corruptWatch struct {
+	io.ReadSeeker
+	onCorrupt func()
+}
+
+func (c corruptWatch) Read(p []byte) (int, error) {
+	n, err := c.ReadSeeker.Read(p)
+	if err != nil && errors.Is(err, filecrypt.ErrCorrupt) {
+		c.onCorrupt()
+	}
+	return n, err
+}
 
 // One client address may hold at most two of the three verified-download slots:
 // a person can download two files at once, while a single slow client can never
@@ -58,50 +117,225 @@ func releaseDownloadClient(client string) {
 	downloadClientsMu.Unlock()
 }
 
-// prepareClientDownload is prepareDownload limited to one slot per client.
-// On success the caller releases both: <-integritySlots and releaseDownloadClient.
+// Verified snapshots are shared by the requests of one client for the same
+// files: a download manager opening several connections, or a client resuming
+// with Range requests, uses one snapshot and one set of slots instead of one
+// per request. A snapshot is reference counted and removed when its last
+// reader ends.
 //
-// It also enforces a per-share cap and a maximum hold time. The returned release
-// function closes and removes the snapshot and frees every slot; call it exactly
-// once (defer it). After slotHoldMax the snapshot is closed under the transfer so
-// a stalled client cannot keep a slot forever.
-func (s *Server) prepareClientDownload(ctx context.Context, client string, shareID int64, files []FileInfo) (*os.File, string, func(), error) {
+// Hold limit: a snapshot (preparation plus transfer) may hold its slots for
+// slotHoldMax. When that is reached it is closed only if no reader made
+// progress during the last snapshotProgressCheck; while bytes keep flowing it
+// is checked again every snapshotProgressCheck. Stalled and very slow
+// transfers are already ended by the idle and minimum-rate guards of
+// idleResponseWriter, so this only stops a snapshot that is held but unused.
+type snapshotKey struct {
+	s       *Server
+	client  string
+	shareID int64
+	files   string // ids, sizes and checksums: a changed file set is a new snapshot
+}
+
+type snapshot struct {
+	key      snapshotKey
+	ready    chan struct{} // closed when preparation ended
+	err      error         // preparation error, valid after ready
+	file     *os.File      // nil unless preparation succeeded
+	size     int64
+	modTime  time.Time
+	checksum string
+	free     func()       // gives back the file and the slots; guarded by snapshotsMu
+	timer    *time.Timer  // guarded by snapshotsMu
+	lastRead atomic.Int64 // unix nanoseconds of the last read progress, 0 = none
+	refs     int          // guarded by snapshotsMu
+	closed   bool         // guarded by snapshotsMu: no new readers may join
+}
+
+var (
+	snapshotsMu sync.Mutex
+	snapshots   = map[snapshotKey]*snapshot{}
+)
+
+// snapshotProgressCheck is how often a snapshot past slotHoldMax is checked
+// for reader progress. Default: 1 minute.
+var snapshotProgressCheck = time.Minute
+
+func snapshotFilesKey(files []FileInfo) string {
+	var b strings.Builder
+	for _, f := range files {
+		fmt.Fprintf(&b, "%d:%d:%s;", f.ID, f.Size, f.SHA256)
+	}
+	return b.String()
+}
+
+// snapshotReader is one reader's own position in a shared snapshot.
+type snapshotReader struct {
+	*io.SectionReader
+	sn *snapshot
+}
+
+func (r *snapshotReader) Read(p []byte) (int, error) {
+	n, err := r.SectionReader.Read(p)
+	if n > 0 {
+		r.sn.lastRead.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
+
+// ModTime is the time the snapshot was written.
+func (r *snapshotReader) ModTime() time.Time { return r.sn.modTime }
+
+// prepareClientDownload returns a reader of a verified snapshot of files for
+// one client, its SHA-256 and a release function the caller must call exactly
+// once (defer it; further calls do nothing). A new snapshot takes a per-share
+// slot (downloadSlotsPerShare), a per-client slot (downloadSlotsPerClient)
+// and a global slot (integritySlots); a request of the same client for the
+// same files joins the existing snapshot instead.
+func (s *Server) prepareClientDownload(ctx context.Context, client string, shareID int64, files []FileInfo) (*snapshotReader, string, func(), error) {
+	key := snapshotKey{s: s, client: client, shareID: shareID, files: snapshotFilesKey(files)}
+	for attempt := 0; ; attempt++ {
+		snapshotsMu.Lock()
+		sn := snapshots[key]
+		if sn != nil && !sn.closed {
+			sn.refs++
+			snapshotsMu.Unlock()
+			select {
+			case <-sn.ready:
+			case <-ctx.Done():
+				dropSnapshot(sn)
+				return nil, "", nil, errDownloadBusy
+			}
+			if sn.err != nil {
+				dropSnapshot(sn)
+				// The request that prepared it went away: prepare anew.
+				if (errors.Is(sn.err, context.Canceled) || errors.Is(sn.err, context.DeadlineExceeded)) && ctx.Err() == nil && attempt < 3 {
+					continue
+				}
+				return nil, "", nil, sn.err
+			}
+			return sn.reader(), sn.checksum, onceRelease(sn), nil
+		}
+		sn = &snapshot{key: key, ready: make(chan struct{}), refs: 1}
+		snapshots[key] = sn
+		snapshotsMu.Unlock()
+		if err := s.buildSnapshot(ctx, sn, client, shareID, files); err != nil {
+			snapshotsMu.Lock()
+			sn.err, sn.closed = err, true
+			if snapshots[key] == sn {
+				delete(snapshots, key)
+			}
+			snapshotsMu.Unlock()
+			close(sn.ready)
+			dropSnapshot(sn)
+			return nil, "", nil, err
+		}
+		close(sn.ready)
+		return sn.reader(), sn.checksum, onceRelease(sn), nil
+	}
+}
+
+func (sn *snapshot) reader() *snapshotReader {
+	return &snapshotReader{SectionReader: io.NewSectionReader(sn.file, 0, sn.size), sn: sn}
+}
+
+func onceRelease(sn *snapshot) func() {
+	var once sync.Once
+	return func() { once.Do(func() { dropSnapshot(sn) }) }
+}
+
+// buildSnapshot takes the slots and writes the verified snapshot into sn.
+func (s *Server) buildSnapshot(ctx context.Context, sn *snapshot, client string, shareID int64, files []FileInfo) error {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, slotHoldMax)
 	defer cancel()
 	if !acquireDownloadShare(ctx, shareID) {
-		return nil, "", nil, errDownloadBusy
+		return errDownloadBusy
 	}
 	if !acquireDownloadClient(ctx, client) {
 		releaseDownloadShare(shareID)
-		return nil, "", nil, errDownloadBusy
+		return errDownloadBusy
 	}
 	f, sum, err := s.prepareDownload(ctx, files)
 	if err != nil {
 		releaseDownloadClient(client)
 		releaseDownloadShare(shareID)
-		return nil, "", nil, err
+		return err
 	}
-	timer := time.AfterFunc(max(slotHoldMax-time.Since(start), time.Millisecond), func() { f.Close() })
-	release := func() {
-		timer.Stop()
+	free := func() {
 		f.Close()
 		os.Remove(f.Name())
 		<-integritySlots
 		releaseDownloadClient(client)
 		releaseDownloadShare(shareID)
 	}
-	return f, sum, release, nil
+	st, err := f.Stat()
+	if err != nil {
+		free()
+		return err
+	}
+	sn.file, sn.size, sn.modTime, sn.checksum = f, st.Size(), st.ModTime(), sum
+	snapshotsMu.Lock()
+	sn.free = free
+	sn.timer = time.AfterFunc(max(slotHoldMax-time.Since(start), time.Millisecond), sn.holdCheck)
+	snapshotsMu.Unlock()
+	return nil
+}
+
+// holdCheck runs once slotHoldMax is reached: it closes a snapshot nobody read
+// from during the last snapshotProgressCheck (its readers then fail and
+// release it), and otherwise checks again later.
+func (sn *snapshot) holdCheck() {
+	snapshotsMu.Lock()
+	defer snapshotsMu.Unlock()
+	if sn.free == nil {
+		return // already released
+	}
+	if last := sn.lastRead.Load(); last != 0 && time.Since(time.Unix(0, last)) < snapshotProgressCheck {
+		sn.timer = time.AfterFunc(snapshotProgressCheck, sn.holdCheck)
+		return
+	}
+	sn.closed = true
+	if snapshots[sn.key] == sn {
+		delete(snapshots, sn.key)
+	}
+	sn.file.Close()
+}
+
+// dropSnapshot ends one reference; the last one removes the snapshot and
+// gives back its slots.
+func dropSnapshot(sn *snapshot) {
+	snapshotsMu.Lock()
+	sn.refs--
+	if sn.refs > 0 {
+		snapshotsMu.Unlock()
+		return
+	}
+	sn.closed = true
+	if snapshots[sn.key] == sn {
+		delete(snapshots, sn.key)
+	}
+	timer, free := sn.timer, sn.free
+	sn.timer, sn.free = nil, nil
+	snapshotsMu.Unlock()
+	if timer != nil {
+		timer.Stop()
+	}
+	if free != nil {
+		free()
+	}
 }
 
 var errDownloadBusy = errors.New("verified download preparation busy")
 
-// slotHoldMax is the longest one verified-download slot may be held in total
-// (preparation plus transfer).
+// slotHoldMax is how long a verified snapshot may hold its slots before it is
+// closed, unless its readers are still making progress (see holdCheck).
+// Default: 2 hours.
 var slotHoldMax = 2 * time.Hour
 
-// downloadSlotsPerShare caps concurrent snapshots of a single share.
-const downloadSlotsPerShare = 2
+// downloadSlotsPerShare caps concurrent snapshots of a single share (requests
+// of one client for the same files share one snapshot). Default: 2 of the 3
+// global slots, so one share cannot take every slot of the instance.
+var downloadSlotsPerShare = 2
 
 var (
 	downloadSharesMu sync.Mutex
@@ -195,6 +429,12 @@ func (s *Server) copyVerifiedSource(ctx context.Context, dst io.Writer, f FileIn
 	h := sha256.New()
 	n, err := io.Copy(io.MultiWriter(dst, h), contextReader{ctx, io.LimitReader(in, f.Size+1)})
 	if err != nil {
+		// A chunk that fails authentication is a modified file, not a passing
+		// server problem: answer 409 and record it like a header failure.
+		if errors.Is(err, filecrypt.ErrCorrupt) {
+			s.noteDecryptFailure(f.ID)
+			return errIntegrity
+		}
 		return err
 	}
 	checksum := hex.EncodeToString(h.Sum(nil))
