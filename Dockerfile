@@ -4,7 +4,7 @@
 
 # The web build output is platform independent: always build it on the build
 # platform, also when cross-building locally (releases build natively per platform).
-FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS web
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
