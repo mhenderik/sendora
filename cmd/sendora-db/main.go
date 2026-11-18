@@ -8,13 +8,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/mhenderik/sendora/internal/store"
 )
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|mfa-reset [flags]")
+		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|verify-files|mfa-reset [flags]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	source := flags.String("source", "", "database source path; stop the app before offline operations")
@@ -22,6 +23,9 @@ func run(args []string) error {
 	keyFile := flags.String("key-file", os.Getenv("SENDORA_DB_KEY_FILE"), "external 32-byte key file")
 	plaintext := flags.Bool("plaintext", false, "explicit legacy plaintext verification")
 	user := flags.String("user", "", "username for mfa-reset")
+	dataDir := flags.String("data-dir", "", "data directory holding shares/ (verify-files; default: directory of -source)")
+	asJSON := flags.Bool("json", false, "verify-files: machine-readable output")
+	names := flags.Bool("names", false, "verify-files: also print share and file names (sensitive)")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -101,6 +105,27 @@ func run(args []string) error {
 			return err
 		}
 		fmt.Println("All multi-factor factors and sessions of the user were removed. Stop the application before running this offline step.")
+	case "verify-files":
+		dir := *dataDir
+		if dir == "" {
+			dir = filepath.Dir(*source)
+		}
+		rep, err := store.VerifyFiles(*source, dir, key, *names)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(rep); err != nil {
+				return err
+			}
+		} else {
+			printFilesReport(rep, *names)
+		}
+		if n := rep.Failures(); n != 0 {
+			return fmt.Errorf("verify-files: %d problem(s) found", n)
+		}
 	case "verify":
 		counts, err := store.VerifyDatabase(*source, key)
 		if err != nil {
@@ -111,6 +136,28 @@ func run(args []string) error {
 		return errors.New("unknown command")
 	}
 	return nil
+}
+
+// printFilesReport prints one line per row and orphan, then the summary. Names
+// appear only with -names; keys, plaintext and crypto error text never do.
+func printFilesReport(rep *store.FilesReport, names bool) {
+	for _, f := range rep.Files {
+		line := fmt.Sprintf("file id=%d path=%s %s", f.ID, f.PathHash, f.Status)
+		if names {
+			line += fmt.Sprintf(" share=%q file=%q", f.Share, f.Name)
+		}
+		fmt.Println(line)
+	}
+	for _, o := range rep.Orphans {
+		line := fmt.Sprintf("orphan path=%s", o.PathHash)
+		if names {
+			line += fmt.Sprintf(" file=%q", o.Name)
+		}
+		fmt.Println(line)
+	}
+	s := rep.Summary
+	fmt.Printf("summary rows=%d encrypted=%d plain=%d ok=%d plain-legacy=%d failed=%d orphans=%d\n",
+		s.Rows, s.Encrypted, s.Plain, s.OK, s.Legacy, s.Failed, s.Orphans)
 }
 
 func main() {
