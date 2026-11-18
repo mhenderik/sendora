@@ -14,12 +14,69 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mhenderik/sendora/internal/filecrypt"
 )
 
 // Three preparations bound temporary disk usage to three times the per-response limit.
 // Snapshots are private and removed after serving; no source descriptors are retained.
 var integritySlots = make(chan struct{}, 3)
 var errIntegrity = errors.New("file integrity check failed")
+
+// decryptFailureInterval limits file_decrypt_failed audit records to one per
+// file per interval, so a client repeating requests (or a media player
+// issuing range after range) for a modified file cannot flood the audit log.
+const decryptFailureInterval = 10 * time.Minute
+
+type decryptFailureKey struct {
+	s  *Server
+	id int64
+}
+
+var decryptFailures = struct {
+	sync.Mutex
+	at map[decryptFailureKey]time.Time
+}{at: map[decryptFailureKey]time.Time{}}
+
+// noteDecryptFailure records that a stored file could not be decrypted or
+// failed authentication (row id only), at most once per file per interval.
+func (s *Server) noteDecryptFailure(fileID int64) {
+	decryptFailures.Lock()
+	now := time.Now()
+	if len(decryptFailures.at) > 4096 {
+		for k, t := range decryptFailures.at {
+			if now.Sub(t) >= decryptFailureInterval {
+				delete(decryptFailures.at, k)
+			}
+		}
+	}
+	k := decryptFailureKey{s, fileID}
+	last, seen := decryptFailures.at[k]
+	allowed := !seen || now.Sub(last) >= decryptFailureInterval
+	if allowed {
+		decryptFailures.at[k] = now
+	}
+	decryptFailures.Unlock()
+	if allowed {
+		s.auditDecryptFailed(fileID)
+	}
+}
+
+// corruptWatch reports an authentication failure seen while streaming an
+// encrypted file (preview and range responses fail mid-stream, after the
+// headers were sent, so this is the only place it can be noticed).
+type corruptWatch struct {
+	io.ReadSeeker
+	onCorrupt func()
+}
+
+func (c corruptWatch) Read(p []byte) (int, error) {
+	n, err := c.ReadSeeker.Read(p)
+	if err != nil && errors.Is(err, filecrypt.ErrCorrupt) {
+		c.onCorrupt()
+	}
+	return n, err
+}
 
 // One client address may hold at most two of the three verified-download slots:
 // a person can download two files at once, while a single slow client can never
@@ -195,6 +252,12 @@ func (s *Server) copyVerifiedSource(ctx context.Context, dst io.Writer, f FileIn
 	h := sha256.New()
 	n, err := io.Copy(io.MultiWriter(dst, h), contextReader{ctx, io.LimitReader(in, f.Size+1)})
 	if err != nil {
+		// A chunk that fails authentication is a modified file, not a passing
+		// server problem: answer 409 and record it like a header failure.
+		if errors.Is(err, filecrypt.ErrCorrupt) {
+			s.noteDecryptFailure(f.ID)
+			return errIntegrity
+		}
 		return err
 	}
 	checksum := hex.EncodeToString(h.Sum(nil))

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/mhenderik/sendora/internal/filecrypt"
 	"github.com/mhenderik/sendora/internal/store"
@@ -521,8 +522,16 @@ func (s *Server) previewShareFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer in.Close()
+		// A chunk that fails authentication ends the response mid-stream (the
+		// headers are already sent); record it, rate-limited per file.
+		fileID := f.ID
+		content := corruptWatch{ReadSeeker: in, onCorrupt: func() { s.noteDecryptFailure(fileID) }}
 		head := make([]byte, 512)
-		n, _ := io.ReadFull(in, head)
+		n, err := io.ReadFull(content, head)
+		if errors.Is(err, filecrypt.ErrCorrupt) {
+			integrityError(w, errIntegrity)
+			return
+		}
 		if !previewSniffOK(mime, head[:n]) {
 			jerr(w, 415, "preview not supported for this file type")
 			return
@@ -542,7 +551,7 @@ func (s *Server) previewShareFile(w http.ResponseWriter, r *http.Request) {
 		h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 		h.Set("Cache-Control", "no-store")
 		defer func() { _ = http.NewResponseController(rw).Flush() }()
-		http.ServeContent(rw, r, "", modTime, in)
+		http.ServeContent(rw, r, "", modTime, content)
 		return
 	}
 	jerr(w, 404, "file not found")
@@ -566,13 +575,13 @@ func (s *Server) openStoredFile(f FileInfo) (io.ReadSeekCloser, time.Time, error
 	key := s.St.FileKey()
 	if key == nil {
 		file.Close()
-		s.auditDecryptFailed(f.ID)
+		s.noteDecryptFailure(f.ID)
 		return nil, time.Time{}, errIntegrity
 	}
 	r, err := filecrypt.NewReader(file, st.Size(), f.Size, key, f.encID)
 	if err != nil {
 		file.Close()
-		s.auditDecryptFailed(f.ID)
+		s.noteDecryptFailure(f.ID)
 		return nil, time.Time{}, errIntegrity
 	}
 	return r, st.ModTime(), nil
