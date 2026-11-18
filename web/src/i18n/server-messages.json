@@ -335,7 +335,13 @@
     "not enough free disk space on the server to prepare this download; try again later",
     "too many downloads are being prepared; try again shortly",
     "invalid range",
-    "a file and a folder would have the same name in this share"
+    "a file and a folder would have the same name in this share",
+    "too many records; narrow the filter",
+    "invalid from time",
+    "invalid to time",
+    "invalid category",
+    "invalid outcome",
+    "format must be csv or jsonl"
   ],
   "dynamic": [
     "%d file(s) in %d share(s) are missing on disk and cannot be downloaded after the import.",

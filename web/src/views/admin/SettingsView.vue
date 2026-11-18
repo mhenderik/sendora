@@ -14,7 +14,7 @@ async function load() {
   managed.value = settings.managed_settings || []
   s.value = settings
 }
-onMounted(async () => { try { await load() } catch (e) { err.value = t(e.message) } })
+onMounted(async () => { try { await load() } catch (e) { err.value = e.message } })
 const flags = [['allow_reverse_shares', tr('Allow reverse shares (guest invites)')], ['allow_self_registration', tr('Allow self registration')], ['show_language_selector', tr('Show language selector')], ['auto_clean_files', tr('Delete files of expired shares')], ['backups_enabled', tr('Daily database backups')], ['allow_preview', tr('Allow preview of images, video and audio')]]
 const nums = [['default_expiry_time', tr('Default expiry (days)')], ['max_expiry_time', tr('Max expiry (days, 0 = none)')], ['max_share_size', tr('Max share size (MB, 0 = none)')], ['clean_files_days', tr('Delete expired files after (days)')], ['expiry_warning_days', tr('Warn owners N days before expiry (0 = off)')], ['backup_keep', tr('Backups to keep')]]
 const accountFlags = [['account_password_require_upper', tr('Require an uppercase letter')], ['account_password_require_lower', tr('Require a lowercase letter')], ['account_password_require_digit', tr('Require a digit')], ['account_password_require_symbol', tr('Require a symbol')]]
@@ -25,7 +25,7 @@ async function save() {
     const body = { ...s.value, default_storage_quota_bytes: String(gbToBytes(quotaGB.value)) }
     await api('/settings', { method: 'PUT', body }); await loadBoot(); await load(); msg.value = t('Saved')
     return true
-  } catch (e) { err.value = t(e.message); return false }
+  } catch (e) { err.value = e.message; return false }
 }
 async function test() { try { if (!await save()) return; await api('/email-templates/test', { method: 'POST' }); msg.value = t('Test email sent') } catch (e) { err.value = e.message } }
 </script>

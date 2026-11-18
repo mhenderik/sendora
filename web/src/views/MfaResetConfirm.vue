@@ -8,7 +8,7 @@ const err = ref(''), done = ref(false), busy = ref(false)
 async function go() {
   err.value = ''; busy.value = true
   try { await api('/auth/mfa-reset/confirm', { method: 'POST', body: { token: route.params.token } }); done.value = true }
-  catch (e) { err.value = t(e.message) } finally { busy.value = false }
+  catch (e) { err.value = e.message } finally { busy.value = false }
 }
 </script>
 <template>

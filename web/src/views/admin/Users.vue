@@ -7,6 +7,11 @@ import { app } from '../../state'
 import { accountPolicy, passwordProblems } from '../../sharepolicy.mjs'
 import PasswordHints from '../../components/PasswordHints.vue'
 const users = ref([]), err = ref(''), edit = ref(null), defaultQuotaGB = ref(null), info = ref(''), smtpReady = ref(false), busy = ref(false)
+// Result of a row action (reset link, MFA reset, unlock), shown next to that user's row.
+const rowNote = ref(null), rowBusy = ref(0)
+const setRowNote = (u, kind, text) => { rowNote.value = { id: u.id, kind, text } }
+// Email actions need outgoing mail and an address; the hint says what is missing.
+const mailBlocked = u => !smtpReady.value ? t('Set up outgoing email (SMTP) in Settings first.') : !String(u.email || '').trim() ? t('This user has no email address.') : ''
 // Where an account comes from: local password and/or linked sign-in providers.
 const SOURCES = { entra: 'Microsoft Entra ID', oidc: 'OpenID Connect', google: 'Google', github: 'GitHub' }
 const sourceLabel = u => (u.sources || []).map(s => s === 'local' ? t('Local') : (SOURCES[s] || s)).join(' + ') || '—'
@@ -20,13 +25,14 @@ async function load() {
     defaultQuotaGB.value = bytesToGB(settings.default_storage_quota_bytes)
     smtpReady.value = !!String(settings.smtp_host || '').trim()
     users.value = list
-  } catch (e) { err.value = t(e.message) }
+  } catch (e) { err.value = e.message }
 }
 onMounted(load)
 async function unlock(u) {
   if (!confirm(t('Unlock local login for {n}?', { n: u.username }))) return
-  try { await api(`/users/${u.id}/unlock-login`, { method: 'POST' }); await load() }
-  catch (e) { err.value = t(e.message) }
+  rowNote.value = null; rowBusy.value = u.id
+  try { await api(`/users/${u.id}/unlock-login`, { method: 'POST' }); await load(); setRowNote(u, 'ok', t('Local login unlocked.')) }
+  catch (e) { setRowNote(u, 'err', e.message) } finally { rowBusy.value = 0 }
 }
 async function save() {
   err.value = ''
@@ -49,7 +55,7 @@ async function save() {
       info.value = welcomeMessage(created, u.email)
     }
     edit.value = null; await load()
-  } catch (e) { err.value = t(e.message) }
+  } catch (e) { err.value = e.message }
 }
 // The welcome email needs a working SMTP server and an address to send to.
 const welcomeAvailable = u => smtpReady.value && !!String(u.email || '').trim()
@@ -61,29 +67,33 @@ function welcomeMessage(created, email) {
 async function resendWelcome(u) {
   err.value = info.value = ''; busy.value = true
   try { await api(`/users/${u.id}/welcome`, { method: 'POST' }); info.value = t('Welcome email sent to {e}.', { e: u.email }) }
-  catch (e) { err.value = t(e.message) } finally { busy.value = false }
+  catch (e) { err.value = e.message } finally { busy.value = false }
 }
 async function resetMfa(u) {
   if (!confirm(t('Ask {n} to confirm removing their two-step verification? They get an email with a confirmation link; nothing changes until they confirm.', { n: u.username }))) return
-  err.value = info.value = ''
-  try { await api(`/users/${u.id}/mfa/reset`, { method: 'POST' }); info.value = t('Confirmation email sent to {n}. Two-step verification is only removed after they confirm by email.', { n: u.username }) }
-  catch (e) { err.value = t(e.message) }
+  rowNote.value = null; rowBusy.value = u.id
+  try { await api(`/users/${u.id}/mfa/reset`, { method: 'POST' }); setRowNote(u, 'ok', t('Confirmation email sent to {n}. Two-step verification is only removed after they confirm by email.', { n: u.username })) }
+  catch (e) { setRowNote(u, 'err', e.message) } finally { rowBusy.value = 0 }
 }
-async function del(u) { if (confirm(t('Delete user {n} and all their shares?', { n: u.username }))) { try { await api('/users/' + u.id, { method: 'DELETE' }); await load() } catch (e) { err.value = t(e.message) } } }
+async function del(u) {
+  if (!confirm(t('Delete user {n} and all their shares?', { n: u.username }))) return
+  rowNote.value = null; rowBusy.value = u.id
+  try { await api('/users/' + u.id, { method: 'DELETE' }); await load() } catch (e) { setRowNote(u, 'err', e.message) } finally { rowBusy.value = 0 }
+}
 async function force(u) {
   if (!confirm(t('Sign {n} out everywhere and send a password reset link to their verified email address?', { n: u.username }))) return
-  err.value = info.value = ''
+  rowNote.value = null; rowBusy.value = u.id
   try {
     const r = await api(`/users/${u.id}/force-reset-password`, { method: 'POST' })
-    if (r.reset_email === 'sent') info.value = t('Password reset link sent to {e}.', { e: u.email })
-    else info.value = t('No reset link was sent: {note}', { note: t(r.reset_note || tr('unknown reason')) })
-  } catch (e) { err.value = t(e.message) }
+    if (r.reset_email === 'sent') setRowNote(u, 'ok', t('Password reset link sent to {e}.', { e: u.email }))
+    else setRowNote(u, 'err', t('No reset link was sent: {note}', { note: t(r.reset_note || tr('unknown reason')) }))
+  } catch (e) { setRowNote(u, 'err', e.message) } finally { rowBusy.value = 0 }
 }
 </script>
 <template>
   <div class="card">
     <div class="actions" style="margin:0 0 12px"><h1 style="margin:0">{{ t('Users') }}</h1><button class="small" :disabled="defaultQuotaGB === null" @click="edit = blank()">+ {{ t('New user') }}</button></div>
-    <p v-if="err" class="err">{{ err }}</p>
+    <p v-if="err" class="err" role="alert">{{ err }}</p>
     <p v-if="info" class="ok" role="status">{{ info }}</p>
     <form v-if="edit" class="card" @submit.prevent="save">
       <div class="row">
@@ -118,10 +128,14 @@ async function force(u) {
         <td>{{ fmtGBShort(u.quota_bytes) }}<br /><span class="muted">{{ t(u.quota_inherits_default ? 'Global default' : 'Personal override') }}<br />{{ t('Stored files') }}: {{ fmtGBShort(u.storage_used_bytes) }}<br />{{ t('Reserved uploads') }}: {{ fmtGBShort(u.storage_reserved_bytes) }}</span>
           <p v-if="u.login_locked_until * 1000 > Date.now()" class="err">{{ t('Local login locked until') }} {{ fmtDate(new Date(u.login_locked_until * 1000).toISOString()) }}</p></td>
         <td class="actions" style="margin:0"><button class="small secondary" @click="open(u)">{{ t('Edit') }}</button>
-          <button v-if="u.login_locked_until * 1000 > Date.now()" class="small secondary" @click="unlock(u)">{{ t('Unlock local login') }}</button>
-          <button class="small secondary" @click="force(u)">{{ t('Send password reset link') }}</button>
-          <button v-if="mfaOn() && u.mfa_enabled" class="small secondary" @click="resetMfa(u)">{{ t('Request MFA reset') }}</button>
-          <button class="small danger" :disabled="u.id === session.user.id" @click="del(u)">{{ t('Delete') }}</button></td></tr>
+          <button v-if="u.login_locked_until * 1000 > Date.now()" class="small secondary" :disabled="rowBusy === u.id" @click="unlock(u)">{{ t('Unlock local login') }}</button>
+          <button class="small secondary" :disabled="rowBusy === u.id || !!mailBlocked(u)" :title="mailBlocked(u)" @click="force(u)">{{ t('Send password reset link') }}</button>
+          <button v-if="mfaOn() && u.mfa_enabled" class="small secondary" :disabled="rowBusy === u.id || !!mailBlocked(u)" :title="mailBlocked(u)" @click="resetMfa(u)">{{ t('Request MFA reset') }}</button>
+          <button class="small danger" :disabled="u.id === session.user.id || rowBusy === u.id" @click="del(u)">{{ t('Delete') }}</button>
+          <p v-if="rowNote && rowNote.id === u.id" class="row-note" :class="rowNote.kind" :role="rowNote.kind === 'err' ? 'alert' : 'status'">{{ rowNote.text }}</p></td></tr>
     </table></div>
   </div>
 </template>
+<style scoped>
+.row-note{flex-basis:100%;margin:6px 0 0;font-size:13px}
+</style>
