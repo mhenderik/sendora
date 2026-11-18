@@ -183,10 +183,12 @@ func (s *Server) unlockShare(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 404, "share not found")
 		return
 	}
-	// A per-share budget on top of the per-address limits: many addresses
-	// guessing one share's password are throttled together.
-	throttleKey := strconv.FormatInt(sh.ID, 10)
-	if wait, blocked := s.shareThrottle.blocked(throttleKey); blocked {
+	// Budgets on top of the per-address limits: one per client (address, IPv6
+	// /64) and share, and a higher one per share for guesses from many
+	// addresses. An attempt is reserved before bcrypt, so parallel guesses
+	// cannot overrun either budget.
+	keys := shareUnlockKeys(sh.ID, ipBanKey(s.clientIP(r)))
+	if wait, ok := s.shareThrottle.reserveAttempt(keys, time.Now()); !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		jerr(w, 429, "too many failed attempts for this share; try again later")
 		return
@@ -194,14 +196,103 @@ func (s *Server) unlockShare(w http.ResponseWriter, r *http.Request) {
 	var b struct{ Password string }
 	decode(r, &b)
 	if bcrypt.CompareHashAndPassword([]byte(sh.hash), []byte(b.Password)) != nil {
-		s.shareThrottle.fail(throttleKey, shareUnlockLimit, shareUnlockWindow, shareUnlockBlock)
+		s.shareThrottle.failAttempt(keys, time.Now())
 		time.Sleep(300 * time.Millisecond)
 		jerr(w, 401, "wrong password")
 		return
 	}
-	s.shareThrottle.clear(throttleKey)
+	s.shareThrottle.releaseAttempt(keys)
+	s.shareThrottle.clear(keys[0].key)
 	s.rehashShare(sh, b.Password)
 	jout(w, 200, map[string]any{"token": s.shareToken(sh)})
+}
+
+// shareUnlockShareLimit is the failure budget of a whole share within
+// shareUnlockWindow. A single client (address, IPv6 /64) is blocked for one
+// share after shareUnlockLimit failures; the share itself only at this higher
+// threshold, which takes guesses from several addresses, so one client
+// guessing cannot lock out every real recipient.
+const shareUnlockShareLimit = 50
+
+// unlockKey is one throttle budget an unlock attempt counts against.
+type unlockKey struct {
+	key   string
+	limit int
+}
+
+// shareUnlockKeys returns the client budget first, then the share budget.
+func shareUnlockKeys(shareID int64, client string) []unlockKey {
+	id := strconv.FormatInt(shareID, 10)
+	return []unlockKey{{"c:" + id + ":" + client, shareUnlockLimit}, {"s:" + id, shareUnlockShareLimit}}
+}
+
+// reserveAttempt atomically counts one attempt against every key before the
+// password is checked. It refuses (with the time to wait) when a key is
+// blocked or its budget is already used up by failures and attempts still in
+// progress, so parallel guesses cannot exceed the budget. A reserved attempt
+// ends with failAttempt or releaseAttempt.
+func (t *failThrottle) reserveAttempt(keys []unlockKey, now time.Time) (time.Duration, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.m == nil {
+		t.m = map[string]*failEntry{}
+	}
+	if len(t.m)+len(keys) > maxThrottleKeys {
+		t.evict(now)
+	}
+	entries := make([]*failEntry, len(keys))
+	for i, k := range keys {
+		e := t.m[k.key]
+		if e != nil && !now.Before(e.windowEnds) && !now.Before(e.blockedUntil) {
+			e = nil // window and block are over: start afresh
+		}
+		if e != nil {
+			if wait := e.blockedUntil.Sub(now); wait > 0 {
+				return wait, false
+			}
+			if e.count >= k.limit {
+				return e.windowEnds.Sub(now), false
+			}
+		}
+		entries[i] = e
+	}
+	for i, k := range keys {
+		e := entries[i]
+		if e == nil {
+			e = &failEntry{windowEnds: now.Add(shareUnlockWindow)}
+			t.m[k.key] = e
+		}
+		e.count++
+	}
+	return 0, true
+}
+
+// failAttempt keeps a reserved attempt counted as a failure and blocks every
+// key whose budget is now used up.
+func (t *failThrottle) failAttempt(keys []unlockKey, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, k := range keys {
+		e := t.m[k.key]
+		if e == nil || e.count < k.limit {
+			continue
+		}
+		e.blockedUntil = now.Add(shareUnlockBlock)
+		if e.windowEnds.Before(e.blockedUntil) {
+			e.windowEnds = e.blockedUntil
+		}
+	}
+}
+
+// releaseAttempt gives back a reserved attempt that succeeded.
+func (t *failThrottle) releaseAttempt(keys []unlockKey) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, k := range keys {
+		if e := t.m[k.key]; e != nil && e.count > 0 {
+			e.count--
+		}
+	}
 }
 
 // rehashShare upgrades a share password hash made with a lower bcrypt cost.
