@@ -228,6 +228,79 @@
   - Unchecked checkboxes have a stronger border; signed-in auditors and guests can open
     password-reset and MFA-reset links.
 
+### Compliance: accounts, sessions and evidence
+
+- **Access review** (ISO 27001 A.5.18 / SOC 2 CC6.2-6.3): Admin -> Access review (also
+  for auditors) lists every account with role, sign-in sources, two-step status, email
+  verification, created at/by, last role and email change, last sign-in, lock and disabled
+  state, and share count and storage (counts only). CSV/JSONL export, recorded before it is
+  served (`access_review_exported`).
+- **Disable instead of delete:** a disabled account cannot sign in (password, second factor
+  or provider), its sessions end and access tokens are refused at once, its share links
+  answer like expired shares, pending uploads and invitations are cancelled; nothing is
+  deleted (`user_disabled` / `user_enabled`).
+- **Sessions:** Profile -> "Your sessions" with sign-out per session and "Sign out all other
+  sessions"; administrators can sign a user out everywhere (`user_signed_out`). Signing a
+  session out ends its access tokens immediately. Sessions started through a sign-in
+  provider must sign in at the provider again after `provider_session_max_hours` (default
+  24), so deprovisioning at the identity provider takes effect.
+- **Security notifications** by email: password changed, second factor added or removed,
+  recovery codes regenerated, and sign-in from a new browser and network (`notify_new_signin`,
+  on by default; only keyed hashes are stored).
+- **Password screening:** account passwords are checked against an embedded list of common
+  passwords and may not contain the username, email or application name, or be simple
+  repetitions or sequences. Optional Have I Been Pwned range check
+  (`password_breach_check_online`, off; only 5 hash characters leave the server). The
+  account password minimum is now 8 (8-72; lower stored values are raised).
+- **Personal data (GDPR):** "Download my data" (JSON export, `personal_data_exported`),
+  self-service account deletion, and administrator erasure (`user_erased`): shares, files,
+  invites, sessions and factors are deleted and the account is pseudonymised; audit records
+  keep the former name until retention removes them (documented exception).
+- **Step-up re-authentication** for critical administrator actions (deleting or erasing
+  users, role changes, sign-in providers, security settings, backup download/delete/restore,
+  MFA reset requests) within `admin_stepup_minutes` (default 5): second factor if enrolled,
+  otherwise the password. Administrator sessions end after `admin_idle_logout_minutes`
+  (default 15) of inactivity.
+- **Administrator network restriction:** `admin_ip_allowlist` limits the administration and
+  audit pages to listed addresses (refusals audited; a list without your own address cannot
+  be saved; recovery switch `SENDORA_DISABLE_ADMIN_IP_ALLOWLIST=true`).
+- **Privacy and terms:** `privacy_url` / `terms_url` links in the footer, sign-in and share
+  pages; optional terms acceptance per version (`terms_accepted`).
+- **Audit coverage:** backup downloads are recorded before they are served
+  (`backup_downloaded`); sign-outs are recorded with the user; idle and absolute session ends
+  (`session_expired_idle`, `session_expired`); automatic backups, pruning, clean-up of
+  expired share files and automatic account removal appear as system actions.
+- **Data minimisation:** download records store the recipient's IP only while audit IP
+  logging is on; stored addresses are cleared otherwise.
+- **Off-host audit forwarding:** standard output (JSON lines), syslog (RFC 5424 over TCP or
+  TLS) and an HTTPS webhook (bearer token from `SENDORA_AUDIT_FORWARD_WEBHOOK_TOKEN_FILE`),
+  with a chain-head heartbeat every five minutes; delivery never blocks Sendora.
+- **Operations:** readiness probe `GET /api/health/ready` (database, audit log, disk, backup
+  age, audit chain) and optional Prometheus metrics at `GET /api/metrics`
+  (`SENDORA_METRICS_TOKEN_FILE`).
+- Admin: two-step verification, the account password policy, sessions and audit-log
+  settings moved to the Security tab. New installations default to `mfa_policy` `optional`.
+
+### Supply chain, image and deployment
+
+- The image is built on Debian 13 "trixie" (Debian 12 left regular security support in July
+  2026), with base images pinned by digest, no setuid/setgid programs and OCI labels. A new
+  `sendora healthcheck` subcommand replaces wget, and the sqlcipher shell is no longer in the
+  runtime image.
+- Releases are built natively for amd64 and arm64 (no emulation), only after the full test
+  suite passed, and carry GitHub build-provenance and SBOM attestations and a keyless cosign
+  signature (see SECURITY.md). A manual release never overwrites a published version.
+- CI runs govulncheck, npm audit and an image smoke test; CodeQL and a weekly Trivy image
+  scan were added; Dependabot keeps dependencies, base images and actions current; all
+  actions are pinned to commit SHAs.
+- `deploy/kubernetes.yaml` enforces the Pod Security Standard "restricted", uses its own
+  ServiceAccount without a token and ships default-deny NetworkPolicies (replace the
+  ingress namespace placeholder); the minimal manifest and the Compose files got resource
+  limits and a read-only root filesystem; the HTTPS override uses Caddy pinned by digest
+  with only NET_BIND_SERVICE.
+- SECURITY.md: image verification steps, response goals, and the corrected note on outgoing
+  OpenID Connect requests.
+
 ## 0.1.4 (2026-11-18)
 
 - A wrong or missing database key is now reported as `database cannot be read with
