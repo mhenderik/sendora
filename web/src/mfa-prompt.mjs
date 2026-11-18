@@ -3,12 +3,13 @@
 // external identity provider rely on that provider's own protection), and only when
 // there is a method to enrol with. Accounts that already have a factor, guests and
 // auditors (read-only, cannot enrol) are never asked, and neither is an account that
-// is already being sent to the profile page to enrol because the policy requires it.
+// is already being sent to the profile page to enrol because the policy requires it or
+// that still has to replace its password first.
 export function shouldPromptMFA({ user, hasPassword, boot, dismissed }) {
   if (!user || dismissed) return false
   if (user.is_guest || user.auditor) return false
   if (!hasPassword) return false
-  if (user.mfa_enabled || user.mfa_enroll_required) return false
+  if (user.mfa_enabled || user.mfa_enroll_required || user.must_change_password) return false
   return !!(boot?.mfa_totp_enabled || boot?.mfa_webauthn_enabled)
 }
 

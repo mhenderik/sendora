@@ -20,6 +20,11 @@ test('does not ask when a factor exists, when enrolment is already forced, or af
   assert.equal(shouldPromptMFA({ ...base, dismissed: true }), false)
 })
 
+test('does not ask while a password change is still required', () => {
+  assert.equal(shouldPromptMFA({ ...base, user: { ...user, must_change_password: true } }), false)
+  assert.equal(shouldPromptMFA({ ...base, user: { ...user, must_change_password: false } }), true)
+})
+
 test('does not ask guests or auditors, or when no method can be enrolled', () => {
   assert.equal(shouldPromptMFA({ ...base, user: { ...user, is_guest: true } }), false)
   assert.equal(shouldPromptMFA({ ...base, user: { ...user, auditor: true } }), false)

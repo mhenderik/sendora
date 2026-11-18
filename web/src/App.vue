@@ -5,11 +5,12 @@ import { session, logout, api } from './api'
 import { app, pageTitle } from './state'
 import { bundledUrl } from './backgrounds'
 import { t, lang, languages, setLang } from './i18n'
-import { onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { onMounted, onBeforeUnmount } from 'vue'
 import { session as sess, refresh as refreshSession } from './api'
 import { createIdleMonitor } from './idle.mjs'
 import { isBusy } from './transfers.mjs'
 import { shouldPromptMFA, mfaPromptKey, reminderSuppressed } from './mfa-prompt.mjs'
+import { vFocusTrap } from './focus-trap.mjs'
 
 const router = useRouter(), route = useRoute()
 const ready = true
@@ -26,7 +27,7 @@ watchEffect(() => {
 // The running version is shown in the footer to signed-in users only; public pages never expose it.
 // The same call tells whether the account uses a local password, which decides if we
 // remind the user that two-step verification is not set up yet.
-const mfaPrompt = ref(false), mfaBtn = ref(null)
+const mfaPrompt = ref(false)
 // A dismissed reminder returns after mfa_reminder_days days (default 1; 0 = next sign-in).
 // The time is kept in this browser; the session flag covers the 0-day case.
 function mfaDismissed(id) {
@@ -43,8 +44,8 @@ function dismissMfa() {
   try { sessionStorage.setItem(mfaPromptKey(id), '1') } catch {}
 }
 function setupMfa() { dismissMfa(); router.push('/profile') }
-watch(mfaPrompt, async open => { if (open) { await nextTick(); mfaBtn.value?.focus() } })
-watch(() => session.user?.id, async id => {
+// Re-checked when a required password change is completed (same account, flag cleared).
+watch(() => [session.user?.id, !!session.user?.must_change_password], async ([id]) => {
   app.version = ''
   mfaPrompt.value = false
   if (!id) return
@@ -77,7 +78,8 @@ async function out() { await logout(); router.push('/login') }
 
 // ---- automatic sign-out after inactivity (never while a transfer is running) ----
 const idle = ref({ warning: false, seconds: 0 })
-const stayBtn = ref(null)
+// The sign-out warning always wins: the MFA reminder waits while it is open.
+const showMfaPrompt = computed(() => mfaPrompt.value && !idle.value.warning)
 let monitor = null, timer = null
 const idleMs = () => {
   const m = Number(app.boot?.idle_logout_minutes)
@@ -96,7 +98,7 @@ function startIdle() {
   if (!idleApplies()) return
   monitor = createIdleMonitor({
     limitMs: idleMs(), isBusy, doRefresh: () => refreshSession(),
-    onWarn: seconds => { const first = !idle.value.warning; idle.value = { warning: true, seconds }; if (first) nextTick(() => stayBtn.value?.focus()) },
+    onWarn: seconds => { idle.value = { warning: true, seconds } },
     onClear: () => { idle.value = { warning: false, seconds: 0 } },
     onTimeout: idleTimedOut,
   })
@@ -143,19 +145,19 @@ watch(() => app.boot?.idle_logout_minutes, () => { if (monitor) monitor.setLimit
       <router-link to="/" class="brand"><img :src="logoUrl" alt="" class="logo" /><span>{{ app.boot?.application_name || 'Sendora' }}</span></router-link>
       <nav v-if="!session.user && !app.boot?.setup_needed"><router-link to="/login">{{ t('Sign in') }}</router-link><router-link v-if="app.boot?.registration_available" to="/register">{{ t('Create account') }}</router-link></nav>
     </header>
-    <div v-if="idle.warning" class="idle-modal" role="alertdialog" aria-modal="true" aria-labelledby="idle-title" aria-describedby="idle-desc">
+    <div v-if="idle.warning" v-focus-trap class="idle-modal idle-warning" role="alertdialog" aria-modal="true" aria-labelledby="idle-title" aria-describedby="idle-desc">
       <div class="idle-box card">
         <h2 id="idle-title">{{ t('Still there?') }}</h2>
         <p id="idle-desc" aria-live="assertive">{{ t('You will be signed out in {n} seconds', { n: idle.seconds }) }}</p>
-        <div class="actions"><button ref="stayBtn" type="button" @click="stay">{{ t('Stay signed in') }}</button></div>
+        <div class="actions"><button type="button" @click="stay">{{ t('Stay signed in') }}</button></div>
       </div>
     </div>
-    <div v-if="mfaPrompt" class="idle-modal" role="alertdialog" aria-modal="true" aria-labelledby="mfa-title" aria-describedby="mfa-desc" @keydown.esc="dismissMfa">
+    <div v-if="showMfaPrompt" v-focus-trap="dismissMfa" class="idle-modal" role="alertdialog" aria-modal="true" aria-labelledby="mfa-title" aria-describedby="mfa-desc">
       <div class="idle-box card">
         <h2 id="mfa-title">{{ t('Two-step verification is not set up yet') }}</h2>
         <p id="mfa-desc">{{ t('Your account is protected by a password only. Set up an authenticator app or a passkey to protect it better.') }}</p>
         <div class="actions">
-          <button ref="mfaBtn" type="button" @click="setupMfa">{{ t('Set up now') }}</button>
+          <button type="button" @click="setupMfa">{{ t('Set up now') }}</button>
           <button type="button" class="secondary" @click="dismissMfa">{{ t('Remind me later') }}</button>
         </div>
       </div>
