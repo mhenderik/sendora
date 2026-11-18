@@ -6,6 +6,31 @@ import (
 	"testing"
 )
 
+func TestBundledThemeCannotBeOverwritten(t *testing.T) {
+	e := newEnv(t)
+	admin := e.setup()
+	good := map[string]string{}
+	for _, key := range themeKeys {
+		good[key] = "#123456"
+	}
+	var bundled Theme
+	for _, theme := range e.s.queryThemes("") {
+		if theme.Bundled {
+			bundled = theme
+			break
+		}
+	}
+	if bundled.ID == 0 {
+		t.Fatal("no bundled theme")
+	}
+	e.want(e.do("POST", "/api/themes", admin, map[string]any{"id": bundled.ID, "name": "Hijacked", "data": good}), 400, "bundled theme not editable")
+	for _, theme := range e.s.queryThemes("") {
+		if theme.ID == bundled.ID && (theme.Name != bundled.Name || theme.Data["primary"] != bundled.Data["primary"]) {
+			t.Fatal("bundled theme was modified")
+		}
+	}
+}
+
 func TestThemeImportValidation(t *testing.T) {
 	e := newEnv(t)
 	admin := e.setup()

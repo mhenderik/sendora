@@ -873,5 +873,9 @@
   "Set up now": "Nu instellen",
   "Remind me later": "Herinner me later",
   "Remind users who skipped two-step setup again after (days, 0 = at every sign-in)": "Herinner gebruikers die tweestapsverificatie hebben overgeslagen opnieuw na (dagen, 0 = bij elke aanmelding)",
-  "Accounts with a local password and no second factor see a reminder after signing in. Dismissing it hides it for this many days in that browser.": "Accounts met een lokaal wachtwoord en zonder tweede factor zien na het aanmelden een herinnering. Wegklikken verbergt die in die browser zoveel dagen."
+  "Accounts with a local password and no second factor see a reminder after signing in. Dismissing it hides it for this many days in that browser.": "Accounts met een lokaal wachtwoord en zonder tweede factor zien na het aanmelden een herinnering. Wegklikken verbergt die in die browser zoveel dagen.",
+  "A theme with this name already exists.": "Er bestaat al een thema met deze naam.",
+  "Built-in themes cannot be changed. Saving creates a new theme under the name above.": "Ingebouwde thema's kunnen niet worden gewijzigd. Opslaan maakt een nieuw thema aan onder de naam hierboven.",
+  "Colour changes are previewed on this page immediately; they are applied for everyone only after saving and activating.": "Kleurwijzigingen zijn direct zichtbaar op deze pagina; ze gelden pas voor iedereen na opslaan en activeren.",
+  "Copy and edit": "Kopiëren en bewerken"
 }
