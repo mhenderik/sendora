@@ -816,5 +816,11 @@
   "Expand all": "Alles uitklappen",
   "Collapse all": "Alles inklappen",
   "Remove folder": "Map verwijderen",
-  "Remove file": "Bestand verwijderen"
+  "Remove file": "Bestand verwijderen",
+  "not enough free disk space on the server to prepare this download; try again later": "er is op de server te weinig vrije schijfruimte om deze download voor te bereiden; probeer het later opnieuw",
+  "too many downloads are being prepared; try again shortly": "er worden te veel downloads voorbereid; probeer het zo opnieuw",
+  "invalid range": "ongeldig bereik",
+  "a file and a folder would have the same name in this share": "een bestand en een map zouden dezelfde naam krijgen in deze share",
+  "Password protected share": "Met wachtwoord beveiligde share",
+  "Enter the password you received to open this share.": "Voer het wachtwoord in dat je hebt ontvangen om deze share te openen."
 }

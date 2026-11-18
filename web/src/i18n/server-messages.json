@@ -315,7 +315,11 @@
     "invalid background",
     "uploads by invitation are turned off",
     "registration failed",
-    "this login provider is managed by the server configuration and cannot be changed here"
+    "this login provider is managed by the server configuration and cannot be changed here",
+    "not enough free disk space on the server to prepare this download; try again later",
+    "too many downloads are being prepared; try again shortly",
+    "invalid range",
+    "a file and a folder would have the same name in this share"
   ],
   "dynamic": [
     "%d file(s) in %d share(s) are missing on disk and cannot be downloaded after the import.",

@@ -15,6 +15,11 @@ const (
 	maxMessageRunes     = 10000
 )
 
+// lookalikeSeparators are characters that render like a path separator but are
+// ordinary file name characters to the file system: DIVISION SLASH U+2215,
+// FULLWIDTH SOLIDUS U+FF0F and FULLWIDTH REVERSE SOLIDUS U+FF3C.
+const lookalikeSeparators = "\u2215\uff0f\uff3c"
+
 // hasFormatRune reports invisible formatting characters (Unicode category Cf),
 // which includes the bidirectional overrides (U+202A–202E, U+2066–2069, U+200E/F)
 // that make "photo‮gpj.exe" display as an image. Only the zero-width
@@ -31,7 +36,7 @@ func hasFormatRune(s string) bool {
 // validateNewPath checks the shape of a path for NEW uploads (never applied to
 // stored legacy names): bounded length and no invisible formatting characters.
 func validateNewPath(p string) error {
-	if len(p) > maxPathBytes || hasFormatRune(p) {
+	if len(p) > maxPathBytes || hasFormatRune(p) || strings.ContainsAny(p, lookalikeSeparators) {
 		return fmt.Errorf("unsafe file path")
 	}
 	for _, seg := range strings.Split(strings.ReplaceAll(p, "\\", "/"), "/") {
