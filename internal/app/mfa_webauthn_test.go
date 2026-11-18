@@ -555,7 +555,6 @@ func TestWebAuthnNothingSensitiveInLogsEventsOrErrors(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(os.Stderr) }) // never nil: background workers keep logging
 
 	e, admin := newWAEnv(t)
-	e.setting("logging_enabled", "true")
 	tok := e.mkUser(admin, "wanda", false)
 	dev := waDevice(t, webauthnlite.AlgES256)
 
@@ -580,7 +579,7 @@ func TestWebAuthnNothingSensitiveInLogsEventsOrErrors(t *testing.T) {
 	e.want(e.waLoginFinish(mfaToken, dev, ch, virtual.Options{}), 200, "login")
 
 	e.s.flushEvents()
-	rows, err := e.s.St.DB.Query(`SELECT actor_name||' '||action||' '||target||' '||detail FROM event_log`)
+	rows, err := e.s.St.DB.Query(`SELECT actor_name||' '||action||' '||target||' '||detail FROM audit_log`)
 	if err != nil {
 		t.Fatal(err)
 	}

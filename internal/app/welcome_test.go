@@ -61,7 +61,6 @@ func TestCreateUserWelcomeMailFlow(t *testing.T) {
 	admin := e.setup()
 	sink := newSMTP(t)
 	e.useSMTP(sink)
-	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"logging_enabled": true}), 200, "enable logging")
 	const initial = "Initial-Secret-1234"
 	created := e.do("POST", "/api/users", admin, map[string]any{"username": "newbie", "name": "Nina", "email": "newbie@x.io", "password": initial, "must_change_password": true, "send_welcome": true, "language": "nl"})
 	e.want(created, 201, "create with welcome")

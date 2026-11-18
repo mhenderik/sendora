@@ -51,6 +51,8 @@ var serverEnvNames = map[string]bool{
 	"SENDORA_DB_KEY_FILE": true, "SENDORA_DB_INITIALIZE": true, "SENDORA_TRUSTED_PROXIES": true,
 	"SENDORA_SETUP_CODE": true, "SENDORA_FORCE_LOCAL_LOGIN": true, "SENDORA_DISABLE_IP_BANS": true,
 	"SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES": true,
+	// Retired switches of the former optional event log: accepted and ignored.
+	"SENDORA_LOGGING_ENABLED": true, "SENDORA_LOG_RETENTION_HOURS": true,
 }
 
 // warnConfig logs configuration that is probably a mistake: SENDORA_* variables

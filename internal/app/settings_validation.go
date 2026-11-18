@@ -12,7 +12,7 @@ import (
 var boolSettings = map[string]bool{
 	"show_language_selector": true, "allow_reverse_shares": true, "allow_self_registration": true,
 	"require_email_verification": true, "auto_clean_files": true, "backups_enabled": true,
-	"ui_use_unsplash": true, "ui_default_background": true,
+	"ui_use_unsplash": true, "ui_default_background": true, "audit_log_ip": true,
 }
 
 // intSettings lists the allowed range of each numeric setting.
@@ -25,6 +25,7 @@ var intSettings = map[string][2]int{
 	"backup_keep":          {1, 365},
 	"ui_slideshow_seconds": {5, 3600},
 	"smtp_port":            {1, 65535},
+	"audit_retention_days": {1, 365},
 }
 
 func plainText(v string, max int) bool {

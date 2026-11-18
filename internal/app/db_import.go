@@ -444,6 +444,13 @@ func (s *Server) runImportSwap(p *preparedImport) {
 	if s.importStop != nil {
 		s.importStop()
 	}
+	// The audit trail of this instance survives the import: it replaces the
+	// imported file's own, so a backup can neither erase nor roll back records.
+	if err := s.St.CarryAuditLog(p.path); err != nil {
+		log.Printf("audit log could not be carried into the import, previous database kept: %v", err)
+		s.importExit(1)
+		return
+	}
 	if err := s.St.Close(); err != nil {
 		log.Printf("database close before import swap: %v", err)
 	}

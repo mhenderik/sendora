@@ -14,7 +14,7 @@ import (
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|mfa-reset [flags]")
+		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|audit-verify|mfa-reset [flags]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	source := flags.String("source", "", "database source path; stop the app before offline operations")
@@ -22,6 +22,7 @@ func run(args []string) error {
 	keyFile := flags.String("key-file", os.Getenv("SENDORA_DB_KEY_FILE"), "external 32-byte key file")
 	plaintext := flags.Bool("plaintext", false, "explicit legacy plaintext verification")
 	user := flags.String("user", "", "username for mfa-reset")
+	jsonOut := flags.Bool("json", false, "machine-readable output for audit-verify")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -107,6 +108,23 @@ func run(args []string) error {
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(counts)
+	case "audit-verify":
+		st, err := store.VerifyAuditDatabase(*source, key)
+		if err != nil {
+			return err
+		}
+		if *jsonOut {
+			if err := json.NewEncoder(os.Stdout).Encode(st); err != nil {
+				return err
+			}
+		} else if st.OK {
+			fmt.Printf("Audit chain verified: %d records, last seq %d, checkpoint seq %d.\n", st.Count, st.LastSeq, st.CheckpointSeq)
+		} else {
+			fmt.Printf("Audit chain BROKEN at seq %d (%s). %d records examined.\n", st.FirstBroken, st.Reason, st.Count)
+		}
+		if !st.OK {
+			return fmt.Errorf("audit chain broken at seq %d", st.FirstBroken)
+		}
 	default:
 		return errors.New("unknown command")
 	}

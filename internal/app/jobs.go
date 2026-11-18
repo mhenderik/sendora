@@ -15,6 +15,7 @@ import (
 // RunJobs starts periodic maintenance until ctx is cancelled.
 func (s *Server) RunJobs(ctx context.Context) {
 	s.RunDownloadMail(ctx)
+	s.auditStartup()
 	s.maintain()
 	t := time.NewTicker(10 * time.Minute)
 	lastBackup := time.Time{}
@@ -23,6 +24,7 @@ func (s *Server) RunJobs(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
+				s.auditShutdown()
 				return
 			case now := <-t.C:
 				s.maintain()
@@ -157,7 +159,7 @@ func (s *Server) maintain() {
 	s.St.DB.Exec(`DELETE FROM reverse_invites WHERE parent_id IS NOT NULL AND completed_at IS NULL AND expires_at<?
 		AND guest_user_id NOT IN (SELECT id FROM users)`, now)
 	s.pruneIPBans()
-	s.purgeEventLog()
+	s.purgeAudit()
 }
 
 // Automatic retention never removes pre-migration plaintext backups or

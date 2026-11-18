@@ -27,7 +27,7 @@ What that means for you:
 - OpenID Connect, Google, GitHub, and single-tenant Microsoft Entra ID login.
 - Editable email subjects and bodies, download-start notifications, owner download history, statistics, and encrypted database backups.
 - SQLCipher 4.20.0 database encryption with an external key, and encrypted share files (AES-256-GCM, no extra pass at upload time), a configurable default storage quota (10 GB for new installations) with per-user overrides in decimal GB, and local-password account lockout.
-- Optional administrator activity log with a retention of at most 24 hours (no IP addresses) and CSV export, and an optional external-login-only mode with lockout protection.
+- Always-on, tamper-evident audit log (hash chain, 90 days by default, optional IP addresses) with a read-only auditor role, CSV/JSONL export and an offline `sendora-db audit-verify` check, and an optional external-login-only mode with lockout protection.
 - Branding uploads (logo, favicon, backgrounds) that can each be deleted again, plus a choice of five bundled CC0 background photos (and an illustration), or no background at all, bundled/custom themes, and English, Dutch, German, French, and Spanish menus with per-account preferences.
 - SHA-256 upload checks and server-prepared download snapshots with browser-side verification.
 - Optional multi-factor authentication for local accounts: authenticator-app codes (TOTP) with one-time recovery codes, and passkeys or security keys (WebAuthn), set globally and overridable per user.

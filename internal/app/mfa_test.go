@@ -595,7 +595,6 @@ func TestMFAFloodIsRateLimited(t *testing.T) {
 func TestMFANoSecretsInLogsOrResponses(t *testing.T) {
 	e := newEnv(t)
 	admin := e.setup()
-	e.setting("logging_enabled", "true")
 	e.setting("mfa_policy", "optional")
 	tok := e.mkUser(admin, "lena", false)
 	b := e.do("POST", "/api/users/me/mfa/totp/begin", tok, map[string]any{"password": "password123"})

@@ -58,7 +58,7 @@ type Server struct {
 	authSlots         chan struct{}
 	downloadMailWake  chan struct{}
 	downloadMailOnce  sync.Once
-	eventLog          eventLogger
+	audit             auditState
 	uiKeys            uiKeyCache
 	mfaUsed           mfaTracker
 	waCeremonies      waCeremonies
@@ -222,7 +222,7 @@ func randHex(n int) string {
 
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.Recoverer, s.security, s.maintenanceMode)
+	r.Use(middleware.Recoverer, s.security, s.maintenanceMode, s.auditMiddleware)
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", s.health)
 		r.Get("/bootstrap", s.bootstrap)
@@ -300,19 +300,27 @@ func (s *Server) Router() http.Handler {
 			r.Get("/reverse-shares/invites", s.listInvites)
 			r.Post("/reverse-shares/invites/{id}/revoke", s.revokeInvite)
 
+			// Auditors read the audit log and nothing else (see auditorAllowed).
+			r.Group(func(r chi.Router) {
+				r.Use(s.auditor)
+				r.Get("/audit", s.auditList)
+				r.Get("/audit/export", s.auditExport)
+				r.Get("/audit/status", s.auditStatusHandler)
+			})
+
 			r.Group(func(r chi.Router) {
 				r.Use(s.admin)
 				r.Get("/users", s.listUsers)
-				r.Post("/users", s.createUser)
-				r.Put("/users/{id}", s.updateUser)
-				r.Delete("/users/{id}", s.deleteUser)
-				r.Post("/users/{id}/force-reset-password", s.forceReset)
+				r.With(s.critical("user_created", "user")).Post("/users", s.createUser)
+				r.With(s.critical("user_updated", "user")).Put("/users/{id}", s.updateUser)
+				r.With(s.critical("user_deleted", "user")).Delete("/users/{id}", s.deleteUser)
+				r.With(s.critical("user_force_reset", "user")).Post("/users/{id}/force-reset-password", s.forceReset)
 				r.Post("/users/{id}/unlock-login", s.unlockLogin)
-				r.Post("/users/{id}/mfa/reset", s.mfaReset)
+				r.With(s.critical("mfa_reset", "user")).Post("/users/{id}/mfa/reset", s.mfaReset)
 				r.Post("/users/{id}/welcome", s.resendWelcome)
 
 				r.Get("/settings", s.getSettings)
-				r.Put("/settings", s.putSettings)
+				r.With(s.critical("settings_changed", "settings")).Put("/settings", s.putSettings)
 				r.Post("/settings/branding/{kind}", s.uploadBranding)
 				r.Delete("/settings/branding/{kind}", s.deleteBranding)
 				r.Post("/backgrounds", s.uploadBackground)
@@ -323,6 +331,7 @@ func (s *Server) Router() http.Handler {
 				r.Delete("/ip-bans", s.deleteIPBanHandler)
 				r.Get("/logs", s.listLogs)
 				r.Get("/logs/export", s.exportLogs)
+				r.Get("/logs/status", s.logsStatus)
 
 				r.Get("/themes", s.listThemes)
 				r.Post("/themes", s.saveTheme)
@@ -330,9 +339,9 @@ func (s *Server) Router() http.Handler {
 				r.Post("/themes/{id}/activate", s.activateTheme)
 
 				r.Get("/auth-providers", s.adminProviders)
-				r.Post("/auth-providers", s.createProvider)
-				r.Put("/auth-providers/{id}", s.updateProvider)
-				r.Delete("/auth-providers/{id}", s.deleteProvider)
+				r.With(s.critical("provider_created", "provider")).Post("/auth-providers", s.createProvider)
+				r.With(s.critical("provider_updated", "provider")).Put("/auth-providers/{id}", s.updateProvider)
+				r.With(s.critical("provider_deleted", "provider")).Delete("/auth-providers/{id}", s.deleteProvider)
 
 				r.Get("/ui-languages", s.listUILanguages)
 				r.Get("/ui-languages/{code}/export", s.exportUILanguage)
@@ -347,11 +356,11 @@ func (s *Server) Router() http.Handler {
 				r.Post("/email-templates/import", s.importMailBundle)
 
 				r.Get("/backups", s.listBackups)
-				r.Post("/backups", s.createBackup)
+				r.With(s.critical("backup_created", "backup")).Post("/backups", s.createBackup)
 				r.Get("/backups/{name}", s.downloadBackup)
-				r.Delete("/backups/{name}", s.deleteBackup)
-				r.Post("/backups/import", s.prepareImport)
-				r.Post("/backups/import/apply", s.applyImport)
+				r.With(s.critical("backup_deleted", "backup")).Delete("/backups/{name}", s.deleteBackup)
+				r.With(s.critical("db_import_prepared", "backup")).Post("/backups/import", s.prepareImport)
+				r.With(s.critical("db_import_applied", "backup")).Post("/backups/import/apply", s.applyImport)
 			})
 		})
 	})
