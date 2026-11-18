@@ -135,16 +135,17 @@
 - **Share metadata:** `GET /api/shares/{id}` no longer returns the share name before a
   password-protected share is unlocked, and the 410 response for an expired share
   has no name. The page shows a neutral title until unlocked.
-- **Defaults stay as they were** (the review suggested stricter ones, but 12 characters and
-  mandatory MFA did not work well in practice): password minimum 8 for accounts and
-  shares, `mfa_policy` `off`, self-registration off, previews on (only the fixed list of
-  image, video and audio types is ever shown inline). All remain configurable.
+- **Defaults:** password minimum 8 for accounts and shares, self-registration off, previews
+  on (only the fixed list of image, video and audio types is ever shown inline). New
+  installations get `mfa_policy` **`optional`**: nobody is forced to use two-step
+  verification, but everyone can set it up (`off` switches it off entirely: no enrolment and
+  no reminder; existing installations keep their stored value). All remain configurable.
 - **Two-step verification reminder:** a signed-in account that signs in with a local
   password and has no second factor yet gets a dialog ("Two-step verification is not set
   up yet") with *Set up now* and *Remind me later*. A dismissed reminder returns after
   `mfa_reminder_days` days (Admin -> Settings, default 1, 0 = at the next sign-in; kept in
-  the browser). Accounts that use an identity provider, guests and auditors are not asked.
-  A required policy (`admins` or `all`) still applies only to local accounts.
+  the browser). It is not shown when the policy is `off`, to accounts that use an identity
+  provider, or to guests. A required policy (`admins` or `all`) applies only to local accounts.
 - **Theme editor:** colours show as a swatch plus hex field and every change is previewed
   at once on the running interface (for you only, until saved); leaving the editor restores
   the previous theme. Built-in themes can no longer be overwritten: "Copy and edit" creates

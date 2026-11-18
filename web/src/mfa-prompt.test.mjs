@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { shouldPromptMFA, mfaPromptKey, reminderSuppressed, DAY_MS } from './mfa-prompt.mjs'
 
-const boot = { mfa_totp_enabled: true, mfa_webauthn_enabled: false }
+const boot = { mfa_policy: 'optional', mfa_totp_enabled: true, mfa_webauthn_enabled: false }
 const user = { id: 3, mfa_enabled: false }
 const base = { user, hasPassword: true, boot, dismissed: false }
 
@@ -25,9 +25,9 @@ test('does not ask while a password change is still required', () => {
   assert.equal(shouldPromptMFA({ ...base, user: { ...user, must_change_password: false } }), true)
 })
 
-test('does not ask guests or auditors, or when no method can be enrolled', () => {
+test('does not ask guests, or when no method can be enrolled; auditors are asked', () => {
   assert.equal(shouldPromptMFA({ ...base, user: { ...user, is_guest: true } }), false)
-  assert.equal(shouldPromptMFA({ ...base, user: { ...user, auditor: true } }), false)
+  assert.equal(shouldPromptMFA({ ...base, user: { ...user, auditor: true } }), true) // auditors can enrol their own factor
   assert.equal(shouldPromptMFA({ ...base, boot: { mfa_totp_enabled: false, mfa_webauthn_enabled: false } }), false)
   assert.equal(shouldPromptMFA({ ...base, user: null }), false)
 })
@@ -49,4 +49,9 @@ test('a dismissed reminder returns after the configured number of days', () => {
 test('with 0 days the reminder only stays away for the browser session', () => {
   assert.equal(reminderSuppressed({ days: 0, dismissedAt: Date.now(), sessionDismissed: false }), false)
   assert.equal(reminderSuppressed({ days: 0, dismissedAt: 0, sessionDismissed: true }), true)
+})
+
+test('no reminder when two-step verification is switched off by policy', () => {
+  assert.equal(shouldPromptMFA({ ...base, boot: { ...boot, mfa_policy: 'off' } }), false)
+  assert.equal(shouldPromptMFA({ ...base, boot: { ...boot, mfa_policy: 'admins' } }), true)
 })

@@ -366,7 +366,7 @@ func TestSecureDefaultsForFreshStoreKeepExistingValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"account_password_min_length": "8", "share_password_min_length": "8", "mfa_policy": "off", "allow_preview": "true", "allow_self_registration": "false"}
+	want := map[string]string{"account_password_min_length": "8", "share_password_min_length": "8", "mfa_policy": "optional", "allow_preview": "true", "allow_self_registration": "false"}
 	for k, v := range want {
 		if got := st.Setting(k); got != v {
 			t.Errorf("fresh default %s = %q, want %q", k, got, v)
@@ -410,8 +410,23 @@ func TestFreshInstallDoesNotForceMFA(t *testing.T) {
 	if u["mfa_enabled"] == true {
 		t.Fatal("a new account has no factor yet", string(me.Body))
 	}
-	// Enrolment stays available for anyone who wants it.
+	// Enrolment stays available for anyone who wants it: the default policy is
+	// "optional", not "off" (which would refuse enrolment and make the reminder useless).
+	if st.Setting("mfa_policy") != "optional" {
+		t.Fatalf("default mfa_policy = %q, want optional", st.Setting("mfa_policy"))
+	}
 	e.want(e.do("GET", "/api/users/me/mfa", r.S("access_token"), nil), 200, "mfa status reachable")
+	_, tok, codes := e.enrollTOTP(r.S("access_token"), "password123")
+	if len(codes) == 0 {
+		t.Fatal("no recovery codes after voluntary enrolment")
+	}
+	// From now on this account signs in with a second step.
+	login := e.do("POST", "/api/auth/login", "", map[string]any{"username": "admin", "password": "password123"})
+	e.want(login, 200, "login")
+	if login.J()["mfa_required"] != true {
+		t.Fatalf("an enrolled factor must be required at sign-in: %s", login.Body)
+	}
+	_ = tok
 }
 
 func TestPreviewOnlyForAllowlistedTypes(t *testing.T) {

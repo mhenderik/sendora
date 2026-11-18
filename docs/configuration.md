@@ -66,7 +66,7 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_AUDIT_RETENTION_DAYS` | `90` | `audit_retention_days` (90 to 365; a stored value below 90 is raised to 90) |
 | `SENDORA_MAX_EXPIRY_TIME` | `30` | `max_expiry_time` |
 | `SENDORA_MAX_SHARE_SIZE` | `2048` | `max_share_size` |
-| `SENDORA_MFA_POLICY` | `off` | `mfa_policy` |
+| `SENDORA_MFA_POLICY` | `optional` (`off` disables two-step verification entirely) | `mfa_policy` |
 | `SENDORA_MFA_REMINDER_DAYS` | `1` | `mfa_reminder_days` |
 | `SENDORA_MFA_TOTP_ENABLED` | `true` | `mfa_totp_enabled` |
 | `SENDORA_MFA_WEBAUTHN_ENABLED` | `true` | `mfa_webauthn_enabled` |
