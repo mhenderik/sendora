@@ -1,0 +1,216 @@
+package store
+
+import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mhenderik/sendora/internal/filecrypt"
+)
+
+const vfLongID = "aaaaaaaaaaaaaaaa"
+
+type vfEnv struct {
+	t      *testing.T
+	st     *Store
+	key    []byte
+	master []byte
+	dir    string
+}
+
+func newVFEnv(t *testing.T) *vfEnv {
+	t.Helper()
+	key := make([]byte, 32)
+	rand.Read(key)
+	dir := t.TempDir()
+	st, err := OpenEncrypted(dir, key, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.DB.Close() })
+	if _, err := st.DB.Exec(`INSERT INTO shares(long_id,name) VALUES(?,?)`, vfLongID, "SECRET-SHARE-NAME"); err != nil {
+		t.Fatal(err)
+	}
+	master, _ := filecrypt.MasterKey(key)
+	if err := os.MkdirAll(filepath.Join(dir, "shares", vfLongID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return &vfEnv{t: t, st: st, key: key, master: master, dir: dir}
+}
+
+func (e *vfEnv) disk(base string) string { return filepath.Join(e.dir, "shares", vfLongID, base) }
+
+// add writes a file and its row. kind: v2 | v1 | plain.
+func (e *vfEnv) add(base, kind string, plain []byte) (id int64, stored []byte) {
+	e.t.Helper()
+	sum := sha256.Sum256(plain)
+	encID := ""
+	switch kind {
+	case "v2":
+		var out bytes.Buffer
+		_, encID, _ = filecrypt.Encrypt(&out, bytes.NewReader(plain), e.master, nil)
+		stored = out.Bytes()
+	case "v1":
+		stored = sealV1(e.t, e.master, plain)
+	default:
+		stored = plain
+	}
+	if err := os.WriteFile(e.disk(base), stored, 0o600); err != nil {
+		e.t.Fatal(err)
+	}
+	enc := 0
+	if kind != "plain" {
+		enc = 1
+	}
+	res, err := e.st.DB.Exec(`INSERT INTO files(share_id,name,full_path,size,disk_path,sha256,enc,enc_id) VALUES(1,?,?,?,?,?,?,?)`,
+		base, "SECRET-"+base, len(plain), "/old/"+base, hex.EncodeToString(sum[:]), enc, encID)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	id, _ = res.LastInsertId()
+	return id, stored
+}
+
+// sealV1 writes the 0.1.2 - 0.1.4 layout independently of the filecrypt package.
+func sealV1(t *testing.T, master, plain []byte) []byte {
+	t.Helper()
+	salt := make([]byte, 32)
+	rand.Read(salt)
+	k, _ := hkdf.Key(sha256.New, master, salt, "sendora share file key", 32)
+	blk, _ := aes.NewCipher(k)
+	aead, _ := cipher.NewGCM(blk)
+	out := append([]byte("SNDF\x01"), salt...)
+	const cs = filecrypt.ChunkSize
+	chunks := (len(plain) + cs - 1) / cs
+	if chunks == 0 {
+		chunks = 1
+	}
+	for i := 0; i < chunks; i++ {
+		n := make([]byte, 12)
+		binary.BigEndian.PutUint64(n[4:], uint64(i))
+		last := byte(0)
+		if i == chunks-1 {
+			last = 1
+		}
+		out = aead.Seal(out, n, plain[i*cs:min((i+1)*cs, len(plain))], []byte{last})
+	}
+	return out
+}
+
+func statuses(t *testing.T, rep *FilesReport) map[int64]string {
+	m := map[int64]string{}
+	for _, f := range rep.Files {
+		m[f.ID] = f.Status
+	}
+	return m
+}
+
+func TestVerifyFilesStatuses(t *testing.T) {
+	e := newVFEnv(t)
+	big := make([]byte, filecrypt.ChunkSize+10)
+	rand.Read(big)
+	okV2, _ := e.add("ok2", "v2", []byte("hello v2"))
+	okV1, _ := e.add("ok1", "v1", []byte("hello v1"))
+	legacy, _ := e.add("plain", "plain", []byte("legacy plain"))
+	empty, _ := e.add("empty", "v2", nil)
+
+	badHdr, _ := e.add("badhdr", "v2", []byte("x"))
+	os.WriteFile(e.disk("badhdr"), []byte("not an encrypted file at all, just some text bytes!!"), 0o600)
+
+	sizeMiss, st := e.add("size", "v2", big)
+	os.WriteFile(e.disk("size"), st[:len(st)-5], 0o600)
+
+	idMiss, _ := e.add("idA", "v2", []byte("same size AAAA"))
+	idB, other := e.add("idB", "v2", []byte("same size BBBB"))
+	os.WriteFile(e.disk("idA"), other, 0o600)
+
+	tag, st := e.add("tag", "v2", big)
+	st[53+filecrypt.ChunkSize+16+3] ^= 1 // inside chunk 1
+	os.WriteFile(e.disk("tag"), st, 0o600)
+
+	shaMiss, _ := e.add("sha", "v2", []byte("sha row"))
+	e.st.DB.Exec(`UPDATE files SET sha256=? WHERE id=?`, strings.Repeat("0", 64), shaMiss)
+
+	missing, _ := e.add("gone", "v2", []byte("gone"))
+	os.Remove(e.disk("gone"))
+
+	emptyTag, st := e.add("emptytag", "v2", nil)
+	st[len(st)-1] ^= 1
+	os.WriteFile(e.disk("emptytag"), st, 0o600)
+
+	os.WriteFile(e.disk("stray"), []byte("orphan"), 0o600)
+
+	rep, err := VerifyFiles(e.st.Path, e.dir, e.key, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := statuses(t, rep)
+	want := map[int64]string{
+		okV2: "ok", okV1: "ok", idB: "ok", empty: "ok", legacy: "plain-legacy", badHdr: "bad-header",
+		sizeMiss: "size-mismatch", idMiss: "id-mismatch", tag: "tag-fail@chunk1", shaMiss: "sha-mismatch",
+		missing: "missing", emptyTag: "tag-fail@chunk0",
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("row %d: %q, want %q", id, got[id], w)
+		}
+	}
+	s := rep.Summary
+	if s.Rows != len(want) || s.Plain != 1 || s.Encrypted != len(want)-1 || s.OK != 4 || s.Legacy != 1 || s.Failed != 7 || s.Orphans != 1 {
+		t.Errorf("summary %+v", s)
+	}
+	if rep.Failures() != 8 {
+		t.Errorf("failures %d", rep.Failures())
+	}
+
+	// Output never contains names, keys or key-derived bytes, and ids/paths are hashed.
+	b, _ := json.Marshal(rep)
+	for _, secret := range []string{"SECRET", "stray", "ok2", vfLongID, hex.EncodeToString(e.key), hex.EncodeToString(e.master)} {
+		if strings.Contains(string(b), secret) {
+			t.Errorf("report leaks %q", secret)
+		}
+	}
+	named, _ := VerifyFiles(e.st.Path, e.dir, e.key, true)
+	b, _ = json.Marshal(named)
+	if !strings.Contains(string(b), "SECRET-SHARE-NAME") || !strings.Contains(string(b), "stray") {
+		t.Error("-names did not add names")
+	}
+
+	// The report matches the live counters.
+	enc, err := e.st.EncryptionStatus()
+	if err != nil || enc.Encrypted != int64(s.Encrypted) || enc.Plain != 1 {
+		t.Errorf("EncryptionStatus %+v %v", enc, err)
+	}
+}
+
+func TestVerifyFilesWrongKey(t *testing.T) {
+	e := newVFEnv(t)
+	if _, err := VerifyFiles(e.st.Path, e.dir, make([]byte, 32), false); err == nil {
+		t.Fatal("wrong key accepted")
+	}
+}
+
+func TestKeyFingerprint(t *testing.T) {
+	k1, k2 := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32)
+	a := KeyFingerprint(k1)
+	if len(a) != 16 || a != KeyFingerprint(k1) || a == KeyFingerprint(k2) {
+		t.Fatalf("fingerprint %q", a)
+	}
+	if strings.Contains(a, hex.EncodeToString(k1[:4])) {
+		t.Fatal("fingerprint exposes the key")
+	}
+	e := newVFEnv(t)
+	if e.st.KeyFingerprint() != KeyFingerprint(e.key) || !strings.HasPrefix(e.st.CipherVersion(), "4.20.0") {
+		t.Fatal("store fingerprint or cipher version")
+	}
+}

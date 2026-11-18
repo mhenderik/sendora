@@ -95,6 +95,7 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 		size, rec                     int64
 		disk                          string
 		enc                           bool
+		encID                         string
 	}
 	rows, err := s.St.DB.Query(`SELECT idx,name,full_path,type,size,received,sha256 FROM upload_files WHERE session_id=? ORDER BY idx`, id)
 	if err != nil {
@@ -156,7 +157,7 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 	for i := range files {
 		f := &files[i]
 		disk := filepath.Join(dest, randHex(8)+"_"+f.name)
-		checksum, enc, err := stageUploadFile(r.Context(), filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part"), disk, f.size, s.St.FileKey())
+		checksum, encID, err := stageUploadFile(r.Context(), filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part"), disk, f.size, s.St.FileKey(), s.St.IsEncrypted())
 		f.disk = disk
 		if err != nil {
 			os.Remove(disk) // partial copy under our own fresh random name
@@ -167,7 +168,7 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 			}
 			return
 		}
-		f.enc = enc
+		f.enc, f.encID = encID != "", encID
 		if f.expected != "" && checksum != f.expected {
 			jerr(w, 409, "upload checksum mismatch")
 			return
@@ -248,7 +249,7 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 		}
 		used[strings.ToLower(np)] = true
 		name := path.Base(np)
-		ires, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity,enc) VALUES(?,?,?,?,?,?,?,?,?)`, shareID, name, np, f.size, f.typ, f.disk, f.checksum, f.integrity, f.enc)
+		ires, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity,enc,enc_id) VALUES(?,?,?,?,?,?,?,?,?,?)`, shareID, name, np, f.size, f.typ, f.disk, f.checksum, f.integrity, f.enc, f.encID)
 		if err != nil {
 			jerr(w, 500, "file metadata write failed")
 			return

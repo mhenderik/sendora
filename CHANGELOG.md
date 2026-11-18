@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.5
+
+- **Security: share file format v2.** Every new encrypted file carries a random file ID
+  (header 53 bytes) that is part of each chunk's authenticated data and is stored in the
+  new `files.enc_id` column. A file whose header ID differs from its database row is
+  refused, so ciphertext copied or renamed over another file (even of equal size) is no
+  longer accepted. Files written by 0.1.2-0.1.4 (format v1) stay readable.
+- Encrypted empty files now have their (empty) chunk authenticated when opened; before,
+  altering one was not noticed.
+- Uploads into an encrypted store are refused when the file key is missing instead of
+  being stored in plain text, and a partly written destination file is removed on failure.
+- New `sendora-db verify-files` (`-source`, `-key-file`, `-data-dir`, `-json`, `-names`):
+  checks every stored file (header, size, file ID, every chunk tag, SHA-256) and lists
+  orphan files; prints no keys, plaintext or names unless `-names` is given; exit status is
+  non-zero on any problem.
+- Key fingerprint (`file encryption active fp=... format=2 sqlcipher=...` at startup),
+  encrypted/plain file counts and decrypt-failure counters for later use by the admin UI.
+- Specification `docs/FILE-FORMAT.md` with test vectors
+  (`internal/filecrypt/testdata/vectors.json`), an independent Python check
+  (`docs/tools/verify_vectors.py`), fuzz and property tests for the reader.
+
 ## Unreleased
 
 ## 0.1.5 (2026-11-18)

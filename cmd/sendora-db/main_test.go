@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"github.com/mhenderik/sendora/internal/filecrypt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -110,5 +113,57 @@ func TestMFAResetCommand(t *testing.T) {
 	os.WriteFile(bad, bytes.Repeat([]byte{0x43}, 32), 0600)
 	if err := run([]string{"mfa-reset", "-source", path, "-key-file", bad, "-user", "bystander"}); err == nil {
 		t.Fatal("wrong key must fail")
+	}
+}
+
+func TestVerifyFilesCommand(t *testing.T) {
+	dir := t.TempDir()
+	key := bytes.Repeat([]byte{0x33}, 32)
+	keyFile := filepath.Join(dir, "key")
+	if err := os.WriteFile(keyFile, key, 0600); err != nil {
+		t.Fatal(err)
+	}
+	data := filepath.Join(dir, "data")
+	st, err := store.OpenEncrypted(data, key, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.DB.Close()
+	lid := "bbbbbbbbbbbbbbbb"
+	if _, err := st.DB.Exec(`INSERT INTO shares(long_id,name) VALUES(?,'SHARE-NAME-X')`, lid); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(data, "shares", lid), 0700); err != nil {
+		t.Fatal(err)
+	}
+	plain := []byte("verify me")
+	var out bytes.Buffer
+	_, encID, err := filecrypt.Encrypt(&out, bytes.NewReader(plain), st.FileKey(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk := filepath.Join(data, "shares", lid, "0_f.txt")
+	if err := os.WriteFile(disk, out.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(plain)
+	if _, err := st.DB.Exec(`INSERT INTO files(share_id,name,full_path,size,disk_path,sha256,enc,enc_id) VALUES(1,'f.txt','f.txt',?,?,?,1,?)`, len(plain), disk, hex.EncodeToString(sum[:]), encID); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"verify-files", "-source", st.Path, "-key-file", keyFile, "-data-dir", data, "-json"}
+	if err := run(args); err != nil {
+		t.Fatal(err)
+	}
+	// Flip one ciphertext bit: the command must fail in both output modes.
+	b := out.Bytes()
+	b[len(b)-1] ^= 1
+	if err := os.WriteFile(disk, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(args); err == nil {
+		t.Fatal("tampered file did not fail verify-files")
+	}
+	if err := run([]string{"verify-files", "-source", st.Path, "-key-file", keyFile, "-data-dir", data}); err == nil {
+		t.Fatal("text mode must fail as well")
 	}
 }

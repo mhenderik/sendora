@@ -37,6 +37,7 @@ type FileInfo struct {
 	Integrity string `json:"integrity"`
 	diskPath  string
 	enc       bool
+	encID     string // hex file id (format v2); empty for plain and v1 files
 }
 
 type Share struct {
@@ -92,7 +93,7 @@ func (s *Server) shareByID(id int64) (*Share, error) {
 }
 
 func (s *Server) shareFiles(shareID int64) []FileInfo {
-	rows, err := s.St.DB.Query(`SELECT f.id,f.name,f.full_path,f.size,f.type,f.disk_path,f.sha256,f.integrity,f.enc,s.long_id FROM files f JOIN shares s ON s.id=f.share_id WHERE f.share_id=? ORDER BY f.full_path,f.id`, shareID)
+	rows, err := s.St.DB.Query(`SELECT f.id,f.name,f.full_path,f.size,f.type,f.disk_path,f.sha256,f.integrity,f.enc,f.enc_id,s.long_id FROM files f JOIN shares s ON s.id=f.share_id WHERE f.share_id=? ORDER BY f.full_path,f.id`, shareID)
 	out := []FileInfo{}
 	if err != nil {
 		return out
@@ -101,7 +102,7 @@ func (s *Server) shareFiles(shareID int64) []FileInfo {
 	for rows.Next() {
 		var f FileInfo
 		var lid string
-		if rows.Scan(&f.ID, &f.Name, &f.FullPath, &f.Size, &f.Type, &f.diskPath, &f.SHA256, &f.Integrity, &f.enc, &lid) != nil {
+		if rows.Scan(&f.ID, &f.Name, &f.FullPath, &f.Size, &f.Type, &f.diskPath, &f.SHA256, &f.Integrity, &f.enc, &f.encID, &lid) != nil {
 			return nil
 		}
 		// The recorded directory is never trusted: only the base name is used, under
@@ -521,7 +522,7 @@ func (s *Server) openStoredFile(f FileInfo) (io.ReadSeekCloser, time.Time, error
 		file.Close()
 		return nil, time.Time{}, errIntegrity
 	}
-	r, err := filecrypt.NewReader(file, st.Size(), f.Size, key)
+	r, err := filecrypt.NewReader(file, st.Size(), f.Size, key, f.encID)
 	if err != nil {
 		file.Close()
 		return nil, time.Time{}, errIntegrity
