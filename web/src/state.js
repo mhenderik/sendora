@@ -1,6 +1,7 @@
 import { reactive, ref } from 'vue'
 import { api } from './api'
 import { setLang, languages, loadLanguageList } from './i18n'
+import { contrastText } from './contrast.mjs'
 
 export const emailLanguages = reactive({ ...languages })
 
@@ -9,18 +10,8 @@ export const pageTitle = ref('')
 
 export const app = reactive({ boot: null, theme: null, backgrounds: [], version: '' })
 
-// Pick the higher-contrast foreground for both bright and dark custom accents.
-export function contrastText(color) {
-  if (!/^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(color || '')) return '#ffffff'
-  let hex = color.slice(1)
-  if (hex.length === 3) hex = [...hex].map(c => c + c).join('')
-  const linear = [0, 2, 4].map(i => {
-    const c = parseInt(hex.slice(i, i + 2), 16) / 255
-    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
-  })
-  const luminance = linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
-  return (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) ? '#000000' : '#ffffff'
-}
+// Black or white foreground for custom accents; accepts the 3/4/6/8-digit hex the themes allow.
+export { contrastText }
 
 export function applyTheme(th) {
   app.theme = th

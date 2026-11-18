@@ -75,7 +75,7 @@ input::placeholder,textarea::placeholder{color:color-mix(in srgb,var(--muted) 75
 textarea{resize:vertical}
 nav select{width:auto;padding:7px 12px;border-radius:var(--pill)}
 /* Checkboxes and radios: drawn by us so they look the same in every theme and never render as dark blocks. */
-input[type=checkbox],input[type=radio]{-webkit-appearance:none;appearance:none;display:inline-grid;place-content:center;width:20px;height:20px;min-width:20px;padding:0;margin:0;flex:none;cursor:pointer;border:1.5px solid color-mix(in srgb,var(--text) 38%,transparent);background:color-mix(in srgb,var(--surface) 92%,#fff);border-radius:6px;transition:background .15s,border-color .15s,box-shadow .15s}
+input[type=checkbox],input[type=radio]{-webkit-appearance:none;appearance:none;display:inline-grid;place-content:center;width:20px;height:20px;min-width:20px;padding:0;margin:0;flex:none;cursor:pointer;border:1.5px solid color-mix(in srgb,var(--text) 50%,transparent);background:color-mix(in srgb,var(--surface) 92%,#fff);border-radius:6px;transition:background .15s,border-color .15s,box-shadow .15s}
 input[type=radio]{border-radius:50%}
 input[type=checkbox]::before{content:"";width:11px;height:11px;transform:scale(0);transition:transform .12s ease-out;background:var(--primary-text);clip-path:polygon(14% 44%,0 62%,40% 100%,100% 18%,84% 0,39% 66%)}
 input[type=radio]::before{content:"";width:8px;height:8px;border-radius:50%;transform:scale(0);transition:transform .12s ease-out;background:var(--primary-text)}
@@ -148,6 +148,7 @@ hr{border:0;border-top:1px solid var(--glass-border);margin:20px 0}
 
 .idle-modal{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);padding:16px}
 @supports((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.idle-modal{background:rgba(8,10,18,.45);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}}
+.idle-modal.idle-warning{z-index:210}
 .idle-box{max-width:420px;width:100%;margin:0;text-align:center}
 .idle-box .actions{justify-content:center}
 
