@@ -505,14 +505,14 @@ func (s *Server) downloadShare(w http.ResponseWriter, r *http.Request) {
 	w = s.downloadResponse(w, r, sh, nil, jobID)
 	setDownloadChecksum(w, checksum)
 	if len(files) == 1 {
-		serveOpenDisk(w, r, snapshot, files[0].Name)
+		serveSnapshot(w, r, snapshot, files[0].Name)
 		return
 	}
 	name := safeName(sh.Name)
 	if name == "" {
 		name = "share"
 	}
-	serveOpenDisk(w, r, snapshot, name+".zip")
+	serveSnapshot(w, r, snapshot, name+".zip")
 
 }
 
@@ -542,7 +542,7 @@ func (s *Server) downloadShareFile(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			defer s.releaseDownloadMail(jobID)
-			serveOpenDisk(s.downloadResponse(w, r, sh, &id, jobID), r, in, f.Name)
+			serveSnapshot(s.downloadResponse(w, r, sh, &id, jobID), r, in, f.Name)
 			return
 		}
 	}
@@ -707,6 +707,15 @@ func serveOpenDisk(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 		jerr(w, 404, "file missing")
 		return
 	}
+	serveAttachment(w, r, f, st.ModTime(), name)
+}
+
+// serveSnapshot serves one reader of a verified snapshot as an attachment.
+func serveSnapshot(w http.ResponseWriter, r *http.Request, snap *snapshotReader, name string) {
+	serveAttachment(w, r, snap, snap.ModTime(), name)
+}
+
+func serveAttachment(w http.ResponseWriter, r *http.Request, content io.ReadSeeker, modTime time.Time, name string) {
 	if _, ok := w.(*idleResponseWriter); !ok {
 		w = &idleResponseWriter{ResponseWriter: w, controller: http.NewResponseController(w), timeout: 60 * time.Second}
 	}
@@ -719,7 +728,7 @@ func serveOpenDisk(w http.ResponseWriter, r *http.Request, f *os.File, name stri
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename*=UTF-8''%s`, urlEscape(name)))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "application/octet-stream")
-	http.ServeContent(w, r, name, st.ModTime(), f)
+	http.ServeContent(w, r, name, modTime, content)
 }
 
 func urlEscape(s string) string {
