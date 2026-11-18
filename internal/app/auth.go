@@ -95,7 +95,7 @@ func (s *Server) accessTokenAt(u *User, authTime time.Time) string {
 		claims["mfa_enroll"] = true
 	}
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	str, _ := t.SignedString(s.Secret)
+	str, _ := t.SignedString(s.key(keyAccess))
 	return str
 }
 
@@ -108,7 +108,7 @@ const sessionMaxAge = 30 * 24 * time.Hour
 func (s *Server) requestAuthTime(r *http.Request) time.Time {
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	claims := jwt.MapClaims{}
-	if _, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) { return s.Secret, nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()); err != nil {
+	if _, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) { return s.key(keyAccess), nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()); err != nil {
 		return time.Time{}
 	}
 	if v, ok := claims["auth_time"].(float64); ok && v > 0 {
@@ -156,7 +156,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			return
 		}
 		claims := jwt.MapClaims{}
-		_, err := jwt.ParseWithClaims(tok, claims, func(t *jwt.Token) (any, error) { return s.Secret, nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
+		_, err := jwt.ParseWithClaims(tok, claims, func(t *jwt.Token) (any, error) { return s.key(keyAccess), nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 		if err != nil {
 			jerr(w, 401, "unauthorized")
 			return
@@ -231,6 +231,12 @@ type credentials struct {
 }
 
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
+	// All addresses share this limit: many sources cannot add up to a code search.
+	if wait, blocked := s.setupThrottle.blocked("setup"); blocked {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		jerr(w, 429, "too many failed setup attempts; try again later")
+		return
+	}
 	var n int
 	s.St.DB.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n)
 	if n > 0 {
@@ -248,6 +254,8 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	}
 	given := strings.ToUpper(strings.TrimSpace(c.SetupCode))
 	if s.setupCode == "" || subtle.ConstantTimeCompare([]byte(given), []byte(s.setupCode)) != 1 {
+		s.setupThrottle.fail("setup", setupFailLimit, setupFailWindow, setupFailBlock)
+		markAuthFailure(w)
 		jerr(w, 403, "invalid setup code: use the code printed in the server log")
 		return
 	}
@@ -274,7 +282,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "unsupported UI language")
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(c.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(c.Password), bcryptCost)
 	if err != nil {
 		jerr(w, 400, "invalid password (8-72 bytes required)")
 		return
@@ -374,6 +382,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		rejectLogin(w)
 		return
 	}
+	s.rehashPassword(u, c.Password) // upgrade an older, cheaper hash before the credential version is used
 	if !u.EmailVerified {
 		jout(w, 403, map[string]any{"error": "email not verified", "needs_verification": true})
 		return
@@ -501,7 +510,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	claims := jwt.MapClaims{}
 	if tok != "" {
-		if _, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) { return s.Secret, nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()); err == nil && claims["purpose"] == "access" {
+		if _, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) { return s.key(keyAccess), nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()); err == nil && claims["purpose"] == "access" {
 			if exp, err := claims.GetExpirationTime(); err == nil && exp != nil {
 				s.St.DB.Exec(`INSERT OR IGNORE INTO revoked_access_tokens(hash,expires_at) VALUES(?,?)`, hashToken(tok), exp.Time)
 			}
@@ -567,7 +576,7 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAccountPassword(w, b.Password) {
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
 	if err != nil {
 		jerr(w, 400, "invalid password")
 		return
@@ -676,7 +685,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	hash, _ := bcrypt.GenerateFromPassword([]byte(c.Password), bcrypt.DefaultCost)
+	hash, _ := bcrypt.GenerateFromPassword([]byte(c.Password), bcryptCost)
 	res, err := s.St.DB.Exec(`INSERT INTO users(username,name,email,password_hash,email_verified,language,ui_language,pending_registration) VALUES(?,?,?,?,?,?,?,?)`,
 		c.Username, c.Name, c.Email, string(hash), !verify, c.Language, c.UILanguage, verify)
 	if err != nil {
@@ -714,11 +723,11 @@ func (s *Server) sendVerification(u *User) {
 	if !s.allowRequest("verification-mail:"+strconv.FormatInt(u.ID, 10)+":"+u.Email, 1, time.Minute) {
 		return
 	}
-	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	n, err := rand.Int(rand.Reader, big.NewInt(100000000))
 	if err != nil {
 		return
 	}
-	code := fmt.Sprintf("%06d", n.Int64())
+	code := fmt.Sprintf("%08d", n.Int64())
 	s.St.DB.Exec(`INSERT INTO email_verifications(user_id,code,expires_at) VALUES(?,?,?)
 		ON CONFLICT(user_id) DO UPDATE SET code=excluded.code, expires_at=excluded.expires_at`, u.ID, code, time.Now().Add(30*time.Minute))
 	s.queueMail(u.Email, "Verify your email", "tpl_verify_email", map[string]any{"Code": code})
@@ -744,7 +753,8 @@ func (s *Server) verifyEmail(w http.ResponseWriter, r *http.Request) {
 	var uid int64
 	var code string
 	var exp time.Time
-	err = s.St.DB.QueryRow(`SELECT v.user_id,v.code,v.expires_at FROM email_verifications v JOIN users u ON u.id=v.user_id WHERE lower(trim(u.email))=? AND u.email_verified=0 AND u.is_guest=0 AND (SELECT COUNT(*) FROM users WHERE lower(trim(email))=?)=1`, b.Email, b.Email).Scan(&uid, &code, &exp)
+	var pending bool
+	err = s.St.DB.QueryRow(`SELECT v.user_id,v.code,v.expires_at,u.pending_registration FROM email_verifications v JOIN users u ON u.id=v.user_id WHERE lower(trim(u.email))=? AND u.email_verified=0 AND u.is_guest=0 AND (SELECT COUNT(*) FROM users WHERE lower(trim(email))=?)=1`, b.Email, b.Email).Scan(&uid, &code, &exp, &pending)
 	if err != nil || time.Now().After(exp) {
 		jerr(w, 400, "invalid or expired code")
 		return
@@ -759,7 +769,7 @@ func (s *Server) verifyEmail(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 429, "too many verification attempts; try again later")
 		return
 	}
-	if code != b.Code {
+	if subtle.ConstantTimeCompare([]byte(code), []byte(strings.TrimSpace(b.Code))) != 1 {
 		jerr(w, 400, "invalid or expired code")
 		return
 	}
@@ -769,7 +779,7 @@ func (s *Server) verifyEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE users SET email_verified=1,pending_registration=0 WHERE id=? AND lower(trim(email))=? AND email_verified=0 AND EXISTS(SELECT 1 FROM email_verifications WHERE user_id=? AND code=? AND expires_at>?)`, uid, b.Email, uid, b.Code, time.Now())
+	res, err := tx.Exec(`UPDATE users SET email_verified=1,pending_registration=0 WHERE id=? AND lower(trim(email))=? AND email_verified=0 AND EXISTS(SELECT 1 FROM email_verifications WHERE user_id=? AND code=? AND expires_at>?)`, uid, b.Email, uid, code, time.Now())
 	if err != nil {
 		jerr(w, 500, "verification failed")
 		return
@@ -786,6 +796,13 @@ func (s *Server) verifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := tx.Commit(); err != nil {
 		jerr(w, 500, "verification failed")
+		return
+	}
+	// Only a fresh self-registration is signed in by proving the mailbox. Any
+	// other account (for example one whose address was changed later) must sign
+	// in with its password: possession of the mailbox is not a login.
+	if !pending {
+		jout(w, 200, map[string]any{"ok": true, "verified": true})
 		return
 	}
 	u, _ := s.userByID(uid)
@@ -897,9 +914,15 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "email already in use")
 		return
 	}
-	if (b.Password != "" || emailChanged) && u.passwordHash != "" && !u.MustChangePassword && bcrypt.CompareHashAndPassword([]byte(u.passwordHash), []byte(b.CurrentPassword)) != nil {
-		jerr(w, 400, "current password incorrect")
-		return
+	if (b.Password != "" || emailChanged) && u.passwordHash != "" && !u.MustChangePassword {
+		if s.stepUpLocked(w, u) {
+			return
+		}
+		if bcrypt.CompareHashAndPassword([]byte(u.passwordHash), []byte(b.CurrentPassword)) != nil {
+			s.stepUpFailed(w, u)
+			jerr(w, 400, "current password incorrect")
+			return
+		}
 	}
 	// Accounts without a local password cannot confirm with one: require a recent
 	// sign-in through their provider instead, so a stolen access token cannot add
@@ -914,7 +937,7 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 		if !s.requireAccountPassword(w, b.Password) {
 			return
 		}
-		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcrypt.DefaultCost)
+		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
 		if err != nil {
 			jerr(w, 400, "invalid password")
 			return
@@ -1100,7 +1123,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "invalid quota choice")
 		return
 	}
-	h, _ := bcrypt.GenerateFromPassword([]byte(b.Password), bcrypt.DefaultCost)
+	h, _ := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
 	q := `INSERT INTO users(username,name,email,password_hash,admin,must_change_password,language,ui_language) VALUES(?,?,?,?,?,?,?,?)`
 	args := []any{b.Username, b.Name, b.Email, string(h), b.Admin, b.MustChangePassword, b.Language, b.UILanguage}
 	if b.QuotaBytes != nil {
@@ -1206,7 +1229,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	emailChangedByAdmin := id != me.ID && !strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(target.Email))
 	hash := target.passwordHash
 	if b.Password != "" {
-		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcrypt.DefaultCost)
+		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
 		if err != nil {
 			jerr(w, 400, "invalid password")
 			return

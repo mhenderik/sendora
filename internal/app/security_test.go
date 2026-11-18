@@ -58,7 +58,7 @@ func TestTokenSecurity(t *testing.T) {
 		{"sub": "1", "purpose": "share", "exp": time.Now().Add(time.Hour).Unix()},
 		{"sub": "1", "purpose": "access", "credential": "wrong", "exp": time.Now().Add(time.Hour).Unix()},
 	} {
-		token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(e.s.Secret)
+		token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(e.s.key(keyAccess))
 		e.want(e.do("GET", "/api/users/me", token, nil), 401, "token purpose/expiration/fingerprint")
 	}
 	e.want(e.do("POST", "/api/auth/logout", access, nil), 200, "logout")

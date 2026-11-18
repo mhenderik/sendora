@@ -40,7 +40,7 @@ const msgRecentSignIn = "sign in again to change your password or email address"
 
 // dummyHash makes a failed lookup cost as much as a password check, so response
 // times do not reveal whether an account exists.
-var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("sendora-timing-equaliser"), bcrypt.DefaultCost)
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("sendora-timing-equaliser"), bcryptCost)
 
 // usernameOf returns the username for the activity log ("" when unknown).
 func (s *Server) usernameOf(id int64) string {

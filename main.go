@@ -32,8 +32,8 @@ func main() {
 	// A short signing secret could be guessed offline from any captured token.
 	if sec, err := app.JWTSecretFromEnv(); err != nil {
 		log.Fatal(err)
-	} else if sec != "" && len(sec) < 32 {
-		log.Fatal("JWT_SECRET must be at least 32 characters (leave it unset to use a generated secret)")
+	} else if err := app.ValidateJWTSecret(sec); err != nil {
+		log.Fatal(err)
 	}
 	key, err := store.ReadDatabaseKey(os.Getenv("SENDORA_DB_KEY_FILE"))
 	if err != nil {
@@ -70,6 +70,9 @@ func main() {
 		Handler:           srv.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		// Explicit header cap (the net/http default is 1 MiB). Body timeouts are
+		// per request in the security middleware, so large transfers are unaffected.
+		MaxHeaderBytes: 64 << 10,
 	}
 	// A confirmed database import stops serving and jobs, then swaps and re-execs.
 	srv.SetImportStopper(func() {

@@ -242,6 +242,6 @@ func TestEditShareOwnership(t *testing.T) {
 // legacyShareTokenForTest mints a token in the pre-claim format.
 func (s *Server) legacyShareTokenForTest(sh *Share) string {
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"purpose": "share", "share": sh.LongID, "exp": time.Now().Add(time.Hour).Unix()})
-	str, _ := t.SignedString(s.Secret)
+	str, _ := t.SignedString(s.key(keyShareUnlock))
 	return str
 }

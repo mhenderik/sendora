@@ -237,8 +237,8 @@ func TestMFATokenBoundaries(t *testing.T) {
 	b5["jti"] = "x5"
 	none, _ := jwt.NewWithClaims(jwt.SigningMethodNone, b1).SignedString(jwt.UnsafeAllowNoneSignatureType)
 	for name, tk := range map[string]string{
-		"garbage": "not.a.token", "empty": "", "wrong key": forge(b1, []byte("wrong")), "expired": forge(b2, e.s.Secret),
-		"purpose": forge(b3, e.s.Secret), "no jti": forge(b4, e.s.Secret), "credential": forge(b5, e.s.Secret), "alg none": none,
+		"garbage": "not.a.token", "empty": "", "wrong key": forge(b1, []byte("wrong")), "expired": forge(b2, e.s.key(keyMFA)),
+		"purpose": forge(b3, e.s.key(keyMFA)), "no jti": forge(b4, e.s.key(keyMFA)), "credential": forge(b5, e.s.key(keyMFA)), "alg none": none,
 	} {
 		if r := e.do("POST", "/api/auth/mfa/totp", "", map[string]any{"mfa_token": tk, "code": code}); r.Code != 401 {
 			t.Fatal(name, "accepted:", r.Code, string(r.Body))
@@ -558,10 +558,20 @@ func TestMFAVerifyEmailIsGated(t *testing.T) {
 	kid, _ := e.userRow("kate")
 	e.s.St.DB.Exec(`UPDATE users SET email_verified=0 WHERE id=?`, kid)
 	e.s.St.DB.Exec(`INSERT INTO email_verifications(user_id,code,expires_at) VALUES(?,?,?)`, kid, "123456", time.Now().Add(time.Hour))
+	// An established account (not a fresh self-registration) gets no session at
+	// all from verifying its address: it signs in normally, MFA included.
 	r := e.do("POST", "/api/auth/verify-email", "", map[string]any{"email": "kate@x.io", "code": "123456"})
 	e.want(r, 200, "verify")
-	if r.J()["mfa_required"] != true || r.J()["access_token"] != nil || refreshCookie(r) != "" {
+	if r.J()["access_token"] != nil || r.J()["mfa_token"] != nil || refreshCookie(r) != "" {
 		t.Fatal("verifying an e-mail address must not bypass MFA", string(r.Body))
+	}
+	// A fresh self-registration still continues into the MFA step.
+	e.s.St.DB.Exec(`UPDATE users SET email_verified=0,pending_registration=1 WHERE id=?`, kid)
+	e.s.St.DB.Exec(`INSERT INTO email_verifications(user_id,code,expires_at) VALUES(?,?,?)`, kid, "123456", time.Now().Add(time.Hour))
+	r = e.do("POST", "/api/auth/verify-email", "", map[string]any{"email": "kate@x.io", "code": "123456"})
+	e.want(r, 200, "verify pending")
+	if r.J()["mfa_required"] != true || r.J()["access_token"] != nil || refreshCookie(r) != "" {
+		t.Fatal("verifying a registration must not bypass MFA", string(r.Body))
 	}
 }
 

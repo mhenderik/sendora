@@ -95,6 +95,8 @@ func routeClass(r *http.Request) (class string, limit int) {
 		return "oidc", 60
 	case r.Method == http.MethodPost && (strings.HasPrefix(p, "/api/auth/mfa/") || strings.HasPrefix(p, "/api/users/me/mfa/")):
 		return "mfa", 30
+	case r.Method == http.MethodPut && p == "/api/users/me":
+		return "profile", 60
 	case r.Method == http.MethodPost && (p == "/api/auth/refresh" || p == "/api/auth/logout"):
 		return "refresh", 240
 	case r.Method == http.MethodPost && p == "/api/auth/login":
@@ -187,21 +189,32 @@ func (s *Server) security(next http.Handler) http.Handler {
 			}
 		}
 		// Only failed sign-in steps count, not signed-in requests whose access token
-		// expired (for example the two-step settings under /api/users/me).
-		if sensitive && (class == "login" || class == "unlock" || class == "auth" || (class == "mfa" && strings.HasPrefix(r.URL.Path, "/api/auth/mfa/"))) {
+		// expired (for example the two-step settings under /api/users/me). Routes
+		// that mix both kinds (setup, profile update, the step-up endpoints behind
+		// an access token) count only the requests a handler flagged as a rejected
+		// credential check (markAuthFailure).
+		signInStep := class == "login" || class == "unlock" || class == "auth" || (class == "mfa" && strings.HasPrefix(r.URL.Path, "/api/auth/mfa/"))
+		flagged := class == "setup" || class == "profile" || (class == "mfa" && strings.HasPrefix(r.URL.Path, "/api/users/me/mfa/"))
+		if sensitive && (signInStep || flagged) {
 			rec := &statusRecorder{ResponseWriter: w, status: 200}
 			w = rec
 			ip := s.clientIP(r)
 			defer func() {
-				if rec.status == 401 || rec.status == 403 {
+				if rec.failed || (signInStep && (rec.status == 401 || rec.status == 403)) {
 					s.noteIPFailure(ip)
 				}
 			}()
 		}
 		if sensitive {
+			// OIDC redirects wait on an external identity provider: they get their
+			// own pool so a slow issuer cannot occupy the slots password logins need.
+			slots := s.authSlots
+			if class == "oidc" && s.oidcSlots != nil {
+				slots = s.oidcSlots
+			}
 			select {
-			case s.authSlots <- struct{}{}:
-				defer func() { <-s.authSlots }()
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
 			default:
 				jerr(w, 429, "too many concurrent authentication requests")
 				return
@@ -282,7 +295,7 @@ func (s *Server) secureCookies(r *http.Request) bool {
 }
 
 func (s *Server) credentialVersion(u *User) string {
-	h := hmac.New(sha256.New, s.Secret)
+	h := hmac.New(sha256.New, s.key(keyCredential))
 	fmt.Fprintf(h, "%d:%s:%s:%t", u.ID, u.passwordHash, u.Email, u.MustChangePassword)
 	if u.mfaEpoch != 0 {
 		fmt.Fprintf(h, ":mfa%d", u.mfaEpoch) // factor changes revoke older tokens; unchanged for epoch 0

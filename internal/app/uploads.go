@@ -557,7 +557,7 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 	}
 	var hash string
 	if b.Password != "" {
-		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcrypt.DefaultCost)
+		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
 		if err != nil {
 			jerr(w, 400, "share password must not exceed 72 bytes")
 			return

@@ -220,6 +220,12 @@ func TestLoginUnlockAdminAndPasswordMutations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A locked account cannot be used to guess or confirm the current password.
+	if r := lockoutRequest(s, s.updateMe, "/api/users/me", map[string]any{"email": u.Email, "current_password": "resetpassword123", "password": "selfpassword123"}, current); r.Code != 429 {
+		t.Fatal(r.Code, r.Body.String())
+	}
+	lockoutState(t, s, u.ID, 5, true)
+	s.clearAuthFailures(u.ID)
 	if r := lockoutRequest(s, s.updateMe, "/api/users/me", map[string]any{"email": u.Email, "current_password": "resetpassword123", "password": "selfpassword123"}, current); r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
