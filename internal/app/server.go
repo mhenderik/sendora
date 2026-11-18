@@ -291,6 +291,9 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users/me/mfa/webauthn/finish", s.mfaWebAuthnRegisterFinish)
 			r.Put("/users/me/mfa/webauthn/{id}", s.mfaWebAuthnRename)
 			r.Post("/users/me/mfa/webauthn/{id}/remove", s.mfaWebAuthnRemove)
+			r.Get("/users/me/sessions", s.listMySessions)
+			r.Post("/users/me/sessions/revoke-others", s.revokeOtherSessions)
+			r.Delete("/users/me/sessions/{id}", s.revokeMySession)
 
 			r.Get("/shares", s.myShares)
 			r.Get("/shares/{id}/downloads", s.shareDownloads)
@@ -321,6 +324,8 @@ func (s *Server) Router() http.Handler {
 				// An export is recorded BEFORE it is served; without a record there is no export.
 				r.With(s.critical("audit_exported", "audit_log")).Get("/audit/export", s.auditExport)
 				r.Get("/audit/status", s.auditStatusHandler)
+				r.Get("/access-review", s.accessReview)
+				r.With(s.critical("access_review_exported", "access_review")).Get("/access-review/export", s.accessReviewExport)
 			})
 
 			r.Group(func(r chi.Router) {
@@ -333,6 +338,9 @@ func (s *Server) Router() http.Handler {
 				r.Post("/users/{id}/unlock-login", s.unlockLogin)
 				r.With(s.critical("mfa_reset_requested", "user")).Post("/users/{id}/mfa/reset", s.mfaReset)
 				r.Post("/users/{id}/welcome", s.resendWelcome)
+				r.With(s.critical("user_disabled", "user")).Post("/users/{id}/disable", s.disableUser)
+				r.With(s.critical("user_enabled", "user")).Post("/users/{id}/enable", s.enableUser)
+				r.With(s.critical("user_signed_out", "user")).Post("/users/{id}/sessions/revoke", s.adminRevokeSessions)
 
 				r.Get("/settings", s.getSettings)
 				r.With(s.critical("settings_changed", "settings")).Put("/settings", s.putSettings)

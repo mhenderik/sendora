@@ -59,6 +59,7 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_DEFAULT_STORAGE_QUOTA_BYTES` | `10000000000` (10 GB) | `default_storage_quota_bytes` |
 | `SENDORA_EXPIRY_WARNING_DAYS` | `2` | `expiry_warning_days` |
 | `SENDORA_IDLE_LOGOUT_MINUTES` | `60` | `idle_logout_minutes` |
+| `SENDORA_PROVIDER_SESSION_MAX_HOURS` | `24` | `provider_session_max_hours` (1 to 720): a session started through a sign-in provider, and every session of an account without a local password, must sign in at the provider again after this many hours, so an account disabled at the identity provider loses access here as well (Admin -> Security -> Sessions) |
 | `SENDORA_IP_BAN_ALLOWLIST` | empty | `ip_ban_allowlist` |
 | `SENDORA_IP_BAN_ENABLED` | `true` | `ip_ban_enabled` |
 | `SENDORA_LOCAL_LOGIN_ENABLED` | `true` | `local_login_enabled` |

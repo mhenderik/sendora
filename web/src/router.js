@@ -17,12 +17,14 @@ const routes = [
   { path: '/shares', component: () => import('./views/MyShares.vue'), meta: { auth: true } },
   { path: '/profile', component: () => import('./views/Profile.vue'), meta: { auth: true } },
   { path: '/audit', component: () => import('./views/Audit.vue'), meta: { auth: true, auditor: true } },
+  { path: '/access-review', component: () => import('./views/admin/AccessReview.vue'), meta: { auth: true, auditor: true } },
   {
     path: '/admin', component: () => import('./views/admin/Admin.vue'), meta: { auth: true, admin: true },
     children: [
       { path: '', redirect: '/admin/stats' },
       { path: 'stats', component: () => import('./views/admin/Stats.vue') },
       { path: 'users', component: () => import('./views/admin/Users.vue') },
+      { path: 'access-review', component: () => import('./views/admin/AccessReview.vue') },
       { path: 'settings', component: () => import('./views/admin/SettingsView.vue') },
       { path: 'branding', component: () => import('./views/admin/Branding.vue') },
       { path: 'themes', component: () => import('./views/admin/Themes.vue') },
@@ -46,7 +48,7 @@ router.beforeEach(to => {
   if (to.meta.admin && !session.user?.admin) return '/'
   if (to.meta.auditor && !session.user?.auditor) return '/'
   // Auditor accounts are read-only: they only see the audit log and their profile.
-  if (session.user?.auditor && to.path !== '/audit' && to.path !== '/profile' && !to.meta.public) return '/audit'
+  if (session.user?.auditor && !['/audit', '/access-review', '/profile'].includes(to.path) && !to.meta.public) return '/audit'
   if (session.user?.is_guest && !['/', '/invite'].some(p => to.path === p || to.path.startsWith('/invite/')) && !to.meta.public) return '/'
 })
 export default router

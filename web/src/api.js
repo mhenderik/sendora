@@ -2,7 +2,9 @@ import { reactive } from 'vue'
 import { translateMessage } from './i18n/mark.mjs'
 import { filenameFromDisposition } from './content-disposition.mjs'
 
-export const session = reactive({ token: null, user: null, ready: false })
+// endReason: why the server ended the session at the last refresh (for example a
+// disabled account or a provider sign-in that must be renewed), shown on the login page.
+export const session = reactive({ token: null, user: null, ready: false, endReason: '' })
 let refreshing = null
 
 async function raw(path, opts = {}) {
@@ -19,7 +21,11 @@ async function raw(path, opts = {}) {
 export async function refresh() {
   refreshing ??= fetch('/api/auth/refresh', { method: 'POST' })
     .then(async r => {
-      if (!r.ok) throw 0
+      if (!r.ok) {
+        const e = await r.json().catch(() => null)
+        session.endReason = e?.error || ''
+        throw 0
+      }
       const d = await r.json()
       session.token = d.access_token
       session.user = d.user

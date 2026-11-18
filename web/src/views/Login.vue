@@ -24,10 +24,14 @@ onMounted(async () => {
   if (route.query.auth_error) {
     const known = [tr('invalid state'), tr('login failed'), tr('provider not found'), tr('provider unreachable'), tr('session changed; log in again'),
       tr('account unavailable'), tr('could not create account'), tr('could not link account'), tr('email already has an account; use its existing login'),
-      tr('invalid provider email'), tr('no account linked to this login')]
+      tr('invalid provider email'), tr('no account linked to this login'), tr('account disabled')]
     const msg = String(route.query.auth_error)
     err.value = known.includes(msg) ? t(msg) : t('login failed')
   }
+  // Why the previous session ended, when the server said so (known texts only).
+  const ended = [tr('account disabled'), tr('your sign-in through the identity provider has expired; sign in again')]
+  if (ended.includes(session.endReason)) err.value = t(session.endReason)
+  session.endReason = ''
   providers.value = await api('/auth/providers').catch(() => [])
 })
 

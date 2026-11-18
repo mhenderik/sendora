@@ -241,7 +241,7 @@ func initSchema(db *sql.DB) error {
 // runMigrations is the additive migration sequence shared by openStore and
 // PrepareImported. Order matters: seed runs between the policy and brand steps.
 func (s *Store) runMigrations() error {
-	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders, s.migrateAudit} {
+	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders, s.migrateAudit, s.migrateAccounts} {
 		if err := step(); err != nil {
 			return err
 		}
@@ -284,6 +284,7 @@ var defaults = []struct{ Key, Grp, Val string }{
 	{"mfa_policy", "system", "optional"},
 	{"mfa_reminder_days", "system", "1"},
 	{"idle_logout_minutes", "system", "60"},
+	{"provider_session_max_hours", "system", "24"},
 	{"ip_ban_enabled", "system", "true"},
 	{"ip_ban_allowlist", "system", ""},
 	{"mfa_totp_enabled", "system", "true"},
