@@ -82,7 +82,7 @@ onBeforeUnmount(() => { pageTitle.value = ''; document.body.style.overflow = '';
     <template v-else-if="state === 'missing'"><h1>{{ t('Share not found') }}</h1></template>
     <template v-else-if="state === 'expired'"><h1>{{ t('This share has expired') }}</h1><p v-if="notice" class="ok">{{ t(notice) }}</p><p v-if="err" class="err">{{ err }}</p></template>
     <form v-else-if="state === 'locked'" @submit.prevent="unlock">
-      <h1>{{ share.name }}</h1><p class="muted" v-if="share.owner">{{ share.owner }}</p>
+      <h1>{{ t('Password protected share') }}</h1><p class="muted">{{ t('Enter the password you received to open this share.') }}</p>
       <label>{{ t('Password') }}</label><input v-model="pw" type="password" autofocus required />
       <p v-if="err" class="err">{{ err }}</p>
       <div class="actions"><button>{{ t('Unlock') }}</button></div>

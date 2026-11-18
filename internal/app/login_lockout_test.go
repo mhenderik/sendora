@@ -27,6 +27,7 @@ func lockoutServer(t *testing.T) (*Server, *User) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyTestDefaults(t, st)
 	t.Cleanup(func() { st.DB.Close() })
 	if err := st.MigratePolicy(); err != nil {
 		t.Fatal(err)
@@ -109,6 +110,7 @@ func TestLoginLockoutAliasesRestartExpiryAndSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyTestDefaults(t, st)
 	t.Cleanup(func() { st.DB.Close() })
 	s = &Server{St: st, Secret: secret}
 	if r := lockoutLogin(s, "alice", "password123"); r.Code != 401 {

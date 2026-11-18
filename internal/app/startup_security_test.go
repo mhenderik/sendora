@@ -14,6 +14,7 @@ func TestCrashSnapshotCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyTestDefaults(t, st)
 	defer st.DB.Close()
 	stale := filepath.Join(st.DataDir, ".verified-download-stale")
 	keep := filepath.Join(st.DataDir, "unrelated-file")

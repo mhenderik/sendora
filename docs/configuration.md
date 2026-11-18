@@ -14,7 +14,7 @@ Environment variables and runtime settings.
 | `SENDORA_DB_KEY_FILE` | required, no default | Path to the external regular file containing exactly 32 raw key bytes. Owner must be root or the current process UID; no group-write or world permissions. Group-read is allowed for projected `fsGroup` secrets. Never put the key value in an environment variable or command-line argument. |
 | `SENDORA_DB_INITIALIZE` | `false` | Explicit `true` permits a new encrypted database only. Disable after private first startup; existing plaintext is never automatically migrated. |
 | `APP_URL` | unset | Canonical application URL used for generated links, email links, OAuth callbacks, origin checks, and secure-cookie decisions. |
-| `JWT_SECRET` | generated and stored in SQLite | Optional override for the session-signing secret. Must be at least 32 characters with at least 8 distinct ones (Sendora refuses to start otherwise); keep a stable, high-entropy value. `JWT_SECRET_FILE` reads it from a file (Docker/Kubernetes secret) instead. |
+| `JWT_SECRET` | generated and stored in SQLite | Optional override for the session-signing secret. Must be at least 32 characters with at least 8 distinct ones (Sendora refuses to start otherwise); keep a stable, high-entropy value. `JWT_SECRET_FILE` reads it from a file (Docker/Kubernetes secret) instead. Every `*_FILE` secret (this one, the SMTP password, provider client secrets) must be owned by root or the Sendora user and have no group-write and no world access (for example mode `0400` or `0440`), or Sendora refuses to start; a secret in a plain environment variable is logged as a warning (never the value). |
 | `SENDORA_SETUP_CODE` | generated | Optional fixed one-time code for first-run setup (at least 16 characters, not a repeated or sequential pattern), for automated deployments. Without it Sendora generates a code and prints it in the log while no account exists. |
 | `SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES` | `17179869184` (16 GiB) | Positive integer byte limit for each temporary verified download snapshot; invalid/nonpositive values fall back to the default. |
 | `SENDORA_TRUSTED_PROXIES` | unset | Comma-separated IPs/CIDRs of reverse proxies whose `X-Forwarded-For` / `X-Forwarded-Proto` headers are believed (for example `10.0.0.0/8,127.0.0.1`). Empty means the TCP peer is the client and forwarded headers are ignored. With proxies configured, the right-most forwarded address that is not itself a trusted proxy is the client address used for rate limits and download records, and `X-Forwarded-Proto: https` marks cookies `Secure` and enables HSTS. **Set this when running behind an ingress**, otherwise all visitors share one rate-limit budget. |
@@ -40,7 +40,7 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 
 | Variable | Default | Admin setting |
 |---|---|---|
-| `SENDORA_ACCOUNT_PASSWORD_MIN_LENGTH` | `8` | `account_password_min_length` |
+| `SENDORA_ACCOUNT_PASSWORD_MIN_LENGTH` | `12` (new installations; `8` before 0.1.5) | `account_password_min_length` |
 | `SENDORA_ACCOUNT_PASSWORD_REQUIRE_DIGIT` | `false` | `account_password_require_digit` |
 | `SENDORA_ACCOUNT_PASSWORD_REQUIRE_LOWER` | `false` | `account_password_require_lower` |
 | `SENDORA_ACCOUNT_PASSWORD_REQUIRE_SYMBOL` | `false` | `account_password_require_symbol` |
@@ -66,13 +66,13 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_LOGGING_ENABLED` | `false` | `logging_enabled` |
 | `SENDORA_MAX_EXPIRY_TIME` | `30` | `max_expiry_time` |
 | `SENDORA_MAX_SHARE_SIZE` | `2048` | `max_share_size` |
-| `SENDORA_MFA_POLICY` | `off` | `mfa_policy` |
+| `SENDORA_MFA_POLICY` | `admins` (new installations; `off` before 0.1.5) | `mfa_policy` |
 | `SENDORA_MFA_TOTP_ENABLED` | `true` | `mfa_totp_enabled` |
 | `SENDORA_MFA_WEBAUTHN_ENABLED` | `true` | `mfa_webauthn_enabled` |
 | `SENDORA_REGISTRATION_EMAIL_DOMAINS` | empty | `registration_email_domains` |
 | `SENDORA_REQUIRE_EMAIL_VERIFICATION` | `true` | `require_email_verification` |
 | `SENDORA_REQUIRE_SHARE_PASSWORD` | `false` | `require_share_password` |
-| `SENDORA_SHARE_PASSWORD_MIN_LENGTH` | `8` | `share_password_min_length` |
+| `SENDORA_SHARE_PASSWORD_MIN_LENGTH` | `10` (new installations; `8` before 0.1.5) | `share_password_min_length` |
 | `SENDORA_SHARE_PASSWORD_REQUIRE_DIGIT` | `false` | `share_password_require_digit` |
 | `SENDORA_SHARE_PASSWORD_REQUIRE_LOWER` | `false` | `share_password_require_lower` |
 | `SENDORA_SHARE_PASSWORD_REQUIRE_SYMBOL` | `false` | `share_password_require_symbol` |

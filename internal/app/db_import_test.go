@@ -35,6 +35,7 @@ func newEncEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyTestDefaults(t, st)
 	t.Cleanup(func() { st.DB.Close() })
 	s := New(st, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, "test")
 	// Never exec the test binary or exit the test process.
@@ -87,6 +88,7 @@ func foreignDB(t *testing.T, key []byte, mutate func(*store.Store)) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyTestDefaults(t, st)
 	h, _ := bcrypt.GenerateFromPassword([]byte("otherpass"), bcrypt.MinCost)
 	if _, err := st.DB.Exec(`INSERT INTO users(username,email,password_hash,admin) VALUES('olduser','old@x.io',?,1)`, string(h)); err != nil {
 		t.Fatal(err)

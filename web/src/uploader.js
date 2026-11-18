@@ -42,7 +42,7 @@ async function uploadAllInner(entries, onProgress, signal, onPhase, opts) {
             body: f.slice(offset, end)
           })
           if (r.status === 401) { await api('/uploads/' + id); continue }
-          if (r.status === 409) { offset = (await r.json()).received; continue }
+          if (r.status === 409) { const d = await r.json(); offset = d.received; if (d.busy) await new Promise(res => setTimeout(res, 1000)); continue }
           if (!r.ok) throw new ApiError(r.status, await r.json().catch(() => null))
           const d = await r.json()
           offset = d.received

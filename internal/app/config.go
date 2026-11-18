@@ -79,6 +79,7 @@ func (s *Server) warnConfig(settingKeys []string) {
 			log.Printf("WARNING: local login is switched off by the configuration but no sign-in provider is enabled: nobody can sign in (recovery: SENDORA_FORCE_LOCAL_LOGIN=true)")
 		}
 	}
+	s.warnSecurityConfig()
 }
 
 // readConfigValue returns the value of NAME or of the file named by NAME_FILE.

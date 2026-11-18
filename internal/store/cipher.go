@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
@@ -231,7 +233,14 @@ func exportConnection(db *sql.DB, destination string, key []byte) error {
 	if err = conn.QueryRowContext(context.Background(), `PRAGMA application_id`).Scan(&applicationID); err != nil {
 		return err
 	}
-	if _, err = conn.ExecContext(context.Background(), `ATTACH DATABASE ? AS encrypted_export KEY ?`, destination, fmt.Sprintf("x'%x'", key)); err != nil {
+	// ATTACH ... KEY needs the key as a SQL string. Its bytes live in a slice that
+	// is wiped as soon as the statement returns, so the string does not outlive
+	// the call (the driver and SQLCipher keep their own working copies; a Go
+	// string cannot be wiped otherwise).
+	literal := hexKeyLiteral(key)
+	_, err = conn.ExecContext(context.Background(), `ATTACH DATABASE ? AS encrypted_export KEY ?`, destination, unsafe.String(&literal[0], len(literal)))
+	clear(literal)
+	if err != nil {
 		return errors.New("cannot attach encrypted export")
 	}
 	attached := true
@@ -412,4 +421,12 @@ func (s *Store) ExportEncryptedBackup(destination string) error {
 		return errors.New("encrypted backups require an encrypted store")
 	}
 	return exportConnection(s.DB, destination, s.cipherKey)
+}
+
+// hexKeyLiteral returns x'<hex key>' in a fresh slice for the caller to wipe.
+func hexKeyLiteral(key []byte) []byte {
+	lit := make([]byte, 3+2*len(key))
+	lit[0], lit[1], lit[len(lit)-1] = 'x', '\'', '\''
+	hex.Encode(lit[2:], key)
+	return lit
 }

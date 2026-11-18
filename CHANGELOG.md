@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.1.5
+
+### Hardening from an independent review
+
+- **Verified downloads:** the data directory must have room for the snapshot plus a
+  64 MiB margin or the download is refused with 507 (before any temporary file is
+  written); one slot is held for at most 2 hours; at most 2 snapshots of one share
+  at a time; a request with an invalid or unsatisfiable `Range` gets 416 without
+  taking a slot.
+- **Uploads:** a slow chunk no longer blocks other users. The body is received into a
+  temporary file without holding the shared lock; a second chunk for the same upload
+  while one is in flight gets `409` with `busy: true` and `Retry-After` (the web
+  client waits and retries).
+- **File names:** new uploads refuse the look-alike separators U+2215, U+FF0F and
+  U+FF3C (invisible Unicode format characters and length limits were already refused).
+  Appending files to a share now refuses a path that would be both a file and a
+  folder, across existing and new files.
+- **Share metadata:** `GET /api/shares/{id}` no longer returns the share name before a
+  password-protected share is unlocked, and the 410 response for an expired share
+  has no name. The page shows a neutral title until unlocked.
+- **Secure defaults for new installations** (existing installations keep their
+  stored values; restore the old value in Admin -> Settings or with the variable):
+  - `account_password_min_length` 12 (was 8): `SENDORA_ACCOUNT_PASSWORD_MIN_LENGTH=8`
+  - `share_password_min_length` 10 (was 8): `SENDORA_SHARE_PASSWORD_MIN_LENGTH=8`
+  - `mfa_policy` `admins` (was `off`): administrators are taken to their profile at
+    first sign-in to set up an authenticator app or passkey; `SENDORA_MFA_POLICY=off`
+    restores the old behaviour.
+  - Unchanged: self-registration off, previews on (only the fixed list of image,
+    video and audio types is ever shown inline).
+- **Startup:** Sendora refuses to start when `JWT_SECRET_FILE`, the SMTP password
+  file or a provider client-secret file is writable by the group or accessible to
+  others, or owned by another user (the rule of the database key file). It logs a
+  warning, never the value, for a secret given as a plain environment variable, and
+  warnings for a non-loopback `HOST` without an https application URL, risky
+  self-registration, MFA off while an administrator exists, a password minimum
+  below 10, and (once) `X-Forwarded-For` without `SENDORA_TRUSTED_PROXIES`.
+  On Linux core dumps are disabled and the process is made non-dumpable.
+- **Key material:** the SQLCipher key literal is built in buffers that are wiped
+  right after use, and the key read from the key file is wiped once the store has
+  its own copy.
+- The development `docker-compose.yml` now has a read-only root file system, a
+  `/tmp` tmpfs, all capabilities dropped and `no-new-privileges`, like the
+  production compose file.
+
 ## Unreleased
 
 ## 0.1.5 (2026-11-18)

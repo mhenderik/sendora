@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -356,10 +357,21 @@ func (s *Server) uploadStatus(w http.ResponseWriter, r *http.Request) {
 	jout(w, 200, map[string]any{"id": id, "files": out})
 }
 
+// chunkBusy marks upload sessions that are currently receiving a chunk. It is a
+// per-session try-lock: a slow body only delays that one session, never the other
+// users that share its stripe mutex.
+var chunkBusy sync.Map
+
+const maxChunkBytes = 64 << 20
+
 // uploadChunk appends request body at Upload-Offset. Resumable: client asks status then continues from received.
+//
+// The body is first spooled to a bounded temporary file inside the session
+// directory without holding any stripe lock; the stripe lock is taken only for the
+// short offset re-check, copy into the part file and database update. A second
+// chunk for the same session while one is in flight gets 409 with busy=true and
+// the current offset, so the client retries after a pause.
 func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
-	unlock := lockStripe(&s.uploadLocks, chi.URLParam(r, "id"))
-	defer unlock()
 	id, ok := s.ownUpload(w, r)
 	if !ok {
 		return
@@ -375,6 +387,17 @@ func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 404, "file not found")
 		return
 	}
+	if _, busy := chunkBusy.LoadOrStore(id, struct{}{}); busy {
+		w.Header().Set("Retry-After", "1")
+		jout(w, 409, map[string]any{"error": "another chunk of this upload is still being received", "busy": true, "received": rec})
+		return
+	}
+	defer chunkBusy.Delete(id)
+	// Re-read under the busy marker: the previous chunk may have just finished.
+	if s.St.DB.QueryRow(`SELECT size,received FROM upload_files WHERE session_id=? AND idx=?`, id, idx).Scan(&size, &rec) != nil {
+		jerr(w, 404, "file not found")
+		return
+	}
 	if offset != rec {
 		jout(w, 409, map[string]any{"error": "offset mismatch", "received": rec})
 		return
@@ -383,24 +406,54 @@ func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
 		jout(w, 200, map[string]any{"received": rec})
 		return
 	}
-	part := filepath.Join(s.uploadDir(id), strconv.Itoa(idx)+".part")
-	f, err := os.OpenFile(part, os.O_CREATE|os.O_WRONLY, 0o600)
+	tmp, err := os.OpenFile(filepath.Join(s.uploadDir(id), strconv.Itoa(idx)+".chunk"), os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
 	if err != nil {
-		jerr(w, 500, "storage error")
+		jerr(w, 404, "upload not found")
 		return
 	}
-	defer f.Close()
-	f.Seek(offset, io.SeekStart)
-	n, err := io.Copy(f, io.LimitReader(r.Body, min(size-offset, int64(64<<20))+1))
-	if offset+n > size || n > 64<<20 {
-		f.Truncate(offset)
+	defer func() { tmp.Close(); os.Remove(tmp.Name()) }()
+	n, copyErr := io.Copy(tmp, io.LimitReader(r.Body, min(size-offset, int64(maxChunkBytes))+1))
+	if offset+n > size || n > maxChunkBytes {
 		jerr(w, 413, "chunk exceeds declared size")
 		return
 	}
-	if n > 0 {
-		s.St.DB.Exec(`UPDATE upload_files SET received=? WHERE session_id=? AND idx=?`, offset+n, id, idx)
+	unlock := lockStripe(&s.uploadLocks, id)
+	defer unlock()
+	// The session may have been aborted, completed or cleaned up meanwhile.
+	if s.St.DB.QueryRow(`SELECT received FROM upload_files uf JOIN upload_sessions us ON us.id=uf.session_id WHERE uf.session_id=? AND uf.idx=? AND us.user_id=?`, id, idx, s.ctxUser(r).ID).Scan(&rec) != nil {
+		jerr(w, 404, "upload not found")
+		return
 	}
-	if err != nil {
+	if rec != offset {
+		jout(w, 409, map[string]any{"error": "offset mismatch", "received": rec})
+		return
+	}
+	if n > 0 {
+		f, err := os.OpenFile(filepath.Join(s.uploadDir(id), strconv.Itoa(idx)+".part"), os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			jerr(w, 500, "storage error")
+			return
+		}
+		defer f.Close()
+		if _, err = tmp.Seek(0, io.SeekStart); err == nil {
+			_, err = f.Seek(offset, io.SeekStart)
+		}
+		var m int64
+		if err == nil {
+			m, err = io.Copy(f, tmp)
+		}
+		if err != nil || m != n {
+			f.Truncate(offset)
+			jerr(w, 500, "write failed")
+			return
+		}
+		f.Truncate(offset + n)
+		if _, err := s.St.DB.Exec(`UPDATE upload_files SET received=? WHERE session_id=? AND idx=?`, offset+n, id, idx); err != nil {
+			jerr(w, 500, "write failed")
+			return
+		}
+	}
+	if copyErr != nil {
 		jerr(w, 500, "write failed")
 		return
 	}

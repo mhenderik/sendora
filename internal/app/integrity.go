@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -61,16 +60,87 @@ func releaseDownloadClient(client string) {
 
 // prepareClientDownload is prepareDownload limited to one slot per client.
 // On success the caller releases both: <-integritySlots and releaseDownloadClient.
-func (s *Server) prepareClientDownload(ctx context.Context, client string, files []FileInfo) (*os.File, string, error) {
+//
+// It also enforces a per-share cap and a maximum hold time. The returned release
+// function closes and removes the snapshot and frees every slot; call it exactly
+// once (defer it). After slotHoldMax the snapshot is closed under the transfer so
+// a stalled client cannot keep a slot forever.
+func (s *Server) prepareClientDownload(ctx context.Context, client string, shareID int64, files []FileInfo) (*os.File, string, func(), error) {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(ctx, slotHoldMax)
+	defer cancel()
+	if !acquireDownloadShare(ctx, shareID) {
+		return nil, "", nil, errDownloadBusy
+	}
 	if !acquireDownloadClient(ctx, client) {
-		return nil, "", fmt.Errorf("verified download preparation busy")
+		releaseDownloadShare(shareID)
+		return nil, "", nil, errDownloadBusy
 	}
 	f, sum, err := s.prepareDownload(ctx, files)
 	if err != nil {
 		releaseDownloadClient(client)
+		releaseDownloadShare(shareID)
+		return nil, "", nil, err
 	}
-	return f, sum, err
+	timer := time.AfterFunc(max(slotHoldMax-time.Since(start), time.Millisecond), func() { f.Close() })
+	release := func() {
+		timer.Stop()
+		f.Close()
+		os.Remove(f.Name())
+		<-integritySlots
+		releaseDownloadClient(client)
+		releaseDownloadShare(shareID)
+	}
+	return f, sum, release, nil
 }
+
+var errDownloadBusy = errors.New("verified download preparation busy")
+
+// slotHoldMax is the longest one verified-download slot may be held in total
+// (preparation plus transfer).
+var slotHoldMax = 2 * time.Hour
+
+// downloadSlotsPerShare caps concurrent snapshots of a single share.
+const downloadSlotsPerShare = 2
+
+var (
+	downloadSharesMu sync.Mutex
+	downloadShares   = map[int64]int{}
+)
+
+func acquireDownloadShare(ctx context.Context, shareID int64) bool {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		downloadSharesMu.Lock()
+		if downloadShares[shareID] < downloadSlotsPerShare {
+			downloadShares[shareID]++
+			downloadSharesMu.Unlock()
+			return true
+		}
+		downloadSharesMu.Unlock()
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func releaseDownloadShare(shareID int64) {
+	downloadSharesMu.Lock()
+	if downloadShares[shareID] <= 1 {
+		delete(downloadShares, shareID)
+	} else {
+		downloadShares[shareID]--
+	}
+	downloadSharesMu.Unlock()
+}
+
+// Free-space guard: refuse a snapshot unless the data directory has room for it
+// plus a margin (ZIP framing, other temporary files). freeSpaceFn is injectable.
+const snapshotSpaceMargin = 64 << 20
+
+var freeSpaceFn = freeDiskSpace
+var errInsufficientSpace = errors.New("not enough free disk space to prepare a verified download")
 
 var errSnapshotLimit = errors.New("verified download exceeds preparation limit")
 
@@ -156,7 +226,7 @@ func (s *Server) prepareDownload(ctx context.Context, files []FileInfo) (*os.Fil
 	case <-ctx.Done():
 		return nil, "", ctx.Err()
 	case <-wait.C:
-		return nil, "", fmt.Errorf("verified download preparation busy")
+		return nil, "", errDownloadBusy
 	}
 	retained := false
 	defer func() {
@@ -171,6 +241,11 @@ func (s *Server) prepareDownload(ctx context.Context, files []FileInfo) (*os.Fil
 			return nil, "", errSnapshotLimit
 		}
 		total += f.Size
+	}
+	if free, ferr := freeSpaceFn(s.St.DataDir); ferr == nil {
+		if uint64(total)+snapshotSpaceMargin > free {
+			return nil, "", errInsufficientSpace
+		}
 	}
 	out, err := os.CreateTemp(s.St.DataDir, ".verified-download-*")
 	if err != nil {
@@ -237,9 +312,78 @@ func integrityError(w http.ResponseWriter, err error) {
 		jerr(w, http.StatusConflict, "file integrity check failed; download blocked")
 		return
 	}
+	if errors.Is(err, errInsufficientSpace) {
+		w.Header().Set("Retry-After", "300")
+		jerr(w, http.StatusInsufficientStorage, "not enough free disk space on the server to prepare this download; try again later")
+		return
+	}
+	if errors.Is(err, errDownloadBusy) {
+		w.Header().Set("Retry-After", "10")
+		jerr(w, http.StatusServiceUnavailable, "too many downloads are being prepared; try again shortly")
+		return
+	}
 	if errors.Is(err, errSnapshotLimit) {
 		jerr(w, http.StatusRequestEntityTooLarge, errSnapshotLimit.Error())
 		return
 	}
 	jerr(w, http.StatusServiceUnavailable, "verified download temporarily unavailable")
+}
+
+// rangeNeverSatisfiable reports whether a Range header would be answered with
+// 416 by http.ServeContent, so the request can be refused before any snapshot
+// work. size < 0 means unknown (ZIP): only the syntax is checked. An If-Range
+// header makes the server ignore a bad range, so it disables the shortcut.
+func rangeNeverSatisfiable(r *http.Request, size int64) bool {
+	h := r.Header.Get("Range")
+	if h == "" || r.Header.Get("If-Range") != "" {
+		return false
+	}
+	const prefix = "bytes="
+	if !strings.HasPrefix(h, prefix) {
+		return true
+	}
+	anyOK := false
+	for _, spec := range strings.Split(h[len(prefix):], ",") {
+		spec = strings.TrimSpace(spec)
+		if spec == "" {
+			continue
+		}
+		a, b, ok := strings.Cut(spec, "-")
+		if !ok {
+			return true
+		}
+		a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+		if a == "" {
+			n, err := strconv.ParseInt(b, 10, 64)
+			if err != nil || n < 0 {
+				return true
+			}
+			if n > 0 || size < 0 {
+				anyOK = true
+			}
+			continue
+		}
+		start, err := strconv.ParseInt(a, 10, 64)
+		if err != nil || start < 0 {
+			return true
+		}
+		if b != "" {
+			end, err := strconv.ParseInt(b, 10, 64)
+			if err != nil || start > end {
+				return true
+			}
+		}
+		if size >= 0 && start >= size {
+			continue
+		}
+		anyOK = true
+	}
+	return !anyOK
+}
+
+func rejectRange(w http.ResponseWriter, size int64) {
+	if size >= 0 {
+		w.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(size, 10))
+	}
+	jerr(w, http.StatusRequestedRangeNotSatisfiable, "invalid range")
 }

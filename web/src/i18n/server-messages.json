@@ -331,7 +331,11 @@
     "this user has no local password to reset",
     "this user has no verified email address; they will be asked to change their password at next sign-in",
     "the reset email could not be prepared",
-    "the email could not be delivered; check the SMTP settings"
+    "the email could not be delivered; check the SMTP settings",
+    "not enough free disk space on the server to prepare this download; try again later",
+    "too many downloads are being prepared; try again shortly",
+    "invalid range",
+    "a file and a folder would have the same name in this share"
   ],
   "dynamic": [
     "%d file(s) in %d share(s) are missing on disk and cannot be downloaded after the import.",

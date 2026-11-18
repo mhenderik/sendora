@@ -67,6 +67,7 @@ func (s *Server) peerTrusted(r *http.Request) bool {
 // right-most address that is not itself a trusted proxy wins (anything to its
 // left is client-controlled). An unparsable entry falls back to the peer.
 func (s *Server) clientIP(r *http.Request) string {
+	s.noteForwardedHeader(r)
 	peer := peerHost(r)
 	if !s.trusted(net.ParseIP(peer)) {
 		return peer

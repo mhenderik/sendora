@@ -32,6 +32,7 @@ func newEncryptedEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyTestDefaults(t, st)
 	t.Cleanup(func() { st.DB.Close() })
 	if st.FileKey() == nil {
 		t.Fatal("encrypted store has no file key")

@@ -843,5 +843,11 @@
   "this user has no local password to reset": "deze gebruiker heeft geen lokaal wachtwoord om te herstellen",
   "this user has no verified email address; they will be asked to change their password at next sign-in": "deze gebruiker heeft geen geverifieerd e-mailadres; bij de volgende aanmelding wordt gevraagd het wachtwoord te wijzigen",
   "the reset email could not be prepared": "de herstelmail kon niet worden voorbereid",
-  "the email could not be delivered; check the SMTP settings": "de e-mail kon niet worden bezorgd; controleer de SMTP-instellingen"
+  "the email could not be delivered; check the SMTP settings": "de e-mail kon niet worden bezorgd; controleer de SMTP-instellingen",
+  "not enough free disk space on the server to prepare this download; try again later": "er is op de server te weinig vrije schijfruimte om deze download voor te bereiden; probeer het later opnieuw",
+  "too many downloads are being prepared; try again shortly": "er worden te veel downloads voorbereid; probeer het zo opnieuw",
+  "invalid range": "ongeldig bereik",
+  "a file and a folder would have the same name in this share": "een bestand en een map zouden dezelfde naam krijgen in deze share",
+  "Password protected share": "Met wachtwoord beveiligde share",
+  "Enter the password you received to open this share.": "Voer het wachtwoord in dat je hebt ontvangen om deze share te openen."
 }

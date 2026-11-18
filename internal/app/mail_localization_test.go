@@ -257,7 +257,7 @@ func TestRepeatedDownloadStartsAndHistory(t *testing.T) {
 			t.Fatal(m)
 		}
 	}
-	// Rejected Range reserves its existing per-request slot but serves no file.
+	// A range that can never be satisfied is refused with 416 before any slot or download count is taken (changed in 0.1.5).
 	e.want(e.do("GET", public+"/a.txt", "", nil, "Range", "bytes=999-"), 416, "invalid range")
 	history := "/api/shares/" + share.S("id") + "/downloads"
 	e.want(e.do("GET", history, "", nil), 401, "history authentication")
@@ -287,12 +287,12 @@ func TestRepeatedDownloadStartsAndHistory(t *testing.T) {
 	e.want(e.do("GET", public+"/"+files[0].FullPath, "", nil), 404, "missing single file")
 	var count int
 	e.s.St.DB.QueryRow(`SELECT download_count FROM shares WHERE long_id=?`, share.S("long_id")).Scan(&count)
-	if count != 4 {
+	if count != 3 {
 		t.Fatal("missing file reserved download", count)
 	}
-	// A successful subsequent start has count 5; no marker4 ever gets sent.
+	// A successful subsequent start has count 4; no marker for the failed downloads is sent.
 	e.want(e.do("GET", public+"/"+files[1].FullPath, "", nil), 200, "remaining source")
-	sink.wait(t, "Started marker5")
+	sink.wait(t, "Started marker4")
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 	if len(sink.msgs) != 4 {

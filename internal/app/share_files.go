@@ -74,6 +74,27 @@ func uniqueSharePath(existing map[string]bool, p string) (string, error) {
 	return "", errNoUniquePath
 }
 
+// addParentDirs records every parent folder of the (lower-cased) file path p.
+func addParentDirs(dirs map[string]bool, p string) {
+	for dir := path.Dir(p); dir != "." && dir != "/" && dir != ""; dir = path.Dir(dir) {
+		dirs[dir] = true
+	}
+}
+
+// pathKindConflict reports whether file path p (lower-cased) is already a folder,
+// or one of its parent folders is already a file.
+func pathKindConflict(files, dirs map[string]bool, p string) bool {
+	if dirs[p] {
+		return true
+	}
+	for dir := path.Dir(p); dir != "." && dir != "/" && dir != ""; dir = path.Dir(dir) {
+		if files[dir] {
+			return true
+		}
+	}
+	return false
+}
+
 // completeAppend finishes an upload session that targets an existing share.
 // It never claims or removes the share directory: on failure only the files
 // staged by this call are removed.
@@ -209,6 +230,7 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	used := map[string]bool{}
+	dirs := map[string]bool{}
 	var existing int64
 	frows, err := tx.Query(`SELECT full_path,size FROM files WHERE share_id=?`, shareID)
 	if err != nil {
@@ -224,6 +246,7 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 			return
 		}
 		used[strings.ToLower(fp)] = true
+		addParentDirs(dirs, strings.ToLower(fp))
 		existing += sz
 	}
 	err = frows.Err()
@@ -247,7 +270,13 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 			jerr(w, 409, "could not choose a unique file name")
 			return
 		}
+		// A path may not be both a file and a folder, over existing plus new files.
+		if pathKindConflict(used, dirs, strings.ToLower(np)) {
+			jerr(w, 409, "a file and a folder would have the same name in this share")
+			return
+		}
 		used[strings.ToLower(np)] = true
+		addParentDirs(dirs, strings.ToLower(np))
 		name := path.Base(np)
 		ires, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity,enc,enc_id) VALUES(?,?,?,?,?,?,?,?,?,?)`, shareID, name, np, f.size, f.typ, f.disk, f.checksum, f.integrity, f.enc, f.encID)
 		if err != nil {

@@ -164,12 +164,12 @@ func (s *Server) readShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sh.Expired {
-		jout(w, 410, map[string]any{"error": "share expired", "name": sh.Name})
+		jout(w, 410, map[string]any{"error": "share expired"})
 		return
 	}
 	if !s.shareUnlocked(r, sh) {
-		// Nothing about the owner before the password is given.
-		jout(w, 200, map[string]any{"password_protected": true, "name": sh.Name})
+		// Nothing about the share (owner, name, description) before the password is given.
+		jout(w, 200, map[string]any{"password_protected": true})
 		return
 	}
 	sh.Files = s.shareFiles(sh.ID)
@@ -385,13 +385,21 @@ func (s *Server) downloadShare(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 404, "no files")
 		return
 	}
+	rangeSize := int64(-1)
+	if len(files) == 1 {
+		rangeSize = files[0].Size
+	}
+	if rangeNeverSatisfiable(r, rangeSize) {
+		rejectRange(w, rangeSize)
+		return
+	}
 	client := ipBanKey(s.clientIP(r))
-	snapshot, checksum, err := s.prepareClientDownload(r.Context(), client, files)
+	snapshot, checksum, release, err := s.prepareClientDownload(r.Context(), client, sh.ID, files)
 	if err != nil {
 		integrityError(w, err)
 		return
 	}
-	defer func() { snapshot.Close(); os.Remove(snapshot.Name()); <-integritySlots; releaseDownloadClient(client) }()
+	defer release()
 	jobID, ok := s.reserveDownload(w, sh, files)
 	if !ok {
 		return
@@ -419,13 +427,17 @@ func (s *Server) downloadShareFile(w http.ResponseWriter, r *http.Request) {
 	fp := strings.TrimPrefix(path.Clean("/"+wildcardPath(r)), "/")
 	for _, f := range s.shareFiles(sh.ID) {
 		if f.FullPath == fp {
+			if rangeNeverSatisfiable(r, f.Size) {
+				rejectRange(w, f.Size)
+				return
+			}
 			client := ipBanKey(s.clientIP(r))
-			in, checksum, err := s.prepareClientDownload(r.Context(), client, []FileInfo{f})
+			in, checksum, release, err := s.prepareClientDownload(r.Context(), client, sh.ID, []FileInfo{f})
 			if err != nil {
 				integrityError(w, err)
 				return
 			}
-			defer func() { in.Close(); os.Remove(in.Name()); <-integritySlots; releaseDownloadClient(client) }()
+			defer release()
 			setDownloadChecksum(w, checksum)
 			id := f.ID
 			jobID, ok := s.reserveDownload(w, sh, []FileInfo{f})
