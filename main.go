@@ -43,6 +43,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Printf("file encryption active fp=%s format=2 sqlcipher=%s", st.KeyFingerprint(), st.CipherVersion())
 	static, err := fs.Sub(distFS, "web/dist")
 	if err != nil {
 		log.Fatal(err)

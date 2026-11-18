@@ -10,6 +10,9 @@ func (s *Store) migrateIntegrity() error {
 		{"files", "integrity", "TEXT NOT NULL DEFAULT 'server_baseline'"},
 		// enc=1: the stored file is chunked AES-256-GCM (internal/filecrypt).
 		{"files", "enc", "INTEGER NOT NULL DEFAULT 0"},
+		// enc_id: hex of the 16 byte file id (format v2) that binds the ciphertext
+		// to this row; empty for plain files and format v1 files (0.1.2 - 0.1.4).
+		{"files", "enc_id", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		rows, err := s.DB.Query("PRAGMA table_info(" + column.table + ")")
 		if err != nil {

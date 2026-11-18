@@ -27,7 +27,7 @@ func seal(t *testing.T, master, plain []byte) []byte {
 	t.Helper()
 	var out bytes.Buffer
 	h := sha256.New()
-	n, err := Encrypt(&out, bytes.NewReader(plain), master, h)
+	n, _, err := Encrypt(&out, bytes.NewReader(plain), master, h)
 	if err != nil || n != int64(len(plain)) {
 		t.Fatalf("encrypt: n=%d err=%v", n, err)
 	}
@@ -42,7 +42,7 @@ func seal(t *testing.T, master, plain []byte) []byte {
 
 func open(t *testing.T, master, stored []byte, plain int64) (*Reader, error) {
 	t.Helper()
-	return NewReader(memFile{bytes.NewReader(stored)}, int64(len(stored)), plain, master)
+	return NewReader(memFile{bytes.NewReader(stored)}, int64(len(stored)), plain, master, idOf(stored))
 }
 
 func TestRoundTripSizes(t *testing.T) {
@@ -96,7 +96,7 @@ func TestTamperTruncateWrongKey(t *testing.T) {
 	stored := seal(t, master, plain)
 
 	flipped := bytes.Clone(stored)
-	flipped[headerSize+100] ^= 1
+	flipped[headerSizeV2+100] ^= 1
 	r, _ := open(t, master, flipped, int64(len(plain)))
 	if _, err := io.ReadAll(r); err == nil {
 		t.Fatal("modified ciphertext was accepted")
@@ -104,7 +104,7 @@ func TestTamperTruncateWrongKey(t *testing.T) {
 
 	// Dropping the last chunk and claiming a shorter file must fail: the new
 	// last chunk was sealed as "not last".
-	short := stored[:headerSize+2*(ChunkSize+tagSize)]
+	short := stored[:headerSizeV2+2*(ChunkSize+tagSize)]
 	r, err := open(t, master, short, 2*ChunkSize)
 	if err == nil {
 		if _, err = io.ReadAll(r); err == nil {

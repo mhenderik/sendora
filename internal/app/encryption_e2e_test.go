@@ -118,8 +118,12 @@ func TestEncryptedUploadStoresCiphertextAndDownloadsMatch(t *testing.T) {
 		if int64(len(disk)) != filecrypt.CipherSize(int64(len(content))) {
 			t.Fatalf("%s: stored size %d, want %d", name, len(disk), filecrypt.CipherSize(int64(len(content))))
 		}
-		if !bytes.HasPrefix(disk, []byte("SNDF\x01")) {
-			t.Fatalf("%s: missing SNDF header", name)
+		if !bytes.HasPrefix(disk, []byte("SNDF\x02")) {
+			t.Fatalf("%s: missing SNDF v2 header", name)
+		}
+		var encID string
+		if err := e.s.St.DB.QueryRow(`SELECT f.enc_id FROM files f JOIN shares s ON s.id=f.share_id WHERE s.long_id=? AND f.full_path=?`, lid, name).Scan(&encID); err != nil || encID != hex.EncodeToString(disk[37:53]) {
+			t.Fatalf("%s: enc_id %q does not match the file header (%v)", name, encID, err)
 		}
 		if len(content) >= 16 && bytes.Contains(disk, []byte(content[:16])) {
 			t.Fatalf("%s: plaintext found on disk", name)
@@ -344,4 +348,42 @@ func TestDatabaseFileIsEncrypted(t *testing.T) {
 	if _, err := store.OpenEncrypted(filepath.Dir(e.s.St.Path), nil, false); err == nil {
 		t.Fatal("database opened without a key")
 	}
+}
+
+// Ciphertext of file A copied over file B (same size, valid under the same key)
+// must be refused: the row's file id no longer matches the header.
+func TestSwappedCiphertextBetweenRowsRefused(t *testing.T) {
+	e := newEncryptedEnv(t)
+	admin := e.setup()
+	e.s.St.SetSetting("allow_preview", "true")
+	a := pngBytes
+	b := pngBytes[:len(pngBytes)-1] + "Z"
+	share := e.share(admin, map[string]string{"a.png": a, "b.png": b}, nil)
+	e.want(share, 201, "share")
+	lid := share.S("long_id")
+	rows := e.storedFiles(lid)
+	ra, rb := rows["a.png"], rows["b.png"]
+	if ra.size != rb.size || ra.disk == rb.disk {
+		t.Fatal("test needs two distinct files of equal size")
+	}
+	for _, n := range []string{"a.png", "b.png"} {
+		e.want(e.do("GET", "/api/shares/"+lid+"/download/"+n, "", nil), 200, "intact "+n)
+	}
+	da, _ := os.ReadFile(ra.disk)
+	if err := os.WriteFile(rb.disk, da, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refused := func(what string, d resp) {
+		t.Helper()
+		if d.Code == 200 || d.Code == 206 || strings.Contains(string(d.Body), "PNG") {
+			t.Fatalf("%s: swapped ciphertext was served (status %d)", what, d.Code)
+		}
+	}
+	refused("verified download", e.do("GET", "/api/shares/"+lid+"/download/b.png", "", nil))
+	refused("range", e.do("GET", "/api/shares/"+lid+"/download/b.png", "", nil, "Range", "bytes=0-9"))
+	refused("preview", e.do("GET", "/api/shares/"+lid+"/preview/b.png", "", nil))
+	refused("preview range", e.do("GET", "/api/shares/"+lid+"/preview/b.png", "", nil, "Range", "bytes=0-9"))
+	refused("zip", e.do("GET", "/api/shares/"+lid+"/download", "", nil))
+	// The untouched file still works.
+	e.want(e.do("GET", "/api/shares/"+lid+"/download/a.png", "", nil), 200, "a.png still intact")
 }

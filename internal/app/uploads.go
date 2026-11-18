@@ -483,6 +483,7 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 		expected, checksum, integrity string
 		size, rec                     int64
 		enc                           bool
+		encID                         string
 	}
 	rows, err := s.St.DB.Query(`SELECT idx,name,full_path,type,size,received,sha256 FROM upload_files WHERE session_id=? ORDER BY idx`, id)
 	if err != nil {
@@ -586,7 +587,7 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 	for i := range files {
 		f := &files[i]
 		disk := filepath.Join(dest, fmt.Sprintf("%d_%s", f.idx, f.name))
-		checksum, enc, err := stageUploadFile(r.Context(), filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part"), disk, f.size, s.St.FileKey())
+		checksum, encID, err := stageUploadFile(r.Context(), filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part"), disk, f.size, s.St.FileKey(), s.St.IsEncrypted())
 		if err != nil {
 			if errors.Is(err, errIntegrity) {
 				jerr(w, 409, "uploaded file integrity check failed")
@@ -595,7 +596,7 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 			}
 			return
 		}
-		f.enc = enc
+		f.enc, f.encID = encID != "", encID
 		if f.expected != "" && checksum != f.expected {
 			jerr(w, 409, "upload checksum mismatch")
 			return
@@ -641,7 +642,7 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 	sid, _ := res.LastInsertId()
 	for _, f := range files {
 		disk := filepath.Join(dest, fmt.Sprintf("%d_%s", f.idx, f.name))
-		if _, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity,enc) VALUES(?,?,?,?,?,?,?,?,?)`, sid, f.name, f.fp, f.size, f.typ, disk, f.checksum, f.integrity, f.enc); err != nil {
+		if _, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity,enc,enc_id) VALUES(?,?,?,?,?,?,?,?,?,?)`, sid, f.name, f.fp, f.size, f.typ, disk, f.checksum, f.integrity, f.enc, f.encID); err != nil {
 			jerr(w, 500, "file metadata write failed")
 			return
 		}
@@ -741,16 +742,26 @@ func (s *Server) removeUploadSession(id string) error {
 	return err
 }
 
+// errNoFileKey is returned when an encrypted store has no file key: storing the
+// upload unencrypted would be a silent downgrade, so nothing is written.
+var errNoFileKey = errors.New("file encryption key unavailable")
+
 // stageUploadFile moves one finished upload part into its final place. With a
 // file key it encrypts on the way (one streaming pass, no extra read) and always
-// returns the SHA-256 of the plaintext computed during that same pass.
-func stageUploadFile(ctx context.Context, src, dest string, size int64, key []byte) (checksum string, enc bool, err error) {
+// returns the SHA-256 of the plaintext computed during that same pass, plus the
+// file id (hex) of the encrypted file for the database row. Only the plaintext
+// fixture store (encryptedStore false, no key) stores plain files; an encrypted
+// store without a usable key is refused. A partially written dest is removed.
+func stageUploadFile(ctx context.Context, src, dest string, size int64, key []byte, encryptedStore bool) (checksum, encID string, err error) {
+	if len(key) != 32 && (encryptedStore || len(key) != 0) {
+		return "", "", errNoFileKey
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		if os.IsNotExist(err) && size == 0 {
 			in = nil
 		} else {
-			return "", false, err
+			return "", "", err
 		}
 	}
 	var reader io.Reader = bytes.NewReader(nil)
@@ -758,41 +769,48 @@ func stageUploadFile(ctx context.Context, src, dest string, size int64, key []by
 		defer in.Close()
 		st, err := in.Stat()
 		if err != nil {
-			return "", false, err
+			return "", "", err
 		}
 		if !st.Mode().IsRegular() || st.Size() != size {
-			return "", false, errIntegrity
+			return "", "", errIntegrity
 		}
 		reader = contextReader{ctx, io.LimitReader(in, size+1)}
 	}
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return "", false, err
+		return "", "", err
 	}
+	// dest was created by this call (O_EXCL), so it is ours to remove on failure.
+	ok := false
+	defer func() {
+		if !ok {
+			out.Close()
+			os.Remove(dest)
+		}
+	}()
 	h := sha256.New()
 	var n int64
 	var copyErr error
 	if len(key) == 32 {
-		enc = true
 		w := bufio.NewWriterSize(out, 256<<10)
-		n, copyErr = filecrypt.Encrypt(w, reader, key, h)
+		n, encID, copyErr = filecrypt.Encrypt(w, reader, key, h)
 		if copyErr == nil {
 			copyErr = w.Flush()
 		}
 	} else {
 		n, copyErr = io.Copy(io.MultiWriter(out, h), reader)
 	}
-	closeErr := out.Close()
 	if copyErr != nil {
-		return "", false, copyErr
+		return "", "", copyErr
 	}
 	if n != size {
-		return "", false, errIntegrity
+		return "", "", errIntegrity
 	}
-	if closeErr != nil {
-		return "", false, closeErr
+	if err := out.Close(); err != nil {
+		return "", "", err
 	}
-	return hex.EncodeToString(h.Sum(nil)), enc, nil
+	ok = true
+	return hex.EncodeToString(h.Sum(nil)), encID, nil
 }
 
 func nameOf(u *User) string {
