@@ -581,6 +581,10 @@ func auditorAllowed(r *http.Request) bool {
 	switch r.URL.Path {
 	case "/api/users/me":
 		return r.Method == http.MethodGet || r.Method == http.MethodPut
+	case "/api/users/me/export":
+		return r.Method == http.MethodGet
+	case "/api/users/me/terms", "/api/users/me/erase":
+		return r.Method == http.MethodPost
 	case "/api/audit", "/api/audit/export", "/api/audit/status", "/api/access-review", "/api/access-review/export":
 		return r.Method == http.MethodGet
 	}

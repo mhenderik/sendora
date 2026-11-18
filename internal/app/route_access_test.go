@@ -146,6 +146,11 @@ var routeTable = []routeSpec{
 	rs("GET /api/users/me/sessions", polSelf),
 	rs("POST /api/users/me/sessions/revoke-others", polSelf),
 	rs("DELETE /api/users/me/sessions/{id}", polSelf).withSoft("{id} is a session of the caller; the fixture uses an unknown id", 404),
+	rs("GET /api/users/me/export", polSelf),
+	rs("POST /api/users/me/erase", polSelf).withSoft("needs the current password in the body", 400),
+	rs("POST /api/users/me/terms", polSelf).withSoft("terms acceptance is off in the fixture", 400, 409),
+	rs("POST /api/auth/step-up", polAdmin).withSoft("needs the password or a code in the body", 400),
+	rs("POST /api/auth/step-up/webauthn/begin", polAdmin).withSoft("the fixture administrator has no security key", 409),
 
 	// ---- shares: owner only ----
 	rs("GET /api/shares", polUser), // lists the caller's own shares
@@ -184,6 +189,7 @@ var routeTable = []routeSpec{
 	rs("POST /api/users", polAdmin),
 	rs("PUT /api/users/{id}", polAdmin),
 	rs("DELETE /api/users/{id}", polAdmin),
+	rs("POST /api/users/{id}/erase", polAdmin),
 	rs("POST /api/users/{id}/force-reset-password", polAdmin),
 	rs("POST /api/users/{id}/unlock-login", polAdmin),
 	rs("POST /api/users/{id}/mfa/reset", polAdmin),
@@ -728,10 +734,11 @@ func TestRouteAccessAuditorAndAdminAreSeparated(t *testing.T) {
 		}
 	}
 	// Exactly the own-profile routes: GET/PUT /api/users/me, the nine
-	// self-service routes of the caller's own second factors and the three
-	// routes of the caller's own sessions.
-	if auditorOK != 14 {
-		t.Errorf("auditor is allowed on %d non-audit routes, want 14 (GET/PUT /api/users/me, /api/users/me/mfa* and /api/users/me/sessions*)", auditorOK)
+	// self-service routes of the caller's own second factors, the three routes of
+	// the caller's own sessions, and the own personal data export, erasure and
+	// terms acceptance.
+	if auditorOK != 17 {
+		t.Errorf("auditor is allowed on %d non-audit routes, want 17 (GET/PUT /api/users/me, /api/users/me/mfa*, /api/users/me/sessions*, export, erase, terms)", auditorOK)
 	}
 	// The audit log (3 routes) and the read-only access review (2 routes).
 	if adminRoutes < 40 || auditRoutes != 5 {

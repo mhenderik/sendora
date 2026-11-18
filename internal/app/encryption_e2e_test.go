@@ -42,6 +42,7 @@ func newEncryptedEnv(t *testing.T) *env {
 	s.RunDownloadMail(ctx)
 	t.Cleanup(cancel)
 	s.rateWindow = time.Hour
+	s.passwordScreenOff = true
 	ts := httptest.NewServer(s.Router())
 	t.Cleanup(ts.Close)
 	return &env{t: t, s: s, ts: ts}

@@ -41,6 +41,7 @@ func newEncEnv(t *testing.T) *env {
 	// Never exec the test binary or exit the test process.
 	s.importExec = func() error { t.Error("unexpected real exec"); return nil }
 	s.importExit = func(int) { t.Error("unexpected real exit") }
+	s.passwordScreenOff = true
 	ctx, cancel := context.WithCancel(context.Background())
 	s.RunDownloadMail(ctx)
 	t.Cleanup(cancel)

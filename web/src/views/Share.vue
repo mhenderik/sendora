@@ -1,4 +1,5 @@
 <script setup>
+import LegalLinks from '../components/LegalLinks.vue'
 import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, fmtBytes, fmtDate } from '../api'
@@ -135,6 +136,7 @@ onBeforeUnmount(() => { pageTitle.value = ''; document.body.style.overflow = '';
       <section v-if="showQr" class="card"><QrCode :value="shareUrl()" /></section>
       <div class="actions"><button class="secondary" @click="showQr = !showQr">{{ t('QR code') }}</button><button :disabled="downloading" @click="all">{{ share.files.length > 1 ? t('Download all') : t('Download') }}</button></div>
     </template>
+    <LegalLinks />
   </div>
 </template>
 <style scoped>

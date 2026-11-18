@@ -235,7 +235,7 @@ func (s *Server) recipientLanguage(to, selected string) string {
 	return "en"
 }
 
-var mailVars = []string{"ApplicationName", "RecipientName", "SenderName", "URL", "Message", "Expires", "ShareName", "Code", "DownloadCount", "FileName", "FileNames", "StartedAt", "Username", "LoginURL", "SetPasswordURL", "ExpiresDays"}
+var mailVars = []string{"ApplicationName", "RecipientName", "SenderName", "URL", "Message", "Expires", "ShareName", "Code", "DownloadCount", "FileName", "FileNames", "StartedAt", "Username", "LoginURL", "SetPasswordURL", "ExpiresDays", "Time", "Browser"}
 
 type limitedMailWriter struct{ bytes.Buffer }
 

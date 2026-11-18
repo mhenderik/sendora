@@ -20,6 +20,7 @@ Environment variables and runtime settings.
 | `SENDORA_TRUSTED_PROXIES` | unset | Comma-separated IPs/CIDRs of reverse proxies whose `X-Forwarded-For` / `X-Forwarded-Proto` headers are believed (for example `10.0.0.0/8,127.0.0.1`). Empty means the TCP peer is the client and forwarded headers are ignored. With proxies configured, the right-most forwarded address that is not itself a trusted proxy is the client address used for rate limits and download records, and `X-Forwarded-Proto: https` marks cookies `Secure` and enables HSTS. **Set this when running behind an ingress**, otherwise all visitors share one rate-limit budget. |
 | `SENDORA_DISABLE_IP_BANS` | unset | Explicit `true` switches off the address blocking (see *Blocking repeated failed sign-ins*) regardless of the setting. Recovery switch if an administrator blocked their own address; remove it afterwards. |
 | `SENDORA_FORCE_LOCAL_LOGIN` | unset | Explicit `true` re-enables local username/password sign-in at runtime even when an administrator turned it off, without changing the database. Recovery switch for a failing external provider; a warning is logged at startup. Remove it afterwards. |
+| `SENDORA_DISABLE_ADMIN_IP_ALLOWLIST` | unset | Explicit `true` switches off the administrator network restriction (`admin_ip_allowlist`, see *Administrator network restriction*) and allows saving a list that does not contain your own address. Recovery switch after locking yourself out; remove it afterwards. |
 | `TZ` | environment-dependent | Container timezone; Compose sets UTC. |
 
 SMTP, registration, expiry/cleanup policy, share size limits, branding, themes, login providers, and email templates are configured through the administrator interface and persisted in SQLite, not through corresponding SMTP environment variables.
@@ -40,7 +41,10 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 
 | Variable | Default | Admin setting |
 |---|---|---|
-| `SENDORA_ACCOUNT_PASSWORD_MIN_LENGTH` | `8` | `account_password_min_length` |
+| `SENDORA_ACCOUNT_PASSWORD_MIN_LENGTH` | `8` | `account_password_min_length` (8 to 72; a stored value below 8 is raised to 8) |
+| `SENDORA_ADMIN_IDLE_LOGOUT_MINUTES` | `15` | `admin_idle_logout_minutes` (0 = same as `idle_logout_minutes`; otherwise administrators get the stricter of the two) |
+| `SENDORA_ADMIN_IP_ALLOWLIST` | empty | `admin_ip_allowlist` (IP addresses and CIDR ranges; empty = no restriction) |
+| `SENDORA_ADMIN_STEPUP_MINUTES` | `5` | `admin_stepup_minutes` (1 to 60) |
 | `SENDORA_ACCOUNT_PASSWORD_REQUIRE_DIGIT` | `false` | `account_password_require_digit` |
 | `SENDORA_ACCOUNT_PASSWORD_REQUIRE_LOWER` | `false` | `account_password_require_lower` |
 | `SENDORA_ACCOUNT_PASSWORD_REQUIRE_SYMBOL` | `false` | `account_password_require_symbol` |
@@ -75,6 +79,9 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_MFA_REMINDER_DAYS` | `1` | `mfa_reminder_days` |
 | `SENDORA_MFA_TOTP_ENABLED` | `true` | `mfa_totp_enabled` |
 | `SENDORA_MFA_WEBAUTHN_ENABLED` | `true` | `mfa_webauthn_enabled` |
+| `SENDORA_NOTIFY_NEW_SIGNIN` | `true` | `notify_new_signin` |
+| `SENDORA_PASSWORD_BREACH_CHECK_ONLINE` | `false` | `password_breach_check_online` |
+| `SENDORA_PRIVACY_URL` | empty | `privacy_url` (https) |
 | `SENDORA_REGISTRATION_EMAIL_DOMAINS` | empty | `registration_email_domains` |
 | `SENDORA_REQUIRE_EMAIL_VERIFICATION` | `true` | `require_email_verification` |
 | `SENDORA_REQUIRE_SHARE_PASSWORD` | `false` | `require_share_password` |
@@ -91,6 +98,9 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_SMTP_REPLY_TO` | empty | `smtp_reply_to` |
 | `SENDORA_SMTP_TLS` | `starttls` | `smtp_tls` |
 | `SENDORA_SMTP_USER` | empty | `smtp_user` |
+| `SENDORA_TERMS_ACCEPTANCE_REQUIRED` | `false` | `terms_acceptance_required` (needs `terms_url` and `terms_version`) |
+| `SENDORA_TERMS_URL` | empty | `terms_url` (https) |
+| `SENDORA_TERMS_VERSION` | empty | `terms_version` |
 | `SENDORA_UI_BACKGROUND` | empty | `ui_background` |
 | `SENDORA_UI_BUILTIN_BACKGROUND` | `koenigssee` | `ui_builtin_background` |
 | `SENDORA_UI_DEFAULT_BACKGROUND` | `true` | `ui_default_background` |
@@ -119,6 +129,19 @@ Forwarding never blocks or fails a request: each destination has an in-memory qu
 |---|---|
 | `SENDORA_AUDIT_FORWARD_WEBHOOK_TOKEN_FILE` | File with the bearer token for the audit webhook (optional). |
 | `SENDORA_METRICS_TOKEN_FILE` | File with the bearer token for `/api/metrics`; without it the endpoint is off. |
+### Account security
+
+- **Password screening.** Account passwords (setup, registration, profile, reset, administrator-created users) are refused when they are on the embedded list of common passwords (`internal/app/data`, reproducible with `gen_common_passwords.go`), contain the username, the local part of the email address or the application name, or are a simple repetition or sequence. Share passwords keep their own rules. With `password_breach_check_online=true` new passwords are also checked against the Have I Been Pwned range API: only the first 5 hex characters of the SHA-1 hash are sent (k-anonymity), with a 3-second timeout; when the service cannot be reached the password is accepted and a warning is logged.
+- **Security notifications.** Users with a verified email address get an email when their password is changed (also through a reset link), a second factor is added or removed, or recovery codes are regenerated, and (setting `notify_new_signin`) when a sign-in comes from a browser family and network (/16 for IPv4, /48 for IPv6) not seen for the account in the last 30 days. Only keyed hashes of that combination are stored, never addresses. A failing mail server never blocks the action.
+- **Step-up re-authentication.** Deleting or erasing users, changing administrator/auditor roles, creating, changing or deleting sign-in providers, changing security settings (`mfa_*`, `local_login_enabled`, `application_url`, `audit_*`, `ip_ban_*`, the account password policy, `admin_*`, `provider_session_max_hours`, `password_breach_check_online`, `notify_new_signin`), downloading, deleting and restoring backups, and MFA reset requests need a sign-in or confirmation not older than `admin_stepup_minutes`. The browser asks for the second factor (authenticator code or passkey) or, without one, the password. Administrators who sign in only through a provider and have no second factor sign in at the provider again. Administrator sessions also end after `admin_idle_logout_minutes` of inactivity.
+
+### Administrator network restriction
+
+`admin_ip_allowlist` limits the administration routes and the audit log to client addresses in the list (one IP address or CIDR range per line; empty means no restriction). The client address is determined as everywhere else: forwarded headers count only from `SENDORA_TRUSTED_PROXIES`. Refused requests get `403` and an `access_denied` audit record. Saving a list that does not contain your own current address is refused. If you lock yourself out (for example after the office address changed), restart with `SENDORA_DISABLE_ADMIN_IP_ALLOWLIST=true`, fix the list and remove the variable again.
+
+### Privacy and terms
+
+`privacy_url` and `terms_url` (https) are shown in the footer, on the sign-in page and on public share pages. With `terms_acceptance_required=true` (and a `terms_version`) every signed-in account accepts the current version once (`terms_accepted` in the audit log); until then only its profile, the acceptance, the personal data export and deleting the account work. Changing `terms_version` asks everyone again. Users can download their data (Profile → Your data) and delete their account; administrators can erase an account under Users (see `docs/THREAT-MODEL.md` for what remains in the audit log).
 
 ### Login providers
 

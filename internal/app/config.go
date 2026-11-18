@@ -50,8 +50,8 @@ var k8sServiceLinkRe = regexp.MustCompile(`^SENDORA_(SERVICE_(HOST|PORT)(_[A-Z0-
 var serverEnvNames = map[string]bool{
 	"SENDORA_DB_KEY_FILE": true, "SENDORA_DB_INITIALIZE": true, "SENDORA_TRUSTED_PROXIES": true,
 	"SENDORA_SETUP_CODE": true, "SENDORA_FORCE_LOCAL_LOGIN": true, "SENDORA_DISABLE_IP_BANS": true,
-	"SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES": true,
-	forwardTokenEnv:                       true, metricsTokenEnv: true,
+	"SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES": true, "SENDORA_DISABLE_ADMIN_IP_ALLOWLIST": true,
+	forwardTokenEnv: true, metricsTokenEnv: true,
 	// Retired switches of the former optional event log: accepted and ignored.
 	"SENDORA_LOGGING_ENABLED": true, "SENDORA_LOG_RETENTION_HOURS": true,
 }

@@ -82,6 +82,9 @@ func (s *Server) normalizeSetting(k, str string) (string, error) {
 	if owned, err := validateMFASetting(k, str); owned && err != nil {
 		return "", err
 	}
+	if owned, err := validateAccountSecuritySetting(k, &str); owned && err != nil {
+		return "", err
+	}
 	if k == settingLocalLogin {
 		norm, ok := normalizeLocalLoginSetting(str)
 		if !ok {
@@ -222,6 +225,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			jerr(w, 400, msgMFAEnforceSelf)
 			return
 		}
+	}
+	if !s.guardSettingsUpdate(w, r, updates) { // step-up, admin network list, terms (stepup.go)
+		return
 	}
 	olds := make(map[string]string, len(updates))
 	for k := range updates {

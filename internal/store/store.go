@@ -243,7 +243,7 @@ func initSchema(db *sql.DB) error {
 // runMigrations is the additive migration sequence shared by openStore and
 // PrepareImported. Order matters: seed runs between the policy and brand steps.
 func (s *Store) runMigrations() error {
-	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders, s.migrateAudit, s.migrateAccounts, s.migrateDownloadIP} {
+	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders, s.migrateAudit, s.migrateAccounts, s.migrateDownloadIP, s.migrateAccountSecurity} {
 		if err := step(); err != nil {
 			return err
 		}

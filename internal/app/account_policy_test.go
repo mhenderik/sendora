@@ -85,7 +85,8 @@ func TestAccountSettingsValidation(t *testing.T) {
 	if e.s.St.Setting("account_password_min_length") != "12" || e.s.St.Setting("account_password_require_upper") != "true" || e.s.St.Setting("account_password_require_symbol") != "true" {
 		t.Fatal("not stored")
 	}
-	e.setSettings(admin, map[string]any{"account_password_min_length": "1"})
+	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"account_password_min_length": "7"}), 400, "below the floor of 8")
+	e.setSettings(admin, map[string]any{"account_password_min_length": "8"})
 	e.setSettings(admin, map[string]any{"account_password_min_length": 72})
 }
 
@@ -191,11 +192,11 @@ func TestAccountPolicyAdminPaths(t *testing.T) {
 func TestAccountPolicyBoundaries(t *testing.T) {
 	e := newEnv(t)
 	admin := e.setup()
-	e.setSettings(admin, map[string]any{"account_password_min_length": 1})
+	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"account_password_min_length": 1}), 400, "minimum is at least 8")
 	mk := func(i int, pw string) resp {
 		return e.do("POST", "/api/users", admin, map[string]any{"username": "u" + itoa(int64(i)), "password": pw, "email": "u" + itoa(int64(i)) + "@x.io"})
 	}
-	e.want(mk(1, "a"), 201, "1 byte")
+	e.want(mk(1, "a"), 400, "1 byte")
 	e.want(mk(2, strings.Repeat("a", 72)), 201, "72 bytes")
 	e.want(mk(3, strings.Repeat("a", 73)), 400, "73 bytes")
 	e.want(mk(4, strings.Repeat("é", 36)), 201, "72 bytes multibyte")

@@ -8,6 +8,7 @@ import { accountPolicy, passwordProblems } from '../sharepolicy.mjs'
 import PasswordHints from '../components/PasswordHints.vue'
 import MfaSecurity from '../components/MfaSecurity.vue'
 import SessionsCard from '../components/SessionsCard.vue'
+import DataExportCard from '../components/DataExportCard.vue'
 const f = ref({ name: '', email: '', password: '', currentPassword: '', language: 'en', ui_language: 'en' }), msg = ref(''), err = ref(''), linked = ref([]), hasPw = ref(true)
 const storage = ref(null)
 async function load() {
@@ -59,5 +60,6 @@ async function unlink(p) { try { await api('/users/me/providers/' + p.id, { meth
   </form>
   <MfaSecurity />
   <SessionsCard />
+  <DataExportCard v-if="!session.user?.is_guest" :has-password="hasPw" />
   </div>
 </template>

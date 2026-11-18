@@ -87,3 +87,13 @@ export function createIdleMonitor({
   write(now())
   return api
 }
+
+// The inactivity window in minutes for a session: administrators get the stricter
+// of idle_logout_minutes and admin_idle_logout_minutes (0 there = same as everyone).
+// Mirrors effectiveIdleMinutes in internal/app/stepup.go.
+export function effectiveIdleMinutes(global, admin, isAdmin) {
+  const g = Number.isFinite(Number(global)) && Number(global) > 0 ? Number(global) : 0
+  const a = Number.isFinite(Number(admin)) && Number(admin) > 0 ? Number(admin) : 0
+  if (!isAdmin || a === 0) return g
+  return g === 0 || a < g ? a : g
+}

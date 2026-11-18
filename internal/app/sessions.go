@@ -140,9 +140,9 @@ func (s *Server) sessionStillValid(w http.ResponseWriter, u *User, claims jwt.Ma
 	return true
 }
 
-// noteSignIn records the time of a successful sign-in (password, second factor,
-// provider) for the access-review report.
-func (s *Server) noteSignIn(uid int64) {
+// recordLastLogin records the time of a successful sign-in (password, second
+// factor, provider) for the access-review report.
+func (s *Server) recordLastLogin(uid int64) {
 	s.St.DB.Exec(`UPDATE users SET last_login_at=? WHERE id=?`, time.Now().UTC(), uid)
 }
 

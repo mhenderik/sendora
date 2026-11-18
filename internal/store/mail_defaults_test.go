@@ -12,7 +12,7 @@ var knownMailVars = map[string]bool{
 	"ApplicationName": true, "RecipientName": true, "SenderName": true, "URL": true, "Message": true,
 	"Expires": true, "ShareName": true, "Code": true, "DownloadCount": true, "FileName": true,
 	"FileNames": true, "StartedAt": true, "Username": true, "LoginURL": true, "SetPasswordURL": true,
-	"ExpiresDays": true,
+	"ExpiresDays": true, "Time": true, "Browser": true,
 }
 
 var mailVarRE = regexp.MustCompile(`\{\{\.([A-Za-z]+)\}\}`)

@@ -1,4 +1,5 @@
 <script setup>
+import LegalLinks from '../components/LegalLinks.vue'
 import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { api, setSession, session } from '../api'
@@ -140,5 +141,6 @@ async function doVerify() {
       </a>
     </div>
     <p v-if="app.boot?.registration_available && !verify && !mfa && local()" class="muted"><router-link to="/register">{{ t('Create account') }}</router-link></p>
+    <LegalLinks />
   </div>
 </template>
