@@ -129,8 +129,12 @@ Actor notation: *caller* = the signed-in user making the request (`actor_role` f
 | `session_revoked` | User ended one of their own sessions, or all other sessions | subject | `user#<id> (<name>)` | `one session`, `current session`, `other sessions: <n>` | ok |
 | `stepup_ok` (category admin) | Step-up re-authentication succeeded | subject | empty | `password`, `totp` or `webauthn` | ok |
 | `stepup_failed` (category admin) | Step-up re-authentication failed | subject | empty | method | failed |
+| `password_changed` | A user changed their own password in the profile, or an administrator changed their own password through the user list | subject | `user#<id> (<name>)` | `own profile` or `administrator, own account` | ok |
+| `password_reset` | A password was set through an emailed reset or welcome link (recorded as the account the link belongs to) | subject | `user#<id> (<name>)` | `via reset link` or `first password via welcome link` | ok |
+| `password_expired` | The local password passed `account_password_max_age_days`; the account must change it before anything else. Written once per expiry: at the sign-in or the request (auth middleware) that detects it | subject | `user#<id> (<name>)` | `max age <n> days` | ok |
+| `password_expiry_warning_sent` | Maintenance job mailed the "password expires soon" reminder (once per password, 7 days before expiry) | system | `user#<id> (<name>)` | `expires <YYYY-MM-DD> (<n> days)` | ok |
 
-Classified as `auth` in `classifyAction` but **not written by any code path in 0.1.5**: `password_changed`, `password_reset`. A user's own password change (`PUT /api/users/me`) and a password reset through an emailed link (`POST /api/auth/reset-password`) are recorded only by the generic mutation rule (method, route, status; the reset as `anonymous`). An administrator's account update that changed a password would carry the detail `password changed` on `user_updated`, but administrators cannot set another user's password.
+Every path that sets a local password is recorded: setup and self-registration create the account (generic mutation rule, `/api/setup` and `/api/auth/register`), an administrator-created account is recorded as `user_created`, and the rows above cover changes and resets. Passwords themselves are never part of a record.
 
 ### 4.2 Accounts (category `account` unless noted)
 
@@ -141,6 +145,7 @@ Classified as `auth` in `classifyAction` but **not written by any code path in 0
 | `user_email_changed` | Administrator changed another user's email (address becomes unverified, user signed out, old address notified) | caller | `user#<id> (<name>)` | `email_verified reset` | ok |
 | `user_role_changed` | Administrator or auditor flag changed | caller | `user#<id> (<name>)` | `admin=<bool> auditor=<bool>` | ok |
 | `mfa_policy_changed` (category admin) | Per-user MFA policy changed (target user) or global `mfa_policy` changed (target `settings`) | caller | `user#<id> (<name>)` or `settings` | `policy=<value>` | ok |
+| `password_rotation_exempt_changed` (category admin) | Administrator exempted an account from the password maximum age, or ended the exemption | caller | `user#<id> (<name>)` | `exempt=<bool>` | ok |
 | `user_deleted` | Account deleted (with its shares and files) | caller | `user#<id> (<name>)` captured before deletion | empty | ok |
 | `user_erased` | Account erased (pseudonymised, content deleted) by an administrator or by the user | caller | `user#<id> (<former name>)` | `by administrator` or `self-service` | ok |
 | `user_force_reset` | Administrator forced a password change | caller | `user#<id> (<name>)` | empty | ok |

@@ -43,22 +43,30 @@ type User struct {
 	MFAEnrollRequired    bool   `json:"mfa_enroll_required"`
 	Disabled             bool   `json:"disabled"`
 	DisabledReason       string `json:"disabled_reason,omitempty"`
-	sessionID            string // session (refresh-token family) of the request's access token
-	authMethod           string // how that session was signed in (see sessions.go)
-	mfaEpoch             int64  `json:"-"`
-	loginFailures        int64  `json:"-"`
-	loginLockedUntil     int64  `json:"-"`
-	passwordHash         string
+	// PasswordChangedAt is when the local password was last set (RFC 3339, empty
+	// when unknown or without a local password); see password_rotation.go.
+	PasswordChangedAt      string `json:"password_changed_at,omitempty"`
+	PasswordRotationExempt bool   `json:"password_rotation_exempt"`
+	passwordChangedAt      sql.NullTime
+	sessionID              string // session (refresh-token family) of the request's access token
+	authMethod             string // how that session was signed in (see sessions.go)
+	mfaEpoch               int64  `json:"-"`
+	loginFailures          int64  `json:"-"`
+	loginLockedUntil       int64  `json:"-"`
+	passwordHash           string
 }
 
-const userCols = `id,username,name,email,admin,must_change_password,is_guest,is_auditor,email_verified,created_at,password_hash,language,ui_language,quota_bytes,login_failures,login_locked_until,quota_inherits_default,(SELECT value FROM settings WHERE key='default_storage_quota_bytes'),mfa_policy,mfa_epoch,disabled_at IS NOT NULL,disabled_reason`
+const userCols = `id,username,name,email,admin,must_change_password,is_guest,is_auditor,email_verified,created_at,password_hash,language,ui_language,quota_bytes,login_failures,login_locked_until,quota_inherits_default,(SELECT value FROM settings WHERE key='default_storage_quota_bytes'),mfa_policy,mfa_epoch,disabled_at IS NOT NULL,disabled_reason,password_changed_at,password_rotation_exempt`
 
 func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 	u := &User{}
 	var quota, inheritance, defaultQuota sql.NullString
-	err := row.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Admin, &u.MustChangePassword, &u.IsGuest, &u.Auditor, &u.EmailVerified, &u.CreatedAt, &u.passwordHash, &u.Language, &u.UILanguage, &quota, &u.loginFailures, &u.loginLockedUntil, &inheritance, &defaultQuota, &u.MFAPolicy, &u.mfaEpoch, &u.Disabled, &u.DisabledReason)
+	err := row.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Admin, &u.MustChangePassword, &u.IsGuest, &u.Auditor, &u.EmailVerified, &u.CreatedAt, &u.passwordHash, &u.Language, &u.UILanguage, &quota, &u.loginFailures, &u.loginLockedUntil, &inheritance, &defaultQuota, &u.MFAPolicy, &u.mfaEpoch, &u.Disabled, &u.DisabledReason, &u.passwordChangedAt, &u.PasswordRotationExempt)
 	if err != nil {
 		return nil, err
+	}
+	if u.passwordChangedAt.Valid && u.passwordHash != "" {
+		u.PasswordChangedAt = u.passwordChangedAt.Time.UTC().Format(time.RFC3339)
 	}
 	u.QuotaBytes, u.QuotaInheritsDefault, err = store.ResolveQuota(quota, inheritance, defaultQuota)
 	if err != nil {
@@ -133,6 +141,8 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, u *User) b
 	if u.authMethod == "" && !u.IsGuest {
 		u.authMethod = authMethodPassword // a fresh sign-in never inherits a stale token's method
 	}
+	// A password past its maximum age must be changed first (password_rotation.go).
+	s.flagExpiredPassword(u)
 	ok := s.issueSessionSince(w, r, u, time.Now())
 	if ok && !u.IsGuest {
 		s.recordLastLogin(u.ID)
@@ -213,6 +223,9 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		}
 		if u.Auditor && !auditorAllowed(r) {
 			jerr(w, 403, "auditor accounts are read-only")
+			return
+		}
+		if s.expiredPasswordBlocked(w, u) {
 			return
 		}
 		if u.MustChangePassword && !(r.URL.Path == "/api/users/me" && (r.Method == http.MethodGet || r.Method == http.MethodPut)) {
@@ -323,8 +336,8 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "invalid password (8-72 bytes required)")
 		return
 	}
-	res, err := s.St.DB.Exec(`INSERT INTO users(username,name,email,password_hash,admin,language,ui_language)
-		SELECT ?,?,?,?,1,?,? WHERE NOT EXISTS (SELECT 1 FROM users)`, c.Username, c.Name, c.Email, string(hash), c.Language, c.UILanguage)
+	res, err := s.St.DB.Exec(`INSERT INTO users(username,name,email,password_hash,admin,language,ui_language,password_changed_at)
+		SELECT ?,?,?,?,1,?,?,? WHERE NOT EXISTS (SELECT 1 FROM users)`, c.Username, c.Name, c.Email, string(hash), c.Language, c.UILanguage, time.Now().UTC())
 	if err != nil {
 		jerr(w, 400, err.Error())
 		return
@@ -680,6 +693,13 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	unlock := lockStripe(&s.loginLocks, strconv.FormatInt(uid, 10))
 	defer unlock()
+	// Reuse check last: it is the slow one (bcrypt per remembered password).
+	var currentHash string
+	s.St.DB.QueryRow(`SELECT password_hash FROM users WHERE id=?`, uid).Scan(&currentHash)
+	if s.refusePasswordReuse(w, uid, currentHash, b.Password) {
+		return
+	}
+	historyDepth := s.passwordHistoryDepth()
 	tx, err := s.St.DB.Begin()
 	if err != nil {
 		jerr(w, 500, "database error")
@@ -691,11 +711,15 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "invalid or expired token")
 		return
 	}
+	if err := rememberPasswordTx(tx, uid, historyDepth); err != nil {
+		jerr(w, 500, "password reset failed")
+		return
+	}
 	for _, q := range []struct {
 		sql  string
 		args []any
 	}{
-		{`UPDATE users SET password_hash=?, must_change_password=0, login_failures=0, login_locked_until=0 WHERE id=? AND is_guest=0`, []any{string(hash), uid}},
+		{`UPDATE users SET password_hash=?, must_change_password=0, login_failures=0, login_locked_until=0, password_changed_at=?, password_expiry_warned_at=NULL WHERE id=? AND is_guest=0`, []any{string(hash), time.Now().UTC(), uid}},
 		{`DELETE FROM password_resets WHERE user_id=?`, []any{uid}},
 		{`DELETE FROM refresh_tokens WHERE user_id=?`, []any{uid}},
 	} {
@@ -787,8 +811,8 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte(c.Password), bcryptCost)
-	res, err := s.St.DB.Exec(`INSERT INTO users(username,name,email,password_hash,email_verified,language,ui_language,pending_registration) VALUES(?,?,?,?,?,?,?,?)`,
-		c.Username, c.Name, c.Email, string(hash), !verify, c.Language, c.UILanguage, verify)
+	res, err := s.St.DB.Exec(`INSERT INTO users(username,name,email,password_hash,email_verified,language,ui_language,pending_registration,password_changed_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+		c.Username, c.Name, c.Email, string(hash), !verify, c.Language, c.UILanguage, verify, time.Now().UTC())
 	if err != nil {
 		// Usernames are visible to share recipients anyway, so a taken username is
 		// reported. A taken email address gets the same answer as a successful
@@ -952,7 +976,9 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	}
 	u.QuotaBytes, u.QuotaInheritsDefault = usage.QuotaBytes, usage.QuotaInheritsDefault
 	s.fillMFA(u)
-	jout(w, 200, map[string]any{"version": s.Version, "user": u, "providers": linked, "has_password": u.passwordHash != "", "terms_pending": s.termsPending(u), "quota_inherits_default": usage.QuotaInheritsDefault, "quota_bytes": usage.QuotaBytes, "storage_used_bytes": usage.StoredBytes, "storage_reserved_bytes": usage.ReservedBytes, "storage_available_bytes": usage.AvailableBytes})
+	out := map[string]any{"version": s.Version, "user": u, "providers": linked, "has_password": u.passwordHash != "", "terms_pending": s.termsPending(u), "quota_inherits_default": usage.QuotaInheritsDefault, "quota_bytes": usage.QuotaBytes, "storage_used_bytes": usage.StoredBytes, "storage_reserved_bytes": usage.ReservedBytes, "storage_available_bytes": usage.AvailableBytes}
+	s.passwordExpiryFields(u, out)
+	jout(w, 200, out)
 }
 
 func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
@@ -1039,6 +1065,9 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 		if !s.requireAccountPassword(w, r, b.Password, u.Username, email) {
 			return
 		}
+		if s.refusePasswordReuse(w, u.ID, u.passwordHash, b.Password) {
+			return
+		}
 		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
 		if err != nil {
 			jerr(w, 400, "invalid password")
@@ -1046,6 +1075,7 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 		}
 		passwordHash, mustChange = string(h), false
 	}
+	historyDepth := s.passwordHistoryDepth()
 	tx, err := s.St.DB.Begin()
 	if err != nil {
 		jerr(w, 500, "database error")
@@ -1056,7 +1086,13 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 	if emailChanged {
 		verified = email == ""
 	}
-	res, err := tx.Exec(`UPDATE users SET name=?,email=?,email_verified=?,password_hash=?,must_change_password=?,language=?,ui_language=COALESCE(?,ui_language),login_failures=CASE WHEN ? THEN 0 ELSE login_failures END,login_locked_until=CASE WHEN ? THEN 0 ELSE login_locked_until END WHERE id=? AND password_hash=? AND email=? AND must_change_password=?`, b.Name, email, verified, passwordHash, mustChange, language, b.UILanguage, b.Password != "", b.Password != "", u.ID, u.passwordHash, u.Email, u.MustChangePassword)
+	if b.Password != "" {
+		if err := rememberPasswordTx(tx, u.ID, historyDepth); err != nil {
+			jerr(w, 500, "profile update failed")
+			return
+		}
+	}
+	res, err := tx.Exec(`UPDATE users SET name=?,email=?,email_verified=?,password_hash=?,must_change_password=?,language=?,ui_language=COALESCE(?,ui_language),login_failures=CASE WHEN ? THEN 0 ELSE login_failures END,login_locked_until=CASE WHEN ? THEN 0 ELSE login_locked_until END,password_changed_at=CASE WHEN ? THEN ? ELSE password_changed_at END,password_expiry_warned_at=CASE WHEN ? THEN NULL ELSE password_expiry_warned_at END WHERE id=? AND password_hash=? AND email=? AND must_change_password=?`, b.Name, email, verified, passwordHash, mustChange, language, b.UILanguage, b.Password != "", b.Password != "", b.Password != "", time.Now().UTC(), b.Password != "", u.ID, u.passwordHash, u.Email, u.MustChangePassword)
 	if err != nil {
 		jerr(w, 400, "profile update failed")
 		return
@@ -1239,10 +1275,10 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, _ := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
-	q := `INSERT INTO users(username,name,email,password_hash,admin,must_change_password,language,ui_language) VALUES(?,?,?,?,?,?,?,?)`
-	args := []any{b.Username, b.Name, b.Email, string(h), b.Admin, b.MustChangePassword, b.Language, b.UILanguage}
+	q := `INSERT INTO users(username,name,email,password_hash,admin,must_change_password,language,ui_language,password_changed_at) VALUES(?,?,?,?,?,?,?,?,?)`
+	args := []any{b.Username, b.Name, b.Email, string(h), b.Admin, b.MustChangePassword, b.Language, b.UILanguage, time.Now().UTC()}
 	if b.QuotaBytes != nil {
-		q = `INSERT INTO users(username,name,email,password_hash,admin,must_change_password,language,ui_language,quota_bytes,quota_inherits_default) VALUES(?,?,?,?,?,?,?,?,?,0)`
+		q = `INSERT INTO users(username,name,email,password_hash,admin,must_change_password,language,ui_language,password_changed_at,quota_bytes,quota_inherits_default) VALUES(?,?,?,?,?,?,?,?,?,?,0)`
 		args = append(args, *b.QuotaBytes)
 	}
 	res, err := s.St.DB.Exec(q, args...)
@@ -1290,6 +1326,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		QuotaBytes           *int64  `json:"quota_bytes"`
 		QuotaInheritsDefault *bool   `json:"quota_inherits_default"`
 		MFAPolicy            *string `json:"mfa_policy"`
+		RotationExempt       *bool   `json:"password_rotation_exempt"` // omitted = unchanged
 	}
 	if decode(r, &b) != nil {
 		jerr(w, 400, "bad request")
@@ -1367,6 +1404,10 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := target.passwordHash
 	if b.Password != "" {
+		// Last of the password checks: the reuse check is the slow one.
+		if s.refusePasswordReuse(w, id, target.passwordHash, b.Password) {
+			return
+		}
 		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
 		if err != nil {
 			jerr(w, 400, "invalid password")
@@ -1374,13 +1415,20 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		hash = string(h)
 	}
+	historyDepth := s.passwordHistoryDepth()
 	tx, err := s.St.DB.Begin()
 	if err != nil {
 		jerr(w, 500, "database error")
 		return
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE users SET name=?,email=?,admin=?,password_hash=?,quota_bytes=COALESCE(?,quota_bytes),quota_inherits_default=COALESCE(?,quota_inherits_default),mfa_policy=COALESCE(?,mfa_policy),login_failures=CASE WHEN ? THEN 0 ELSE login_failures END,login_locked_until=CASE WHEN ? THEN 0 ELSE login_locked_until END,email_verified=CASE WHEN ? THEN 0 ELSE email_verified END WHERE id=? AND is_guest=0 AND password_hash=? AND email=? AND must_change_password=?`, name, email, admin, hash, b.QuotaBytes, inheritance, b.MFAPolicy, b.Password != "", b.Password != "", emailChangedByAdmin, id, target.passwordHash, target.Email, target.MustChangePassword)
+	if b.Password != "" {
+		if err := rememberPasswordTx(tx, id, historyDepth); err != nil {
+			jerr(w, 500, "user update failed")
+			return
+		}
+	}
+	res, err := tx.Exec(`UPDATE users SET name=?,email=?,admin=?,password_hash=?,quota_bytes=COALESCE(?,quota_bytes),quota_inherits_default=COALESCE(?,quota_inherits_default),mfa_policy=COALESCE(?,mfa_policy),password_rotation_exempt=COALESCE(?,password_rotation_exempt),login_failures=CASE WHEN ? THEN 0 ELSE login_failures END,login_locked_until=CASE WHEN ? THEN 0 ELSE login_locked_until END,email_verified=CASE WHEN ? THEN 0 ELSE email_verified END,password_changed_at=CASE WHEN ? THEN ? ELSE password_changed_at END,password_expiry_warned_at=CASE WHEN ? THEN NULL ELSE password_expiry_warned_at END WHERE id=? AND is_guest=0 AND password_hash=? AND email=? AND must_change_password=?`, name, email, admin, hash, b.QuotaBytes, inheritance, b.MFAPolicy, b.RotationExempt, b.Password != "", b.Password != "", emailChangedByAdmin, b.Password != "", time.Now().UTC(), b.Password != "", id, target.passwordHash, target.Email, target.MustChangePassword)
 	if err != nil {
 		jerr(w, 400, "user update failed")
 		return
@@ -1433,6 +1481,9 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.MFAPolicy != nil && *b.MFAPolicy != target.MFAPolicy {
 		s.logEvent(me2.ID, me2.Username, "mfa_policy_changed", s.userTarget(id), "policy="+*b.MFAPolicy)
+	}
+	if b.RotationExempt != nil && *b.RotationExempt != target.PasswordRotationExempt {
+		s.logEvent(me2.ID, me2.Username, "password_rotation_exempt_changed", s.userTarget(id), "exempt="+strconv.FormatBool(*b.RotationExempt))
 	}
 	if b.Password != "" {
 		s.logEvent(me2.ID, me2.Username, "password_changed", s.userTarget(id), "administrator, own account")

@@ -62,7 +62,8 @@ func (s *Server) exportMyData(w http.ResponseWriter, r *http.Request) {
 		"profile": map[string]any{
 			"id": u.ID, "username": u.Username, "name": u.Name, "email": u.Email, "email_verified": u.EmailVerified,
 			"created_at": u.CreatedAt, "administrator": u.Admin, "auditor": u.Auditor, "has_password": u.passwordHash != "",
-			"must_change_password": u.MustChangePassword,
+			"must_change_password": u.MustChangePassword, "password_changed_at": u.PasswordChangedAt,
+			"password_rotation_exempt": u.PasswordRotationExempt,
 		},
 		"settings": map[string]any{
 			"email_language": u.Language, "ui_language": u.UILanguage, "mfa_policy": u.MFAPolicy,
@@ -238,9 +239,11 @@ func (s *Server) eraseAccount(w http.ResponseWriter, id int64) bool {
 		`DELETE FROM user_webauthn WHERE user_id=?`,
 		`DELETE FROM user_auth_providers WHERE user_id=?`,
 		`DELETE FROM user_signin_seen WHERE user_id=?`,
+		`DELETE FROM password_history WHERE user_id=?`,
 		`UPDATE users SET username='erased-'||id, name='', email='', password_hash='', email_verified=0, must_change_password=0,
 			admin=0, is_auditor=0, pending_registration=0, login_failures=0, login_locked_until=0, mfa_epoch=mfa_epoch+1,
-			terms_accepted_version='', terms_accepted_at=NULL, erased_at=CURRENT_TIMESTAMP WHERE id=?`,
+			terms_accepted_version='', terms_accepted_at=NULL, password_changed_at=NULL, password_expiry_warned_at=NULL,
+			password_rotation_exempt=0, erased_at=CURRENT_TIMESTAMP WHERE id=?`,
 	} {
 		args := make([]any, strings.Count(q, "?"))
 		for i := range args {

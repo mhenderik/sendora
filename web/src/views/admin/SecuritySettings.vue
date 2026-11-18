@@ -8,6 +8,7 @@ import { t, tr } from '../../i18n'
 
 const KEYS = ['mfa_policy', 'mfa_reminder_days', 'mfa_totp_enabled', 'mfa_webauthn_enabled',
   'account_password_require_upper', 'account_password_require_lower', 'account_password_require_digit', 'account_password_require_symbol', 'account_password_min_length',
+  'account_password_max_age_days', 'account_password_history',
   'audit_retention_days', 'audit_log_ip', 'provider_session_max_hours',
   'audit_forward_stdout', 'audit_forward_syslog', 'audit_forward_syslog_tls', 'audit_forward_webhook_url',
   'notify_new_signin', 'password_breach_check_online', 'admin_stepup_minutes', 'admin_idle_logout_minutes', 'admin_ip_allowlist']
@@ -55,6 +56,10 @@ async function save() {
     <label v-for="[k, l] in accountFlags" :key="k" class="check"><input :disabled="m(k)" type="checkbox" :checked="s[k] === 'true'" @change="s[k] = String($event.target.checked)" /> {{ t(l) }}</label>
     <label for="acct-min">{{ t('Minimum password length (8-72)') }}</label><input id="acct-min" :disabled="m('account_password_min_length')" v-model="s.account_password_min_length" type="number" min="8" max="72" />
     <p class="muted">{{ t('Applies to local accounts when a password is set or changed (setup, registration, reset, profile, administrators). Existing passwords keep working until they are next changed.') }}</p>
+    <label for="acct-max-age">{{ t('Require a new password every (days, 0 = never, max 365)') }}</label><input id="acct-max-age" :disabled="m('account_password_max_age_days')" v-model="s.account_password_max_age_days" type="number" min="0" max="365" />
+    <p class="muted">{{ t('0 never asks for a new password, which is less secure. Modern guidance (NIST SP 800-63B) prefers screening passwords and two-step verification over frequent rotation. Users are reminded 14 days before (by email 7 days before); accounts that sign in only through a provider, and users exempted under Users, are not affected.') }}</p>
+    <label for="acct-history">{{ t('Remember previous passwords (0-24)') }}</label><input id="acct-history" :disabled="m('account_password_history')" v-model="s.account_password_history" type="number" min="0" max="24" />
+    <p class="muted">{{ t('A new password must differ from the current one and from this many earlier passwords (0 = no check). Earlier passwords are kept only as one-way hashes.') }}</p>
     <p class="muted">{{ t('Common passwords, passwords containing the username, the email address or the application name, and simple repetitions or sequences are always refused.') }}</p>
     <label class="check"><input :disabled="m('password_breach_check_online')" type="checkbox" :checked="s.password_breach_check_online === 'true'" @change="s.password_breach_check_online = String($event.target.checked)" /> {{ t('Also check new passwords against known data breaches (Have I Been Pwned)') }}</label>
     <p class="muted">{{ t('Only the first 5 characters of the password\'s SHA-1 hash are sent (k-anonymity); the password itself never leaves the server. If the service cannot be reached, the password is accepted.') }}</p>

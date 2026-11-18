@@ -374,7 +374,12 @@
     "this account was erased",
     "erasure failed",
     "account erased but file cleanup failed",
-    "terms version must be at most 40 characters without control characters"
+    "terms version must be at most 40 characters without control characters",
+    "account_password_max_age_days must be an integer from %d to %d",
+    "account_password_history must be an integer from %d to %d",
+    "you used this password recently; choose a password you have not used before",
+    "your password has expired; sign in again and choose a new one",
+    "password history unavailable"
   ],
   "dynamic": [
     "%d file(s) in %d share(s) are missing on disk and cannot be downloaded after the import.",

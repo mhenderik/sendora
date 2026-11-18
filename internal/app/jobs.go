@@ -160,6 +160,9 @@ func (s *Server) maintain() {
 		}
 	}
 
+	// passwords that reach their maximum age within a week (password_rotation.go)
+	s.warnExpiringPasswords(now)
+
 	// delete files of long-expired shares
 	if s.St.SettingBool("auto_clean_files") {
 		keep := s.St.SettingInt("clean_files_days", 7)

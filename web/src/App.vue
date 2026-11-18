@@ -11,6 +11,7 @@ import { createIdleMonitor, effectiveIdleMinutes } from './idle.mjs'
 import { isBusy } from './transfers.mjs'
 import { shouldPromptMFA, mfaPromptKey, reminderSuppressed } from './mfa-prompt.mjs'
 import { vFocusTrap } from './focus-trap.mjs'
+import { shouldShowExpiryBanner, expiryDismissKey, localDay } from './password-expiry.mjs'
 import StepUpDialog from './components/StepUpDialog.vue'
 import TermsDialog from './components/TermsDialog.vue'
 import LegalLinks from './components/LegalLinks.vue'
@@ -47,10 +48,21 @@ function dismissMfa() {
   try { sessionStorage.setItem(mfaPromptKey(id), '1') } catch {}
 }
 function setupMfa() { dismissMfa(); router.push('/profile') }
-// Re-checked when a required password change is completed (same account, flag cleared).
-watch(() => [session.user?.id, !!session.user?.must_change_password], async ([id]) => {
+// Password maximum age: a non-blocking banner from 14 days before expiry,
+// dismissible for the rest of the day (kept in this browser).
+const pwExpiry = ref(null)
+function expiryDismissedDay(id) { try { return localStorage.getItem(expiryDismissKey(id)) || '' } catch { return '' } }
+function dismissExpiry() {
+  const id = session.user?.id
+  pwExpiry.value = null
+  if (id) { try { localStorage.setItem(expiryDismissKey(id), localDay()) } catch {} }
+}
+// Re-checked when a required password change is completed (same account, flag cleared)
+// and after any password change (password_changed_at moves on).
+watch(() => [session.user?.id, !!session.user?.must_change_password, session.user?.password_changed_at], async ([id]) => {
   app.version = ''
   mfaPrompt.value = false
+  pwExpiry.value = null
   if (!id) return
   try {
     const d = await api('/users/me')
@@ -58,6 +70,9 @@ watch(() => [session.user?.id, !!session.user?.must_change_password], async ([id
     app.version = d.version || ''
     termsState.pending = !!d.terms_pending
     mfaPrompt.value = shouldPromptMFA({ user: d.user, hasPassword: d.has_password, boot: app.boot, dismissed: mfaDismissed(id) })
+    if (shouldShowExpiryBanner({ days: d.password_expires_in_days, mustChange: !!d.user?.must_change_password, dismissedDay: expiryDismissedDay(id) })) {
+      pwExpiry.value = { days: d.password_expires_in_days, at: d.password_expires_at }
+    }
   } catch {}
 }, { immediate: true })
 const versionLabel = computed(() => !session.user || !app.version ? '' : /^\d/.test(app.version) ? 'v' + app.version : app.version)
@@ -167,7 +182,13 @@ watch(() => [app.boot?.idle_logout_minutes, app.boot?.admin_idle_logout_minutes]
     </div>
     <StepUpDialog />
     <TermsDialog v-if="session.user && !session.user.is_guest" />
-    <main><p v-if="languageError" class="err" role="alert">{{ languageError }}</p><router-view :key="route.fullPath" /></main>
+    <main><p v-if="languageError" class="err" role="alert">{{ languageError }}</p>
+      <div v-if="pwExpiry && session.user" class="card pw-expiry" role="status">
+        <span>{{ pwExpiry.days > 0 ? t('Your password expires in {n} days.', { n: pwExpiry.days }) : t('Your password expires today.') }}</span>
+        <router-link to="/profile" @click="dismissExpiry">{{ t('Change password') }}</router-link>
+        <button type="button" class="link" @click="dismissExpiry">{{ t('Remind me tomorrow') }}</button>
+      </div>
+      <router-view :key="route.fullPath" /></main>
     <footer class="foot">
       <p>{{ t('© {year} Sendora contributors', { year: new Date().getFullYear() }) }} · {{ t('Open source') }} · MIT License<template v-if="versionLabel"> · {{ versionLabel }}</template></p>
       <LegalLinks />
@@ -177,3 +198,6 @@ watch(() => [app.boot?.idle_logout_minutes, app.boot?.admin_idle_logout_minutes]
     </footer>
   </div>
 </template>
+<style scoped>
+.pw-expiry{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;max-width:960px;margin:0 auto 12px}
+</style>

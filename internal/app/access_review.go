@@ -44,17 +44,25 @@ type accessReviewRow struct {
 	DisabledReason string `json:"disabled_reason"`
 	ShareCount     int64  `json:"share_count"`
 	StorageUsed    int64  `json:"storage_used_bytes"`
+	// Password age (local passwords only; empty for accounts without one or when
+	// unknown), the per-account rotation exemption and when the password expires
+	// under account_password_max_age_days (empty when the maximum age does not apply).
+	PasswordAgeDays        string `json:"password_age_days"`
+	PasswordRotationExempt bool   `json:"password_rotation_exempt"`
+	PasswordExpiresAt      string `json:"password_expires_at"`
 }
 
 var accessReviewCSVHeader = []string{"id", "username", "name", "email", "role", "source", "mfa_enrolled", "mfa_factors", "mfa_policy", "mfa_required",
 	"email_verified", "created_at", "created_by", "role_changed_at", "role_changed_by", "email_changed_at", "email_changed_by", "last_login_at",
-	"login_locked", "disabled", "disabled_at", "disabled_by", "disabled_reason", "share_count", "storage_used_bytes"}
+	"login_locked", "disabled", "disabled_at", "disabled_by", "disabled_reason", "share_count", "storage_used_bytes",
+	"password_age_days", "password_rotation_exempt", "password_expires_at"}
 
 func (x accessReviewRow) csvRecord() []string {
 	b := strconv.FormatBool
 	return []string{strconv.FormatInt(x.ID, 10), csvSafe(x.Username), csvSafe(x.Name), csvSafe(x.Email), x.Role, csvSafe(x.Source), b(x.MFAEnrolled), x.MFAFactors, x.MFAPolicy, b(x.MFARequired),
 		b(x.EmailVerified), x.CreatedAt, csvSafe(x.CreatedBy), x.RoleChangedAt, csvSafe(x.RoleChangedBy), x.EmailChangedAt, csvSafe(x.EmailChangedBy), x.LastLoginAt,
-		b(x.LoginLocked), b(x.Disabled), x.DisabledAt, csvSafe(x.DisabledBy), csvSafe(x.DisabledReason), strconv.FormatInt(x.ShareCount, 10), strconv.FormatInt(x.StorageUsed, 10)}
+		b(x.LoginLocked), b(x.Disabled), x.DisabledAt, csvSafe(x.DisabledBy), csvSafe(x.DisabledReason), strconv.FormatInt(x.ShareCount, 10), strconv.FormatInt(x.StorageUsed, 10),
+		x.PasswordAgeDays, b(x.PasswordRotationExempt), x.PasswordExpiresAt}
 }
 
 func reviewTime(t sql.NullTime, empty string) string {
@@ -157,7 +165,13 @@ func (s *Server) accessReviewRows() ([]accessReviewRow, error) {
 			RoleChangedAt: reviewTime(x.roleAt, ""), RoleChangedBy: x.roleBy, EmailChangedAt: reviewTime(x.emailAt, ""), EmailChangedBy: x.emailBy,
 			LastLoginAt: reviewTime(x.lastLogin, ""), LoginLocked: u.loginLockedUntil > now,
 			Disabled: x.disabledAt.Valid, DisabledAt: reviewTime(x.disabledAt, ""), DisabledBy: x.disabledBy, DisabledReason: x.disabledWhy,
-			ShareCount: shares, StorageUsed: usage.StoredBytes}
+			ShareCount: shares, StorageUsed: usage.StoredBytes, PasswordRotationExempt: u.PasswordRotationExempt}
+		if u.passwordHash != "" && u.passwordChangedAt.Valid {
+			row.PasswordAgeDays = strconv.Itoa(max(int(time.Since(u.passwordChangedAt.Time).Hours()/24), 0))
+		}
+		if exp, ok := s.passwordExpiry(u); ok {
+			row.PasswordExpiresAt = exp.UTC().Format(time.RFC3339)
+		}
 		out = append(out, row)
 	}
 	return out, nil

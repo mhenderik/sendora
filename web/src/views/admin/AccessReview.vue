@@ -47,7 +47,7 @@ onMounted(load)
     <div v-if="data && rows.length" class="table-wrap"><table>
       <thead><tr>
         <th scope="col">{{ t('Username') }}</th><th scope="col">{{ t('Role') }}</th><th scope="col">{{ t('Source') }}</th>
-        <th scope="col">{{ t('Two-step verification') }}</th><th scope="col">{{ t('Email verified') }}</th><th scope="col">{{ t('Created') }}</th>
+        <th scope="col">{{ t('Two-step verification') }}</th><th scope="col">{{ t('Email verified') }}</th><th scope="col">{{ t('Password') }}</th><th scope="col">{{ t('Created') }}</th>
         <th scope="col">{{ t('Last role change') }}</th><th scope="col">{{ t('Last email change') }}</th><th scope="col">{{ t('Last sign-in') }}</th>
         <th scope="col">{{ t('Status') }}</th><th scope="col">{{ t('Shares') }}</th><th scope="col">{{ t('Stored files') }}</th>
       </tr></thead>
@@ -57,6 +57,9 @@ onMounted(load)
         <td>{{ u.source || '—' }}</td>
         <td>{{ u.mfa_enrolled ? t('On') : t('Off') }}<br /><span class="muted">{{ factors(u) }}<br />{{ t('Policy: {p}', { p: u.mfa_policy }) }}<template v-if="u.mfa_required"> · {{ t('required') }}</template></span></td>
         <td>{{ yes(u.email_verified) }}</td>
+        <td><template v-if="u.password_age_days !== ''">{{ t('{n} days old', { n: u.password_age_days }) }}</template><template v-else>—</template>
+          <span v-if="u.password_expires_at" class="muted"><br />{{ t('expires {date}', { date: dateOr(u.password_expires_at, '') }) }}</span>
+          <span v-if="u.password_rotation_exempt" class="muted"><br />{{ t('Exempt from password rotation') }}</span></td>
         <td>{{ dateOr(u.created_at, t('unknown')) }}<br /><span class="muted">{{ t('by {who}', { who: unknown(u.created_by) }) }}</span></td>
         <td>{{ dateOr(u.role_changed_at, '—') }}<br v-if="u.role_changed_by" /><span v-if="u.role_changed_by" class="muted">{{ t('by {who}', { who: u.role_changed_by }) }}</span></td>
         <td>{{ dateOr(u.email_changed_at, '—') }}<br v-if="u.email_changed_by" /><span v-if="u.email_changed_by" class="muted">{{ t('by {who}', { who: u.email_changed_by }) }}</span></td>

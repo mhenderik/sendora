@@ -22,6 +22,9 @@ var strictestAccountPolicy = accountPolicy{MinLength: maxSharePasswordBytes, Upp
 
 // validateAccountSetting checks the account policy keys. owned is false for keys it does not own.
 func validateAccountSetting(key, val string) (owned bool, err error) {
+	if owned, err := validatePasswordRotationSetting(key, val); owned {
+		return true, err
+	}
 	switch key {
 	case "account_password_require_upper", "account_password_require_lower",
 		"account_password_require_digit", "account_password_require_symbol":

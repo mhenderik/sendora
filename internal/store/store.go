@@ -241,9 +241,10 @@ func initSchema(db *sql.DB) error {
 }
 
 // runMigrations is the additive migration sequence shared by openStore and
-// PrepareImported. Order matters: seed runs between the policy and brand steps.
+// PrepareImported. Order matters: seed runs between the policy and brand steps,
+// and after migratePasswordPolicy (which must see an existing installation first).
 func (s *Store) runMigrations() error {
-	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders, s.migrateAudit, s.migrateAccounts, s.migrateDownloadIP, s.migrateAccountSecurity} {
+	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders, s.migrateAudit, s.migrateAccounts, s.migrateDownloadIP, s.migrateAccountSecurity, s.migratePasswordPolicy} {
 		if err := step(); err != nil {
 			return err
 		}
@@ -296,6 +297,10 @@ var defaults = []struct{ Key, Grp, Val string }{
 	{"account_password_require_lower", "system", "false"},
 	{"account_password_require_digit", "system", "false"},
 	{"account_password_require_symbol", "system", "false"},
+	// An installation that already has accounts got 0 from migratePasswordPolicy
+	// before this list is applied; only a new installation gets 365.
+	{SettingPasswordMaxAgeDays, "system", PasswordMaxAgeDefault},
+	{SettingPasswordHistory, "system", "5"},
 	{"allow_preview", "system", "true"},
 	{"local_login_enabled", "system", "true"},
 	{"audit_retention_days", "system", "90"},

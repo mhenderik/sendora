@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { api, session } from '../api'
+import { api, session, fmtDate } from '../api'
 import { fmtGBShort } from '../quota.mjs'
 import { t, languages } from '../i18n'
 import { emailLanguages, app } from '../state'
@@ -50,6 +50,7 @@ async function unlink(p) { try { await api('/users/me/providers/' + p.id, { meth
     <p class="muted">{{ t('Email preferences apply to messages sent to your account. Other recipients use the sending language.') }}</p>
     <label v-if="hasPw && !session.user?.must_change_password">{{ t('Current password') }}</label>
     <input v-if="hasPw && !session.user?.must_change_password" v-model="f.currentPassword" type="password" autocomplete="current-password" />
+    <p v-if="hasPw && session.user?.password_changed_at" class="muted">{{ t('Password last changed {date}', { date: fmtDate(session.user.password_changed_at) }) }}<template v-if="storage?.password_expires_at"> · {{ t('expires {date}', { date: fmtDate(storage.password_expires_at) }) }}</template></p>
     <label>{{ t('New password') }}</label><input v-model="f.password" type="password" autocomplete="new-password" />
     <PasswordHints :password="f.password" optional />
     <p v-if="msg" class="ok">{{ msg }}</p><p v-if="err" class="err">{{ err }}</p>

@@ -173,7 +173,7 @@ func classifyAction(action string) (category, outcome string) {
 	switch action {
 	case "login_ok", "login_failed", "login_lockout", "logout", "mfa_login_ok", "mfa_failed", "mfa_enrolled", "mfa_removed",
 		"session_reuse_detected", "password_changed", "password_reset", "session_revoked", "session_expired_provider",
-		"session_expired", "session_expired_idle":
+		"session_expired", "session_expired_idle", "password_expired", "password_expiry_warning_sent":
 		return catAuth, outcome
 	case "ip_banned", "ip_unbanned", "access_denied", "file_decrypt_failed", "key_fingerprint_changed", "audit_viewed", "audit_exported", "access_review_exported",
 		"backup_downloaded":

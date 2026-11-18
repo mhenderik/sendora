@@ -17,6 +17,8 @@ const mailBlocked = u => !smtpReady.value ? t('Set up outgoing email (SMTP) in S
 const SOURCES = { entra: 'Microsoft Entra ID', oidc: 'OpenID Connect', google: 'Google', github: 'GitHub' }
 const sourceLabel = u => (u.sources || []).map(s => s === 'local' ? t('Local') : (SOURCES[s] || s)).join(' + ') || '—'
 const mfaOn = () => app.boot?.mfa_policy && app.boot.mfa_policy !== 'off'
+// Password rotation only concerns accounts with a local password.
+const hasLocal = u => (u.sources || []).includes('local')
 const blank = () => ({ id: 0, username: '', name: '', email: '', password: '', admin: false, auditor: false, must_change_password: true, mfa_policy: 'inherit', send_welcome: true, quota_inherits_default: true, quota_gb: defaultQuotaGB.value })
 function open(u) { edit.value = { ...u, password: '', mfa_policy: u.mfa_policy || 'inherit', quota_gb: bytesToGB(u.quota_bytes) } }
 function inheritanceChanged() { if (edit.value.quota_inherits_default) edit.value.quota_gb = defaultQuotaGB.value }
@@ -48,6 +50,7 @@ async function save() {
     const body = { username: u.username, name: u.name, email: u.email, admin: u.admin, auditor: !!u.auditor, ...quotaPayload(u.quota_inherits_default, u.quota_gb) }
     if (!u.id) { body.password = u.password; body.must_change_password = u.must_change_password }
     if (u.id && mfaOn()) body.mfa_policy = u.mfa_policy
+    if (u.id && hasLocal(u)) body.password_rotation_exempt = !!u.password_rotation_exempt
     err.value = info.value = ''
     if (u.id) await api('/users/' + u.id, { method: 'PUT', body })
     else {
@@ -119,6 +122,10 @@ async function force(u) {
         <label for="user-mfa">{{ t('Two-step verification') }}</label>
         <select id="user-mfa" v-model="edit.mfa_policy"><option value="inherit">{{ t('Follow global setting') }}</option><option value="required">{{ t('Required for this user') }}</option><option value="exempt">{{ t('Exempt (not required)') }}</option></select>
         <p class="muted">{{ t('Exempt skips the requirement only; the user can still turn two-step verification on. Sign-ins through an external provider use that provider\'s own checks.') }}</p>
+      </template>
+      <template v-if="edit.id && hasLocal(edit)">
+        <label class="check"><input type="checkbox" v-model="edit.password_rotation_exempt" /> {{ t('Exempt from password rotation') }}</label>
+        <p class="muted">{{ t('The maximum password age (Security settings) does not apply to this user. Use it sparingly, for example for a break-glass account protected in another way.') }}</p>
       </template>
       <label v-if="!edit.id" class="check"><input type="checkbox" v-model="edit.must_change_password" /> {{ t('Require password change at first login') }}</label>
       <template v-if="!edit.id">

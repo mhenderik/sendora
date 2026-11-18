@@ -1205,9 +1205,12 @@ func TestConcurrentDownloadsLimit(t *testing.T) {
 // legacyTestDefaults restores the pre-0.1.5 defaults (short minimum passwords, MFA
 // off) so that the many tests that sign in with short passwords keep exercising
 // their own behaviour. The new defaults have their own tests (defaults_test.go).
+// Password maximum age and history are off as well, so tests that change a
+// password back to "password123" keep working (password_rotation_test.go tests them).
 func legacyTestDefaults(t *testing.T, st *store.Store) {
 	t.Helper()
-	for k, v := range map[string]string{"account_password_min_length": "8", "share_password_min_length": "8", "mfa_policy": "off"} {
+	for k, v := range map[string]string{"account_password_min_length": "8", "share_password_min_length": "8", "mfa_policy": "off",
+		"account_password_max_age_days": "0", "account_password_history": "0"} {
 		if err := st.SetSetting(k, v); err != nil {
 			t.Fatal(err)
 		}

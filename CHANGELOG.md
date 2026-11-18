@@ -275,6 +275,20 @@
 - **Password changes and resets are audited** as `password_changed` (own profile or an
   administrator's own account) and `password_reset` (via a reset or welcome link), with the
   account as actor; expired or used MFA reset requests are purged automatically.
+- **Password maximum age:** `account_password_max_age_days` (0-365, 0 = never; **365 on new
+  installations, 0 on installations upgraded with existing accounts**, so nobody is forced to
+  change at the upgrade). An expired local password must be changed before anything else (at
+  sign-in, or within one access-token lifetime for a running session, which then signs in
+  again); guests, provider-only accounts and accounts an administrator exempts under Users
+  (`password_rotation_exempt_changed`) are not affected. A banner warns from 14 days before
+  expiry and one email (`password_expiry_warning`, en/nl/de/fr/es) is sent 7 days before.
+  Audited as `password_expired` and `password_expiry_warning_sent`.
+- **Password history:** `account_password_history` (0-24, default 5) refuses the current
+  password and the last N; earlier passwords are kept as bcrypt hashes only (newest N per
+  account, deleted on erasure).
+- **Access review** shows `password_age_days`, `password_rotation_exempt` and
+  `password_expires_at`; the profile shows when the password was last changed and when it
+  expires.
 - **Data minimisation:** download records store the recipient's IP only while audit IP
   logging is on; stored addresses are cleared otherwise.
 - **Off-host audit forwarding:** standard output (JSON lines), syslog (RFC 5424 over TCP or
