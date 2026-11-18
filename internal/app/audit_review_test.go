@@ -414,3 +414,42 @@ func TestAuditIPSettingCacheFollowsSettingsChanges(t *testing.T) {
 		t.Fatal("cache not refreshed after SettingsChanged")
 	}
 }
+
+// Password changes and resets are evidence for an auditor (who changed which
+// account's credentials, and how), so they are explicit audit records with the
+// account as actor, not only generic api_mutation entries.
+func TestPasswordChangesAndResetsAreAudited(t *testing.T) {
+	e := newEnv(t)
+	admin := e.setup()
+	bob := e.mkUser(admin, "bob", false)
+	e.want(e.do("PUT", "/api/users/me", bob, map[string]any{"name": "Bob", "email": "bob@x.io", "password": "newpassword1", "current_password": "password123"}), 200, "own change")
+	var uid int64
+	e.s.St.DB.QueryRow(`SELECT id FROM users WHERE username='bob'`).Scan(&uid)
+	tok := "audit-reset-token"
+	if _, err := e.s.St.DB.Exec(`INSERT INTO password_resets(hash,user_id,expires_at,kind) VALUES(?,?,?,'reset')`, hashToken(tok), uid, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	e.want(e.do("POST", "/api/auth/reset-password", "", map[string]any{"token": tok, "password": "anotherpass9"}), 200, "reset")
+
+	changed := auditRowsWhere(e, "action='password_changed'")
+	if len(changed) != 1 || changed[0].ActorNm != "bob" || changed[0].Category != "auth" || !strings.Contains(changed[0].Target, "bob") {
+		t.Fatalf("password_changed: %+v", changed)
+	}
+	reset := auditRowsWhere(e, "action='password_reset'")
+	if len(reset) != 1 || reset[0].ActorNm != "bob" || !strings.Contains(reset[0].Detail, "reset link") {
+		t.Fatalf("password_reset: %+v", reset)
+	}
+	for _, r := range append(changed, reset...) {
+		if strings.Contains(r.Detail, "newpassword1") || strings.Contains(r.Detail, "anotherpass9") || strings.Contains(r.Detail, tok) {
+			t.Fatalf("secret in audit detail: %+v", r)
+		}
+	}
+	// Expired or used MFA reset requests are purged by maintenance.
+	e.s.St.DB.Exec(`INSERT INTO mfa_reset_requests(hash,user_id,expires_at) VALUES('old',?,?)`, uid, time.Now().Add(-time.Hour))
+	e.s.maintain()
+	var n int
+	e.s.St.DB.QueryRow(`SELECT COUNT(*) FROM mfa_reset_requests WHERE hash='old'`).Scan(&n)
+	if n != 0 {
+		t.Fatal("expired MFA reset request not purged")
+	}
+}

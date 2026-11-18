@@ -11,7 +11,7 @@ Status: written for 0.1.5 from the code and from independent code reviews. Sendo
 | Shared file contents | `DATA_DIR/shares/<link id>/` | AES-256-GCM per file (new uploads); volume encryption for older files |
 | Share metadata, accounts, settings, secrets, audit log | `DATA_DIR/sendora.db` | SQLCipher (AES-256-CBC + HMAC-SHA512 per page) |
 | The root key | the file named by `SENDORA_DB_KEY_FILE` | file mode/owner checks, never logged, never in a connection string |
-| Share link IDs (about 86 bits) | database, URLs given to recipients | `crypto/rand`, unguessable; optional share password |
+| Share link IDs (about 86 bits) | database, URLs given to recipients, and the names of the share folders in `DATA_DIR/shares/` | `crypto/rand`, unguessable; optional share password; the folder names are visible to anyone with a copy of the volume (see 5.1) |
 | Account credentials, sessions, MFA factors | database | bcrypt, hashed refresh/reset tokens, TOTP/WebAuthn |
 | Backups | `DATA_DIR/backups/` | same SQLCipher key |
 
@@ -53,7 +53,7 @@ Status: written for 0.1.5 from the code and from independent code reviews. Sendo
 ## 5. Threats and residual risk
 
 ### 5.1 Disk, backup or snapshot theft (no key)
-Mitigated for the database, for new share files and for backups. **Residual:** files uploaded before 0.1.2; upload parts in progress and temporary download snapshots (plain, short-lived); branding images; file names, sizes, counts and modification times (no padding).
+Mitigated for the database, for new share files and for backups. **Residual:** files uploaded before 0.1.2; upload parts in progress and temporary download snapshots (plain, short-lived); branding images; file names, sizes, counts and modification times (no padding). **Share link IDs are the folder names under `DATA_DIR/shares/`**, so a key-less copy of the volume reveals them: with a link ID a share can be opened as long as it is active and has no password. Protect the volume and its snapshots accordingly, use share passwords for sensitive data, and keep expiry short.
 
 ### 5.2 Malicious or compromised administrator
 - Cannot read shares, download history or share names through the interface or the API (statistics are counts). The audit log is readable by administrators and auditors alike; it names shares only as `share#N`, so an administrator can see when shares are created, changed or downloaded and by whom, but not what they are called or what they contain. Every export of the log and every backup download is recorded before it is served.
@@ -73,7 +73,7 @@ Link guessing (86 bits, 404/410 uniform), password guessing (bcrypt, per-IP and 
 XSS (no inline script, strict CSP, escaped rendering, validated theme/translation imports), CSRF (`Sec-Fetch-Site`/`Origin` check, bearer-token authorisation), clickjacking (`frame-ancestors 'none'`), content sniffing (`nosniff`, downloads are `application/octet-stream` attachments, previews only for a type allowlist with `CSP default-src 'none'; sandbox`), SSRF through the OIDC issuer (loopback and link-local targets refused).
 
 ### 5.7 Supply chain
-SQLCipher 4.20.0 is built from a checksum-verified source tarball. Base images are referenced by tag (not yet by digest) and apt packages are not pinned: see the hardening notes. Go modules are pinned by `go.sum`.
+SQLCipher 4.20.0 is built from a checksum-verified source tarball. Base images are pinned by digest (Debian 13 "trixie" runtime) and kept current by Dependabot; apt packages are not version-pinned. Release images carry build-provenance and SBOM attestations and a cosign signature (from 0.1.5). Go modules are pinned by `go.sum`.
 
 ### 5.8 Personal data and erasure
 Users can export their own data and delete their account; administrators can erase an account. Erasure deletes shares, files, invites, sessions, second factors and linked sign-ins and pseudonymises the account row (`erased-<id>`, no name, email or password). **Legitimate-interest exception:** audit records written while the account existed keep their `actor_name` (the former username) and target labels. They are not rewritten because the audit log is a tamper-evident chain kept for the security of the service and the accountability of administrators (GDPR art. 6(1)(f); art. 17(3)(e) for legal claims). They are removed by the normal retention (`audit_retention_days`, 90 to 365 days). Backups made before the erasure still contain the account until they are rotated out (`backup_keep`).

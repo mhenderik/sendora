@@ -181,7 +181,7 @@ func classifyAction(action string) (category, outcome string) {
 	case "system_start", "system_stop", "audit_purged", "audit_purge_failed",
 		"backup_created_auto", "backup_failed_auto", "backup_pruned", "share_files_purged", "account_removed_auto":
 		return catSystem, outcome
-	case "mfa_reset_requested", "mfa_reset_confirmed":
+	case "mfa_reset_requested", "mfa_reset_confirmed", "personal_data_exported", "terms_accepted":
 		return catAccount, outcome
 	}
 	switch {

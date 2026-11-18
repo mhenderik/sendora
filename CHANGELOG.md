@@ -270,6 +270,9 @@
   (`backup_downloaded`); sign-outs are recorded with the user; idle and absolute session ends
   (`session_expired_idle`, `session_expired`); automatic backups, pruning, clean-up of
   expired share files and automatic account removal appear as system actions.
+- **Password changes and resets are audited** as `password_changed` (own profile or an
+  administrator's own account) and `password_reset` (via a reset or welcome link), with the
+  account as actor; expired or used MFA reset requests are purged automatically.
 - **Data minimisation:** download records store the recipient's IP only while audit IP
   logging is on; stored addresses are cleared otherwise.
 - **Off-host audit forwarding:** standard output (JSON lines), syslog (RFC 5424 over TCP or

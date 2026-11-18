@@ -715,6 +715,12 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 500, "password reset failed")
 		return
 	}
+	// Recorded as the account it belongs to: whoever holds the link acts for it.
+	how := "via reset link"
+	if kind == "welcome" {
+		how = "first password via welcome link"
+	}
+	s.logEvent(uid, s.usernameOf(uid), "password_reset", s.userTarget(uid), how)
 	if kind != "welcome" { // a welcome link sets the first password; nothing changed
 		s.notifyUserID(r, uid, "password_changed")
 	}
@@ -1084,6 +1090,7 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 	}
 	nu.sessionID, nu.authMethod = u.sessionID, u.authMethod // the returned token stays bound to this session
 	if b.Password != "" {
+		s.logEvent(u.ID, u.Username, "password_changed", s.userTarget(u.ID), "own profile")
 		s.notifySecurity(r, u, "password_changed") // to the address the account had before
 	}
 	if emailChanged || b.Password != "" {
@@ -1428,6 +1435,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		s.logEvent(me2.ID, me2.Username, "mfa_policy_changed", s.userTarget(id), "policy="+*b.MFAPolicy)
 	}
 	if b.Password != "" {
+		s.logEvent(me2.ID, me2.Username, "password_changed", s.userTarget(id), "administrator, own account")
 		s.notifySecurity(r, target, "password_changed")
 	}
 	s.fillMFA(u)

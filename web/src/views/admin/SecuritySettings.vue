@@ -29,7 +29,11 @@ async function save() {
     const body = Object.fromEntries(Object.entries(s.value).filter(([k]) => !m(k)))
     await api('/settings', { method: 'PUT', body })
     await loadBoot(); await load(); msg.value = t('Saved')
-  } catch (e) { err.value = e.message } finally { busy.value = false }
+  } catch (e) {
+    err.value = e.message
+    // Show what is actually stored again, so a refused change does not look applied.
+    try { await load() } catch {}
+  } finally { busy.value = false }
 }
 </script>
 <template>

@@ -221,6 +221,7 @@ func (s *Server) maintain() {
 	s.St.DB.Exec(`DELETE FROM refresh_spent WHERE expires_at<?`, now)
 	s.St.DB.Exec(`DELETE FROM password_resets WHERE expires_at<?`, now)
 	s.St.DB.Exec(`DELETE FROM email_verifications WHERE expires_at<?`, now)
+	s.St.DB.Exec(`DELETE FROM mfa_reset_requests WHERE expires_at<? OR used=1`, now)
 	s.St.DB.Exec(`DELETE FROM downloads WHERE datetime(created_at)<?`, now.UTC().AddDate(0, 0, -90).Format("2006-01-02 15:04:05"))
 	// Recipient addresses are kept only while audit_log_ip is on; switching it
 	// off empties the stored ones at the next run.
