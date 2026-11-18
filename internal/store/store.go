@@ -257,7 +257,8 @@ func (s *Store) runMigrations() error {
 // Close releases the database. The caller must have stopped all users of DB.
 func (s *Store) Close() error { return s.DB.Close() }
 
-// Default settings: key -> {group, value}
+// Default settings: key -> {group, value}. seed() uses INSERT OR IGNORE, so these
+// only apply to NEW installations; existing ones keep their stored values.
 var defaults = []struct{ Key, Grp, Val string }{
 	{"application_name", "ui", "Sendora"},
 	{"application_url", "system", ""},
@@ -276,18 +277,18 @@ var defaults = []struct{ Key, Grp, Val string }{
 	{"backups_enabled", "system", "true"},
 	{"backup_keep", "system", "7"},
 	{"require_share_password", "system", "false"},
-	{"share_password_min_length", "system", "8"},
+	{"share_password_min_length", "system", "10"},
 	{"share_password_require_upper", "system", "false"},
 	{"share_password_require_lower", "system", "false"},
 	{"share_password_require_digit", "system", "false"},
 	{"share_password_require_symbol", "system", "false"},
-	{"mfa_policy", "system", "off"},
+	{"mfa_policy", "system", "admins"},
 	{"idle_logout_minutes", "system", "60"},
 	{"ip_ban_enabled", "system", "true"},
 	{"ip_ban_allowlist", "system", ""},
 	{"mfa_totp_enabled", "system", "true"},
 	{"mfa_webauthn_enabled", "system", "true"},
-	{"account_password_min_length", "system", "8"},
+	{"account_password_min_length", "system", "12"},
 	{"account_password_require_upper", "system", "false"},
 	{"account_password_require_lower", "system", "false"},
 	{"account_password_require_digit", "system", "false"},

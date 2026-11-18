@@ -17,6 +17,7 @@ func TestEncryptedBackupAPIAndLegacyRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyTestDefaults(t, st)
 	defer st.DB.Close()
 	s := New(st, fstest.MapFS{"index.html": {Data: []byte("test")}}, "test")
 	ts := httptest.NewServer(s.Router())

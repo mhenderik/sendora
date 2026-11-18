@@ -45,6 +45,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.DB.Close() })
+	legacyTestDefaults(t, st)
 	s := New(st, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, "test")
 	ctx, cancel := context.WithCancel(context.Background())
 	s.RunDownloadMail(ctx)
@@ -152,6 +153,7 @@ func TestDownloadOutboxBackpressureAndRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyTestDefaults(t, st)
 	defer st.DB.Close()
 	s := New(st, fstest.MapFS{"index.html": {Data: []byte("spa")}}, "test")
 	ts := httptest.NewServer(s.Router())
@@ -227,7 +229,7 @@ func TestDownloadOutboxBackpressureAndRetry(t *testing.T) {
 	if !s.processDownloadMail(context.Background()) {
 		t.Fatal("delivery not processed")
 	}
-	sink.wait(t, "Download count: 4")
+	sink.wait(t, "Download count: 3") // 0.1.5: the refused range above no longer consumes a download
 	st.DB.QueryRow(`SELECT COUNT(*) FROM download_mail_outbox WHERE status='pending'`).Scan(&count)
 	if count != 0 {
 		t.Fatal("delivered job not removed")
@@ -1194,5 +1196,17 @@ func TestConcurrentDownloadsLimit(t *testing.T) {
 	wg.Wait()
 	if ok != 3 {
 		t.Fatalf("download limit 3 but %d succeeded", ok)
+	}
+}
+
+// legacyTestDefaults restores the pre-0.1.5 defaults (short minimum passwords, MFA
+// off) so that the many tests that sign in with short passwords keep exercising
+// their own behaviour. The new defaults have their own tests (defaults_test.go).
+func legacyTestDefaults(t *testing.T, st *store.Store) {
+	t.Helper()
+	for k, v := range map[string]string{"account_password_min_length": "8", "share_password_min_length": "8", "mfa_policy": "off"} {
+		if err := st.SetSetting(k, v); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

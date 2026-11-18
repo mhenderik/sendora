@@ -47,6 +47,7 @@ func TestConfigInvalidValueStopsTheServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyTestDefaults(t, st)
 	defer st.DB.Close()
 	defer func() {
 		r := recover()
@@ -96,6 +97,7 @@ func TestConfigRejectsUnknownProviderVariable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyTestDefaults(t, st)
 	defer st.DB.Close()
 	defer func() {
 		if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "SENDORA_PROVIDER_X_COLOUR") {
