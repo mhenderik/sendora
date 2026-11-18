@@ -2,11 +2,13 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -26,6 +28,8 @@ func run(args []string) error {
 	dataDir := flags.String("data-dir", "", "data directory holding shares/ (verify-files; default: directory of -source)")
 	asJSON := flags.Bool("json", false, "verify-files and audit-verify: machine-readable output")
 	names := flags.Bool("names", false, "verify-files: also print share and file names (sensitive)")
+	all := flags.Bool("all", false, "verify-files: list every row, not only problems")
+	progress := flags.Bool("progress", false, "verify-files: report progress on stderr (default: only when stderr is a terminal)")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -110,22 +114,7 @@ func run(args []string) error {
 		if dir == "" {
 			dir = filepath.Dir(*source)
 		}
-		rep, err := store.VerifyFiles(*source, dir, key, *names)
-		if err != nil {
-			return err
-		}
-		if *asJSON {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			if err := enc.Encode(rep); err != nil {
-				return err
-			}
-		} else {
-			printFilesReport(rep, *names)
-		}
-		if n := rep.Failures(); n != 0 {
-			return fmt.Errorf("verify-files: %d problem(s) found", n)
-		}
+		return verifyFiles(*source, dir, key, verifyFlags{json: *asJSON, names: *names, all: *all, progress: *progress})
 	case "verify":
 		counts, err := store.VerifyDatabase(*source, key)
 		if err != nil {
@@ -155,26 +144,107 @@ func run(args []string) error {
 	return nil
 }
 
-// printFilesReport prints one line per row and orphan, then the summary. Names
-// appear only with -names; keys, plaintext and crypto error text never do.
-func printFilesReport(rep *store.FilesReport, names bool) {
-	for _, f := range rep.Files {
-		line := fmt.Sprintf("file id=%d path=%s %s", f.ID, f.PathHash, f.Status)
-		if names {
-			line += fmt.Sprintf(" share=%q file=%q", f.Share, f.Name)
-		}
-		fmt.Println(line)
+// Output of verify-files; replaced in tests.
+var (
+	stdout           io.Writer = os.Stdout
+	stderr           io.Writer = os.Stderr
+	stderrIsTerminal           = func() bool {
+		st, err := os.Stderr.Stat()
+		return err == nil && st.Mode()&os.ModeCharDevice != 0
 	}
-	for _, o := range rep.Orphans {
+)
+
+// progressEvery is how many files verify-files checks between progress lines.
+var progressEvery = 1000
+
+type verifyFlags struct{ json, names, all, progress bool }
+
+// verifyFiles streams the verify-files report: by default only rows with a
+// problem and orphans, with -all every row, then a summary. With -json the
+// output is JSON Lines: one object per reported row ("type":"file") and
+// orphan ("type":"orphan"), then one "type":"summary" object. Rows appear in
+// row id order. Names appear only with -names; keys, plaintext and crypto
+// error text never do. Any problem makes the command fail.
+func verifyFiles(source, dataDir string, key []byte, f verifyFlags) error {
+	out := bufio.NewWriter(stdout)
+	enc := json.NewEncoder(out)
+	var writeErr error
+	emit := func(v any, line string) {
+		if writeErr != nil {
+			return
+		}
+		if f.json {
+			writeErr = enc.Encode(v)
+		} else {
+			_, writeErr = fmt.Fprintln(out, line)
+		}
+	}
+	opt := store.VerifyOptions{Names: f.names}
+	opt.File = func(c store.FileCheck) {
+		if !f.all && !c.Problem() {
+			return
+		}
+		line := fmt.Sprintf("file id=%d path=%s %s", c.ID, c.PathHash, c.Status)
+		if f.names {
+			line += fmt.Sprintf(" share=%q file=%q", c.Share, c.Name)
+		}
+		emit(struct {
+			Type string `json:"type"`
+			store.FileCheck
+		}{"file", c}, line)
+		if c.Problem() {
+			// Problems are visible at once, not only when the buffer fills.
+			if err := out.Flush(); err != nil && writeErr == nil {
+				writeErr = err
+			}
+		}
+	}
+	opt.Orphan = func(o store.OrphanFile) {
 		line := fmt.Sprintf("orphan path=%s", o.PathHash)
-		if names {
+		if f.names {
 			line += fmt.Sprintf(" file=%q", o.Name)
 		}
-		fmt.Println(line)
+		emit(struct {
+			Type string `json:"type"`
+			store.OrphanFile
+		}{"orphan", o}, line)
 	}
-	s := rep.Summary
-	fmt.Printf("summary rows=%d encrypted=%d plain=%d ok=%d plain-legacy=%d failed=%d orphans=%d\n",
-		s.Rows, s.Encrypted, s.Plain, s.OK, s.Legacy, s.Failed, s.Orphans)
+	terminal := stderrIsTerminal()
+	if f.progress || terminal {
+		opt.Progress = func(done, total int) {
+			if done%progressEvery != 0 && done != total {
+				return
+			}
+			if terminal {
+				fmt.Fprintf(stderr, "\rverify-files: %d/%d files checked", done, total)
+				if done == total {
+					fmt.Fprintln(stderr)
+				}
+			} else {
+				fmt.Fprintf(stderr, "verify-files: %d/%d files checked\n", done, total)
+			}
+		}
+	}
+	s, err := store.VerifyFilesStream(source, dataDir, key, opt)
+	if err != nil {
+		out.Flush()
+		return err
+	}
+	emit(struct {
+		Type string `json:"type"`
+		store.FilesSummary
+	}{"summary", s}, fmt.Sprintf("summary rows=%d encrypted=%d plain=%d ok=%d plain-legacy=%d failed=%d orphans=%d",
+		s.Rows, s.Encrypted, s.Plain, s.OK, s.Legacy, s.Failed, s.Orphans))
+	if err := out.Flush(); err != nil && writeErr == nil {
+		writeErr = err
+	}
+	if writeErr != nil {
+		return writeErr
+	}
+	if n := s.Failed + s.Orphans; n != 0 {
+		return fmt.Errorf("verify-files: %d problem(s) found", n)
+	}
+	return nil
 }
 
 func main() {

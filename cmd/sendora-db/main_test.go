@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"github.com/mhenderik/sendora/internal/filecrypt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mhenderik/sendora/internal/store"
@@ -165,5 +168,125 @@ func TestVerifyFilesCommand(t *testing.T) {
 	}
 	if err := run([]string{"verify-files", "-source", st.Path, "-key-file", keyFile, "-data-dir", data}); err == nil {
 		t.Fatal("text mode must fail as well")
+	}
+}
+
+// captureVerify runs a command with stdout and stderr captured.
+func captureVerify(t *testing.T, terminal bool, args ...string) (string, string, error) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	oldOut, oldErr, oldTerm, oldEvery := stdout, stderr, stderrIsTerminal, progressEvery
+	stdout, stderr, stderrIsTerminal, progressEvery = &out, &errOut, func() bool { return terminal }, 2
+	defer func() { stdout, stderr, stderrIsTerminal, progressEvery = oldOut, oldErr, oldTerm, oldEvery }()
+	err := run(args)
+	return out.String(), errOut.String(), err
+}
+
+func TestVerifyFilesOutputModes(t *testing.T) {
+	dir := t.TempDir()
+	key := bytes.Repeat([]byte{0x34}, 32)
+	keyFile := filepath.Join(dir, "key")
+	if err := os.WriteFile(keyFile, key, 0600); err != nil {
+		t.Fatal(err)
+	}
+	data := filepath.Join(dir, "data")
+	st, err := store.OpenEncrypted(data, key, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.DB.Close()
+	lid := "cccccccccccccccc"
+	st.DB.Exec(`INSERT INTO shares(long_id,name) VALUES(?,'SHARE-NAME-Y')`, lid)
+	os.MkdirAll(filepath.Join(data, "shares", lid, "nested-dir"), 0700)
+	var bad int64
+	for i := 0; i < 5; i++ {
+		plain := []byte(fmt.Sprintf("content %d", i))
+		var out bytes.Buffer
+		_, encID, _ := filecrypt.Encrypt(&out, bytes.NewReader(plain), st.FileKey(), nil)
+		b := out.Bytes()
+		if i == 3 {
+			b[len(b)-1] ^= 1
+		}
+		disk := filepath.Join(data, "shares", lid, fmt.Sprintf("%d_SECRET-FILE-%d", i, i))
+		os.WriteFile(disk, b, 0600)
+		sum := sha256.Sum256(plain)
+		res, err := st.DB.Exec(`INSERT INTO files(share_id,name,full_path,size,disk_path,sha256,enc,enc_id) VALUES(1,?,?,?,?,?,1,?)`,
+			filepath.Base(disk), filepath.Base(disk), len(plain), disk, hex.EncodeToString(sum[:]), encID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 3 {
+			bad, _ = res.LastInsertId()
+		}
+	}
+	os.WriteFile(filepath.Join(data, "shares", lid, "SECRET-STRAY"), []byte("x"), 0600)
+	base := []string{"verify-files", "-source", st.Path, "-key-file", keyFile, "-data-dir", data}
+
+	// Default: only problems, then the summary. No names, no progress off a terminal.
+	out, errOut, err := captureVerify(t, false, base...)
+	if err == nil {
+		t.Fatal("problems must fail the command")
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], fmt.Sprintf("file id=%d ", bad)) || !strings.Contains(lines[0], "tag-fail@chunk0") ||
+		!strings.HasPrefix(lines[1], "orphan path=") || !strings.HasPrefix(lines[2], "summary rows=5 encrypted=5 plain=0 ok=4 plain-legacy=0 failed=1 orphans=1") {
+		t.Fatalf("default output:\n%s", out)
+	}
+	if errOut != "" || strings.Contains(out, "SECRET") || strings.Contains(out, "nested-dir") {
+		t.Fatalf("leak or unexpected stderr: %q / %q", out, errOut)
+	}
+
+	// -all lists every row in id order.
+	out, _, _ = captureVerify(t, false, append(base, "-all")...)
+	lines = strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 7 {
+		t.Fatalf("-all output:\n%s", out)
+	}
+	for i := 0; i < 5; i++ {
+		if !strings.HasPrefix(lines[i], fmt.Sprintf("file id=%d ", i+1)) {
+			t.Fatalf("-all line %d: %s", i, lines[i])
+		}
+	}
+
+	// -json: JSON Lines, one object per reported row and orphan, then the summary.
+	out, _, _ = captureVerify(t, false, append(base, "-json", "-all")...)
+	lines = strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 7 {
+		t.Fatalf("-json output:\n%s", out)
+	}
+	types := ""
+	for _, l := range lines {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(l), &m); err != nil {
+			t.Fatalf("not a JSON line: %s", l)
+		}
+		types += m["type"].(string)[:1]
+		if m["type"] == "summary" && (m["rows"] != 5.0 || m["failed"] != 1.0 || m["orphans"] != 1.0) {
+			t.Fatalf("summary %s", l)
+		}
+	}
+	if types != "fffffos" {
+		t.Fatalf("object types %q", types)
+	}
+	if strings.Contains(out, "SECRET") {
+		t.Fatal("json leaks names")
+	}
+	out, _, _ = captureVerify(t, false, append(base, "-json")...)
+	if n := len(strings.Split(strings.TrimSpace(out), "\n")); n != 3 {
+		t.Fatalf("-json without -all: %d lines\n%s", n, out)
+	}
+
+	// -names adds names; -progress reports on stderr.
+	out, errOut, _ = captureVerify(t, false, append(base, "-names", "-progress")...)
+	if !strings.Contains(out, "SECRET-FILE-3") || !strings.Contains(out, "SECRET-STRAY") {
+		t.Fatalf("-names output:\n%s", out)
+	}
+	if errOut != "verify-files: 2/5 files checked\nverify-files: 4/5 files checked\nverify-files: 5/5 files checked\n" {
+		t.Fatalf("progress %q", errOut)
+	}
+	// On a terminal progress is shown without -progress, on one line.
+	_, errOut, _ = captureVerify(t, true, base...)
+	if !strings.HasPrefix(errOut, "\rverify-files: 2/5") || !strings.HasSuffix(errOut, "5/5 files checked\n") {
+		t.Fatalf("terminal progress %q", errOut)
 	}
 }
