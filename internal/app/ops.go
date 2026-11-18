@@ -35,6 +35,7 @@ type opsState struct {
 	loginOK, loginFailed, mfaFailed, decryptFailed, ipBans, downloadsStarted, uploadsCompleted atomic.Int64
 	lastAutoBackup                                                                             atomic.Int64 // unix seconds of the last successful automatic backup
 	chainBroken                                                                                atomic.Bool  // last known result of the chain verification
+	chainChecking                                                                              atomic.Bool  // a readiness verification is running
 }
 
 // countAction counts the audit actions that have a metric. It runs before the
@@ -119,12 +120,26 @@ func (s *Server) backupFresh() bool {
 // once the start-up verification is done). When that does not finish within
 // the readiness timeout the last known result is used.
 func (s *Server) chainReady(ctx context.Context) bool {
-	st, err := s.St.AuditVerifyIncremental(ctx)
-	if err != nil {
-		return !s.ops.chainBroken.Load()
+	// The verification waits for a lock another verification may hold for long
+	// (the start-up walk of a large log), so it runs aside and at most once at a
+	// time; the probe returns the last known result when it does not finish.
+	if s.ops.chainChecking.CompareAndSwap(false, true) {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			defer s.ops.chainChecking.Store(false)
+			vctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			if st, err := s.St.AuditVerifyIncremental(vctx); err == nil {
+				s.ops.chainBroken.Store(!st.OK)
+			}
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
 	}
-	s.ops.chainBroken.Store(!st.OK)
-	return st.OK
+	return !s.ops.chainBroken.Load()
 }
 
 // metrics: GET /api/metrics in the Prometheus text format. Off (404) unless
