@@ -290,13 +290,18 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Only the ingress controller reaches Sendora. kubelet probes and
-    # kubectl port-forward are not affected by NetworkPolicy on common CNIs.
+    # Only the reverse proxy reaches Sendora: your ingress controller or Gateway
+    # API implementation (for example Traefik, HAProxy, Envoy Gateway, Istio).
+    # kubelet probes and kubectl port-forward are not affected by NetworkPolicy
+    # on common CNIs. Some CNIs (e.g. Cilium with its built-in Gateway or
+    # Ingress) send this traffic from the node or a reserved identity instead of
+    # a namespace; use that CNI's own policy (CiliumNetworkPolicy fromEntities:
+    # ingress) in that case.
     - from:
         - namespaceSelector:
             matchLabels:
-              # >>> PLACEHOLDER: the namespace of YOUR ingress controller <<<
-              kubernetes.io/metadata.name: ingress-nginx
+              # >>> PLACEHOLDER: the namespace of YOUR ingress controller or gateway <<<
+              kubernetes.io/metadata.name: ingress-controller-namespace
       ports:
         - protocol: TCP
           port: 8080
