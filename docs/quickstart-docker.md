@@ -25,7 +25,14 @@ sudo chown root:10001 database.key && sudo chmod 0440 database.key
 
 ### Windows (PowerShell)
 
-On Windows (Docker Desktop, Windows PowerShell 5.1 or PowerShell 7) keep the key and the data in Docker volumes instead of Windows folders. Sendora refuses a key file that other users could read, and files from a Windows folder cannot show that reliably; volumes created from inside Docker can. The key is created inside a small throw-away container:
+Tested on Windows 11 Pro with Docker Desktop (WSL 2 backend), in Windows PowerShell 5.1 and in PowerShell 7.7.
+
+Keep the key and the data in Docker volumes, not in Windows folders. The bash command above does not work on Windows, and a key in a Windows folder is refused:
+
+- Windows has no `openssl` by default, and in Windows PowerShell 5.1 the `>` redirect re-encodes the output: in the test, 32 random bytes became a 72-byte file, which is not a valid key. PowerShell 7 keeps the bytes.
+- Docker Desktop shows a file from a Windows folder to the container with the permissions `rwxrwxrwx`, and Sendora refuses a key that other users could read (`database key must be a restricted regular file`).
+
+A key made inside Docker has the right permissions. It is created in a small throw-away container (`alpine`, removed afterwards), and the volume `sendora-key` keeps it:
 
 ```powershell
 docker volume create sendora-key
@@ -33,13 +40,32 @@ docker volume create sendora-data
 docker run --rm -v sendora-key:/k alpine sh -c "umask 077 && head -c 32 /dev/urandom > /k/database.key && chown -R 10001:10001 /k"
 ```
 
-Copy the key to the current folder, then store that copy somewhere safe (password manager, offline storage):
+**Back up the key now.** Without it nobody can read the data. Copy it to the current folder:
 
 ```powershell
 docker run --rm -v sendora-key:/k -v "${PWD}:/out" alpine cp /k/database.key /out/database.key
 ```
 
-Do not delete the `sendora-key` volume: without the key the data cannot be read.
+Keep that file in a password manager, on offline storage or a USB stick, not on the same machine only. If your password manager prefers text, this prints the key as 44 characters:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\database.key"))
+```
+
+**Restore the key** into a new volume, for example on a new computer or after the volume was removed. If you only have the 44 characters, first make the file again (replace the text):
+
+```powershell
+[IO.File]::WriteAllBytes("$PWD\database.key", [Convert]::FromBase64String("PASTE-THE-44-CHARACTERS-HERE"))
+```
+
+Then put the file into the volume (this also sets the permissions Sendora requires):
+
+```powershell
+docker volume create sendora-key
+docker run --rm -v sendora-key:/k -v "${PWD}:/in:ro" alpine sh -c "cp /in/database.key /k/database.key && chown -R 10001:10001 /k && chmod 400 /k/database.key"
+```
+
+Do not delete the `sendora-key` volume (`docker volume rm`, or a clean-up such as `docker system prune --volumes`) before you have a copy: without the key the data cannot be read.
 
 ## 2. Start
 
