@@ -816,5 +816,9 @@
   "Expand all": "Alles uitklappen",
   "Collapse all": "Alles inklappen",
   "Remove folder": "Map verwijderen",
-  "Remove file": "Bestand verwijderen"
+  "Remove file": "Bestand verwijderen",
+  "A theme with this name already exists.": "Er bestaat al een thema met deze naam.",
+  "Built-in themes cannot be changed. Saving creates a new theme under the name above.": "Ingebouwde thema's kunnen niet worden gewijzigd. Opslaan maakt een nieuw thema aan onder de naam hierboven.",
+  "Colour changes are previewed on this page immediately; they are applied for everyone only after saving and activating.": "Kleurwijzigingen zijn direct zichtbaar op deze pagina; ze gelden pas voor iedereen na opslaan en activeren.",
+  "Copy and edit": "Kopiëren en bewerken"
 }
