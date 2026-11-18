@@ -24,6 +24,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Resource limits: enough for normal use; raise mem_limit for very large
+    # database imports or many parallel transfers.
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 200
 
 secrets:
   sendora_db_key:

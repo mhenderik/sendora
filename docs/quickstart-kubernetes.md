@@ -91,4 +91,6 @@ This deletes the volume and all data (depending on your StorageClass reclaim pol
 
 ## Next steps
 
-The minimal manifest runs an init container as root once to give the volume to the app user, leaves `APP_URL` unset so any local port-forward address works (set it to your public https:// address when you add an Ingress), and has no HTTPS, mail or sign-in providers configured. Moving on to a real deployment: [Kubernetes guide](https://github.com/mhenderik/sendora/wiki/Kubernetes-Deployment).
+The minimal manifest runs an init container as root once to give the volume to the app user, leaves `APP_URL` unset so any local port-forward address works (set it to your public https:// address when you add an Ingress), and has no HTTPS, mail or sign-in providers configured. Because of that init container it meets the Pod Security Standard *baseline*, not *restricted*; the app container itself runs without root, with a read-only root filesystem and CPU/memory limits (1 CPU, 1 GiB).
+
+Moving on to a real deployment: [Kubernetes guide](https://github.com/mhenderik/sendora/wiki/Kubernetes-Deployment) and the full manifest [`deploy/kubernetes.yaml`](../deploy/kubernetes.yaml). It enforces Pod Security *restricted* on the namespace, uses its own ServiceAccount without an API token, and limits traffic with NetworkPolicies (only the ingress controller in; DNS, HTTPS to sign-in providers and SMTP out). Replace the marked ingress-controller namespace placeholder before applying it, and leave the storage ownership to the storage administrator (it has no root init container).

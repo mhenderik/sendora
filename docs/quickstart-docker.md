@@ -135,3 +135,4 @@ Any admin setting can be added as `-e SENDORA_<SETTING>=value` (see [Configurati
 - Reachable from other machines or the internet: use the [Compose files with automatic HTTPS](../deploy/compose/README.md#public-server-with-https).
 - Outgoing mail, sign-in with Microsoft Entra ID and other settings: [Configuration](configuration.md), [Email](https://github.com/mhenderik/sendora/wiki/Email-and-Notifications), [Accounts and authentication](https://github.com/mhenderik/sendora/wiki/Accounts-and-Authentication).
 - Backups: [Upgrades and backups](https://github.com/mhenderik/sendora/wiki/Upgrades-and-Backups).
+- Check that an image really comes from this project's release workflow: [verifying images](../SECURITY.md#verifying-release-images). The image has a built-in health check (`docker ps` shows `healthy` once Sendora answers).

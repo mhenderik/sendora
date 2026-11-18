@@ -6,6 +6,9 @@
 #   kubectl apply -f deploy/kubernetes-minimal.yaml
 #   kubectl -n sendora logs deploy/sendora | grep "setup code"
 #   kubectl -n sendora port-forward svc/sendora 8080:80     # then open http://localhost:8080
+#
+# Meets the Pod Security Standard "baseline" (the volume-owner init container
+# runs as root to chown the volume). The full manifest meets "restricted".
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -35,6 +38,7 @@ spec:
     metadata:
       labels: { app: sendora }
     spec:
+      automountServiceAccountToken: false # Sendora does not use the Kubernetes API
       enableServiceLinks: false
       securityContext:
         runAsUser: 10001
@@ -55,6 +59,9 @@ spec:
             capabilities:
               drop: ["ALL"]
               add: ["CHOWN", "FOWNER"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
           volumeMounts:
             - { name: data, mountPath: /data }
       containers:
@@ -63,8 +70,12 @@ spec:
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 1Gi }
           ports:
             - { name: http, containerPort: 8080 }
           env:
@@ -78,6 +89,7 @@ spec:
           volumeMounts:
             - { name: data, mountPath: /data }
             - { name: database-key, mountPath: /run/secrets/sendora, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
           readinessProbe:
             httpGet: { path: /api/health, port: http }
       volumes:
@@ -87,6 +99,8 @@ spec:
           secret:
             secretName: sendora-db-key
             defaultMode: 0440
+        - name: tmp
+          emptyDir: { sizeLimit: 1Gi }
 ---
 apiVersion: v1
 kind: Service

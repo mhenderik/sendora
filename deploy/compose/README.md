@@ -64,6 +64,14 @@ docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
 
 Caddy obtains and renews the certificate, sets `APP_URL=https://<domain>` for Sendora and forwards the real visitor address (`SENDORA_TRUSTED_PROXIES` is preset to Caddy's internal network), so rate limits and address blocking work per visitor. Sendora itself is then not published on a host port.
 
+The Caddy image is pinned by version and digest. Like Sendora it runs with a read-only filesystem (it writes only to its `caddy_data`/`caddy_config` volumes and a small `/tmp`), without new privileges and with all capabilities dropped except binding ports 80 and 443, and with memory, CPU and process limits.
+
+## Resource limits
+
+Both files set limits per container: Sendora gets 1 GiB memory, 2 CPUs and at most 200 processes/threads (`mem_limit`, `cpus`, `pids_limit`), Caddy 512 MiB and 1 CPU. That is plenty for normal use. If the container is stopped with exit code 137 (out of memory) during very large transfers or a database import, raise `mem_limit` in `docker-compose.yml`. The `/tmp` tmpfs counts towards the memory limit.
+
+The image has a built-in health check (`sendora healthcheck`); `docker compose ps` shows `healthy` once Sendora answers.
+
 ## Settings
 
 Every admin setting can be set in `sendora.env` as `SENDORA_<SETTING>`, including SMTP and login providers such as Microsoft Entra ID; the full list is in [docs/configuration.md](../../docs/configuration.md). Values set there win at every start and are read-only in Admin → Settings; an invalid value stops the container with a message naming the variable (`docker compose logs sendora`). Apply changes with `docker compose up -d --force-recreate`.

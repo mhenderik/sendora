@@ -2,16 +2,42 @@
 # Replace the placeholder image and APP_URL with values you control.
 # The storage provisioner/administrator must make /data and restored files
 # owned by UID 10001: fsGroup alone does not grant permission to chmod them.
+#
+# Meets the Pod Security Standard "restricted" (enforced on the namespace below).
+# The NetworkPolicy needs a CNI that enforces NetworkPolicy (Calico, Cilium, ...);
+# replace its ingress-controller namespace placeholder before applying.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: sendora
+  labels:
+    app.kubernetes.io/name: sendora
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# Sendora does not talk to the Kubernetes API: its own account, no token.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sendora
+  namespace: sendora
+  labels:
+    app.kubernetes.io/name: sendora
+    app.kubernetes.io/instance: sendora
+    app.kubernetes.io/part-of: sendora
+automountServiceAccountToken: false
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: sendora-data
   namespace: sendora
+  labels:
+    app.kubernetes.io/name: sendora
+    app.kubernetes.io/instance: sendora
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: sendora
 spec:
   accessModes:
     - ReadWriteOnce
@@ -27,6 +53,10 @@ kind: ConfigMap
 metadata:
   name: sendora-config
   namespace: sendora
+  labels:
+    app.kubernetes.io/name: sendora
+    app.kubernetes.io/instance: sendora
+    app.kubernetes.io/part-of: sendora
 data:
   SENDORA_ALLOW_SELF_REGISTRATION: "false"
   SENDORA_IDLE_LOGOUT_MINUTES: "60"
@@ -46,11 +76,22 @@ kind: Deployment
 metadata:
   name: sendora
   namespace: sendora
+  labels:
+    app.kubernetes.io/name: sendora
+    app.kubernetes.io/instance: sendora
+    app.kubernetes.io/version: "0.1.5"
+    app.kubernetes.io/component: server
+    app.kubernetes.io/part-of: sendora
 spec:
   # SQLite and process-local jobs/locks require exactly one live instance.
+  # No PodDisruptionBudget on purpose: with one replica and the Recreate
+  # strategy, a PDB with minAvailable: 1 would only block node drains forever,
+  # and one with maxUnavailable: 1 protects nothing. Plan maintenance windows.
   replicas: 1
   strategy:
     type: Recreate
+  # The selector is immutable; it stays "app: sendora" so existing deployments
+  # can be updated with kubectl apply.
   selector:
     matchLabels:
       app: sendora
@@ -58,7 +99,13 @@ spec:
     metadata:
       labels:
         app: sendora
+        app.kubernetes.io/name: sendora
+        app.kubernetes.io/instance: sendora
+        app.kubernetes.io/version: "0.1.5"
+        app.kubernetes.io/component: server
+        app.kubernetes.io/part-of: sendora
     spec:
+      serviceAccountName: sendora
       automountServiceAccountToken: false
       enableServiceLinks: false
       terminationGracePeriodSeconds: 60
@@ -88,6 +135,9 @@ spec:
       containers:
         - name: sendora
           # Published release image (pin a version or digest; see the releases on GitHub).
+          # Digest-pinned form (immune to a moved tag; verify the signature first,
+          # see SECURITY.md):
+          #   image: ghcr.io/mhenderik/sendora:0.1.5@sha256:<digest of the release>
           image: ghcr.io/mhenderik/sendora:0.1.5
           imagePullPolicy: IfNotPresent
           ports:
@@ -127,9 +177,14 @@ spec:
             requests:
               cpu: 250m
               memory: 256Mi
+              ephemeral-storage: 256Mi
             limits:
               cpu: "2"
               memory: 1Gi
+              # Covers the 1Gi /tmp emptyDir plus container logs.
+              ephemeral-storage: 2Gi
+          # All probes use /api/health. From 0.1.5 on, /api/health/ready can be
+          # used for the readinessProbe instead.
           startupProbe:
             httpGet:
               path: /api/health
@@ -189,6 +244,11 @@ kind: Service
 metadata:
   name: sendora
   namespace: sendora
+  labels:
+    app.kubernetes.io/name: sendora
+    app.kubernetes.io/instance: sendora
+    app.kubernetes.io/component: server
+    app.kubernetes.io/part-of: sendora
 spec:
   type: ClusterIP
   selector:
@@ -197,6 +257,87 @@ spec:
     - name: http
       port: 80
       targetPort: http
+---
+# Default deny: no traffic in or out of the namespace except what is listed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: sendora
+  labels:
+    app.kubernetes.io/name: sendora
+    app.kubernetes.io/part-of: sendora
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sendora
+  namespace: sendora
+  labels:
+    app.kubernetes.io/name: sendora
+    app.kubernetes.io/instance: sendora
+    app.kubernetes.io/part-of: sendora
+spec:
+  podSelector:
+    matchLabels:
+      app: sendora
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only the ingress controller reaches Sendora. kubelet probes and
+    # kubectl port-forward are not affected by NetworkPolicy on common CNIs.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              # >>> PLACEHOLDER: the namespace of YOUR ingress controller <<<
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # DNS through the cluster DNS (CoreDNS keeps the k8s-app: kube-dns label).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS to the OpenID Connect identity providers (Microsoft Entra ID,
+    # Google, ...). Their addresses change, so any address except link-local
+    # (cloud metadata service). Remove this rule if you use no login provider.
+    # IPv6 clusters: add an ipBlock for ::/0 here and in the SMTP rule.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    # SMTP submission for emails: 587 (STARTTLS) and 465 (implicit TLS).
+    # Narrow the ipBlock to your mail server, or remove the rule without SMTP.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 587
+        - protocol: TCP
+          port: 465
 # Optional Ingress: uncomment only after private first-run setup and configuring
 # your controller, DNS, canonical APP_URL, and sendora-tls TLS Secret.
 # Configure HTTPS redirects and upload/download limits in your controller.
