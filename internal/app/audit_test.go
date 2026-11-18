@@ -323,8 +323,11 @@ func TestAuditorEndpointsFiltersExportAndViewThrottle(t *testing.T) {
 		}
 	}
 	e.want(e.do("GET", "/api/audit/export?format=xml", auditor, nil), 400, "bad format")
-	if n := len(auditRowsWhere(e, "action='audit_exported'")); n != 2 {
-		t.Fatalf("audit_exported %d", n)
+	// Every export request is recorded before it is served (attempted); the two that
+	// were served also have an ok record, and the refused one a failed record.
+	count := func(outcome string) int { return len(auditRowsWhere(e, "action='audit_exported' AND outcome=?", outcome)) }
+	if count("attempted") != 3 || count("ok") != 2 || count("failed") != 1 {
+		t.Fatalf("audit_exported records: attempted=%d ok=%d failed=%d", count("attempted"), count("ok"), count("failed"))
 	}
 	if n := len(auditRowsWhere(e, "action='audit_viewed'")); n != 1 {
 		t.Fatalf("audit_viewed after exports %d", n)
