@@ -44,7 +44,7 @@ async function save() {
 
     <h2 style="margin-top:8px">{{ t('Multi-factor authentication') }}</h2>
     <label for="mfa-policy">{{ t('Two-step verification policy') }}</label>
-    <select :disabled="m('mfa_policy')" id="mfa-policy" v-model="s.mfa_policy"><option value="off">{{ t('Off') }}</option><option value="optional">{{ t('Optional (users choose)') }}</option><option value="admins">{{ t('Required for administrators') }}</option><option value="all">{{ t('Required for everyone') }}</option></select>
+    <select :disabled="m('mfa_policy')" id="mfa-policy" v-model="s.mfa_policy"><option value="off">{{ t('Off') }}</option><option value="optional">{{ t('Optional (users choose)') }}</option><option value="admins">{{ t('Required for administrators') }}</option><option value="privileged">{{ t('Required for administrators and auditors') }}</option><option value="all">{{ t('Required for everyone') }}</option></select>
     <label for="mfa-reminder">{{ t('Remind users who skipped two-step setup again after (days, 0 = at every sign-in)') }}</label><input id="mfa-reminder" :disabled="m('mfa_reminder_days')" v-model="s.mfa_reminder_days" type="number" min="0" max="365" />
     <p class="muted">{{ t('Accounts with a local password and no second factor see a reminder after signing in. Dismissing it hides it for this many days in that browser.') }}</p>
     <label class="check"><input :disabled="m('mfa_totp_enabled')" type="checkbox" :checked="s.mfa_totp_enabled !== 'false'" @change="s.mfa_totp_enabled = String($event.target.checked)" /> {{ t('Allow authenticator apps (TOTP)') }}</label>

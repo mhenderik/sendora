@@ -145,7 +145,9 @@
   up yet") with *Set up now* and *Remind me later*. A dismissed reminder returns after
   `mfa_reminder_days` days (Admin -> Settings, default 1, 0 = at the next sign-in; kept in
   the browser). It is not shown when the policy is `off`, to accounts that use an identity
-  provider, or to guests. A required policy (`admins` or `all`) applies only to local accounts.
+  provider, or to guests. A required policy (`admins`, `privileged` or `all`) applies only to local accounts.
+- New two-step verification policy `privileged`: required for administrators **and**
+  auditors (Admin -> Security).
 - **Theme editor:** colours show as a swatch plus hex field and every change is previewed
   at once on the running interface (for you only, until saved); leaving the editor restores
   the previous theme. Built-in themes can no longer be overwritten: "Copy and edit" creates

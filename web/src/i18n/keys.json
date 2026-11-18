@@ -466,6 +466,7 @@
  "Require password change at first login",
  "required",
  "Required for administrators",
+ "Required for administrators and auditors",
  "Required for everyone",
  "Required for this user",
  "Resend code",

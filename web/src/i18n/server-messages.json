@@ -125,6 +125,7 @@
     "mfa session expired; sign in again",
     "mfa_policy must be inherit, required or exempt",
     "mfa_policy must be one of off, optional, admins, all",
+    "mfa_policy must be one of off, optional, admins, privileged, all",
     "missing mail event: ",
     "multi-factor authentication is not enabled",
     "multi-factor authentication is required for your account; add another method first",

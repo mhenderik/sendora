@@ -453,3 +453,34 @@ func TestPasswordChangesAndResetsAreAudited(t *testing.T) {
 		t.Fatal("expired MFA reset request not purged")
 	}
 }
+
+// mfa_policy "privileged" requires a second factor for administrators and
+// auditors, not for ordinary users; enabling it needs the admin's own factor.
+func TestMFAPolicyPrivilegedCoversAdminsAndAuditors(t *testing.T) {
+	e := newEnv(t)
+	admin := e.setup()
+	r := e.do("PUT", "/api/settings", admin, map[string]any{"mfa_policy": "privileged"})
+	if r.Code != 400 {
+		t.Fatalf("enforcing without an own factor must be refused: %d %s", r.Code, r.Body)
+	}
+	e.setting("mfa_policy", "privileged")
+	bob := e.mkUser(admin, "bob", false)
+	auditor := e.mkAuditor(admin, "audrey")
+	required := func(tok string) bool {
+		me := e.do("GET", "/api/users/me", tok, nil)
+		u, _ := me.J()["user"].(map[string]any)
+		return u["mfa_required"] == true
+	}
+	if !required(admin) {
+		t.Fatal("administrator must be required to use MFA")
+	}
+	if !required(auditor) {
+		t.Fatal("auditor must be required to use MFA")
+	}
+	if required(bob) {
+		t.Fatal("an ordinary user must not be required to use MFA")
+	}
+	if e.s.mfaGlobal() != "privileged" {
+		t.Fatalf("policy not kept: %q", e.s.mfaGlobal())
+	}
+}

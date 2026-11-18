@@ -21,11 +21,12 @@ import (
 // the same helpers, see userHasFactor / mfaChallenge / completeMFALogin /
 // mfaFactorsChanged).
 //
-// Global policy (settings mfa_policy): off | optional | admins | all.
+// Global policy (settings mfa_policy): off | optional | admins | privileged | all.
 //   off       MFA is switched off completely (no gate, no enrolment); also the
 //             emergency switch if everybody is locked out.
 //   optional  users may enrol themselves.
 //   admins    required for administrators.
+//   privileged required for administrators and auditors.
 //   all       required for every local account.
 // Per user (users.mfa_policy): inherit | required | exempt. An exempt user is
 // never forced to enrol; a user that did enrol keeps using the factor.
@@ -89,10 +90,10 @@ func validateMFASetting(key, val string) (owned bool, err error) {
 	switch key {
 	case "mfa_policy":
 		switch val {
-		case "off", "optional", "admins", "all":
+		case "off", "optional", "admins", "privileged", "all":
 			return true, nil
 		}
-		return true, fmt.Errorf("mfa_policy must be one of off, optional, admins, all")
+		return true, fmt.Errorf("mfa_policy must be one of off, optional, admins, privileged, all")
 	case "mfa_totp_enabled", "mfa_webauthn_enabled":
 		if _, ok := parseStrictBool(val); !ok {
 			return true, fmt.Errorf("%s must be true or false", key)
@@ -124,7 +125,7 @@ func (s *Server) mfaReminderDays() int {
 // mfaGlobal is the stored policy; a corrupt value fails closed to "all".
 func (s *Server) mfaGlobal() string {
 	switch v := s.St.Setting("mfa_policy"); v {
-	case "off", "optional", "admins", "all":
+	case "off", "optional", "admins", "privileged", "all":
 		return v
 	}
 	return "all"
@@ -195,6 +196,8 @@ func (s *Server) mfaRequired(u *User) bool {
 		switch global {
 		case "admins":
 			return u.Admin
+		case "privileged":
+			return u.Admin || u.Auditor
 		case "all":
 			return true
 		}

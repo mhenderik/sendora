@@ -1054,5 +1054,7 @@
   "terms version must be at most 40 characters without control characters": "de versie van de voorwaarden mag hooguit 40 tekens zonder stuurtekens bevatten",
   "account_password_min_length must be an integer from %d to %d": "account_password_min_length moet een geheel getal van %d tot %d zijn",
   "%s must be an https:// address": "%s moet een https://-adres zijn",
-  "the list does not include your own address %s; add it, or set %s=true to override": "de lijst bevat je eigen adres %s niet; voeg het toe, of zet %s=true om dit te omzeilen"
+  "the list does not include your own address %s; add it, or set %s=true to override": "de lijst bevat je eigen adres %s niet; voeg het toe, of zet %s=true om dit te omzeilen",
+  "Required for administrators and auditors": "Verplicht voor beheerders en auditors",
+  "mfa_policy must be one of off, optional, admins, privileged, all": "mfa_policy moet off, optional, admins, privileged of all zijn"
 }

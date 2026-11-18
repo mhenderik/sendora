@@ -49,7 +49,7 @@ The full actor and threat analysis is in [THREAT-MODEL.md](../THREAT-MODEL.md).
 ### 3.2 Multi-factor authentication
 
 - Factors: TOTP authenticator apps with one-time recovery codes (stored hashed), and WebAuthn passkeys/security keys. WebAuthn verification is an in-house implementation (`internal/webauthnlite`); attestation is not evaluated (attestation "none").
-- Global policy `mfa_policy`: `off`, `optional` (default for new installations), `admins` (required for administrators) or `all`; per-user override. A corrupt stored value fails closed to `all`. Required policies apply to accounts with a local password; accounts that sign in only through an identity provider rely on the provider's MFA.
+- Global policy `mfa_policy`: `off`, `optional` (default for new installations), `admins` (required for administrators), `privileged` (required for administrators and auditors) or `all`; per-user override. A corrupt stored value fails closed to `all`. Required policies apply to accounts with a local password; accounts that sign in only through an identity provider rely on the provider's MFA.
 - Administrators reset another user's MFA only through a 24-hour, single-use confirmation link sent to the user's verified address; the user is notified afterwards.
 
 ### 3.3 External identity providers

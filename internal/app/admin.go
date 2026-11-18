@@ -220,7 +220,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	// Enforcing MFA must not lock out the administrator who switches it on: they
 	// need a factor of their own (or an explicit exemption) first.
-	if np, ok := updates["mfa_policy"]; ok && (np == "admins" || np == "all") {
+	if np, ok := updates["mfa_policy"]; ok && (np == "admins" || np == "privileged" || np == "all") {
 		if me := s.ctxUser(r); me != nil && me.MFAPolicy != "exempt" && !s.userHasFactor(me) {
 			jerr(w, 400, msgMFAEnforceSelf)
 			return
