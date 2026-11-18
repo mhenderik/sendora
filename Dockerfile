@@ -1,4 +1,5 @@
-FROM node:22-alpine AS web
+# The web build output is platform independent: run it natively, not under QEMU.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
