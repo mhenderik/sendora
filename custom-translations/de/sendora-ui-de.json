@@ -437,7 +437,6 @@
     "Times blocked": "Anzahl Sperren",
     "Too many languages (at most 32).": "Zu viele Sprachen (höchstens 32).",
     "Too many translations (at most 3000).": "Zu viele Übersetzungen (höchstens 3000).",
-    "Top shares": "Top-Freigaben",
     "Translate buttons, labels and messages through JSON without rebuilding. Download a language, translate the values offline (keep placeholders such as {n} unchanged) and import it again. New languages appear in every language menu; missing texts fall back to the built-in text, then to English.": "Übersetze Schaltflächen, Beschriftungen und Meldungen per JSON, ohne neu zu bauen. Lade eine Sprache herunter, übersetze die Werte offline (lass Platzhalter wie {n} unverändert) und importiere sie wieder. Neue Sprachen erscheinen in jedem Sprachmenü; fehlende Texte fallen auf den integrierten Text und dann auf Englisch zurück.",
     "Translate manually. Keep placeholders unchanged. Extra languages apply to email, not menus.": "Manuell übersetzen. Platzhalter unverändert lassen. Zusätzliche Sprachen gelten für E-Mails, nicht für Menüs.",
     "Translation": "Übersetzung",

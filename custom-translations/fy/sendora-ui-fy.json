@@ -437,7 +437,6 @@
     "Times blocked": "Kearen blokkearre",
     "Too many languages (at most 32).": "Te folle talen (op syn heechst 32).",
     "Too many translations (at most 3000).": "Te folle oersettings (op syn heechst 3000).",
-    "Top shares": "Topdielingen",
     "Translate buttons, labels and messages through JSON without rebuilding. Download a language, translate the values offline (keep placeholders such as {n} unchanged) and import it again. New languages appear in every language menu; missing texts fall back to the built-in text, then to English.": "Oersetsje knoppen, labels en berjochten fia JSON sûnder opnij te bouwen. Download in taal, oersetsje de wearden offline (lit plakhâlders lykas {n} ûnferoare) en ymportearje it wer. Nije talen ferskine yn elk taalmenu; ûntbrekkende teksten falle werom op de ynboude tekst en dan op it Ingelsk.",
     "Translate manually. Keep placeholders unchanged. Extra languages apply to email, not menus.": "Oersetsje mei de hân. Lit plakhâlders ûnferoare. Ekstra talen jilde foar e-mail, net foar menu's.",
     "Translation": "Oersetting",

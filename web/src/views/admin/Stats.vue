@@ -18,8 +18,6 @@ const up = n => { const d = Math.floor(n / 86400), h = Math.floor(n % 86400 / 36
     </div>
     <div class="card"><h2>{{ t('Downloads, last 14 days') }}</h2>
       <div class="chart"><i v-for="d in s.downloads_per_day" :key="d.day" :style="{ height: d.count / max * 100 + '%' }" :title="d.day + ': ' + d.count" /></div></div>
-    <div class="card"><h2>{{ t('Top shares') }}</h2>
-      <table><tr v-for="x in s.top_shares" :key="x.long_id"><td><a :href="'/share/' + x.long_id">{{ x.name }}</a></td><td>{{ x.downloads }}</td></tr></table></div>
     <div class="card"><h2>{{ t('System') }}</h2>
       <p class="muted">v{{ s.system.version }} · {{ s.system.go }} · {{ s.system.os }} · {{ t('uptime') }} {{ up(s.system.uptime_seconds) }} · {{ fmtBytes(s.system.mem_bytes) }}</p></div>
   </div>

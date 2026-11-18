@@ -437,7 +437,6 @@
     "Times blocked": "Times blocked from boardin'",
     "Too many languages (at most 32).": "Too many tongues (at most 32 languages).",
     "Too many translations (at most 3000).": "Avast, too many translations (at most 3000).",
-    "Top shares": "Top shares o' the fleet",
     "Translate buttons, labels and messages through JSON without rebuilding. Download a language, translate the values offline (keep placeholders such as {n} unchanged) and import it again. New languages appear in every language menu; missing texts fall back to the built-in text, then to English.": "Translate buttons, labels and messages through JSON without rebuildin' the ship. Download a language, translate the values offline (keep placeholders such as {n} unchanged) and import it again. New languages appear in every language menu; missin' texts fall back to the built-in text, then to English.",
     "Translate manually. Keep placeholders unchanged. Extra languages apply to email, not menus.": "Translate by hand. Keep placeholders unchanged. Extra tongues apply to email, not menus.",
     "Translation": "Translation into pirate tongue",

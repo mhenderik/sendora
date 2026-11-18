@@ -540,17 +540,6 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	if rows != nil {
 		rows.Close()
 	}
-	top := []map[string]any{}
-	rows, _ = s.St.DB.Query(`SELECT name,long_id,download_count FROM shares ORDER BY download_count DESC LIMIT 5`)
-	for rows != nil && rows.Next() {
-		var n, l string
-		var c int64
-		rows.Scan(&n, &l, &c)
-		top = append(top, map[string]any{"name": n, "long_id": l, "downloads": c})
-	}
-	if rows != nil {
-		rows.Close()
-	}
 	jout(w, 200, map[string]any{
 		"users":             q(`SELECT COUNT(*) FROM users WHERE is_guest=0`),
 		"shares":            q(`SELECT COUNT(*) FROM shares`),
@@ -559,7 +548,6 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		"storage_bytes":     q(`SELECT COALESCE(SUM(size),0) FROM files`),
 		"downloads":         q(`SELECT COUNT(*) FROM downloads`),
 		"downloads_per_day": perDay,
-		"top_shares":        top,
 		"system": map[string]any{
 			"version": s.Version, "go": runtime.Version(), "os": runtime.GOOS + "/" + runtime.GOARCH,
 			"uptime_seconds": int(time.Since(s.Started).Seconds()), "mem_bytes": m.Sys, "goroutines": runtime.NumGoroutine(),

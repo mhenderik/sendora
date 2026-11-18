@@ -437,7 +437,6 @@
     "Times blocked": "Nombre de blocages",
     "Too many languages (at most 32).": "Trop de langues (32 au maximum).",
     "Too many translations (at most 3000).": "Trop de traductions (3000 au maximum).",
-    "Top shares": "Partages les plus populaires",
     "Translate buttons, labels and messages through JSON without rebuilding. Download a language, translate the values offline (keep placeholders such as {n} unchanged) and import it again. New languages appear in every language menu; missing texts fall back to the built-in text, then to English.": "Traduisez les boutons, libellés et messages via JSON sans recompiler. Téléchargez une langue, traduisez les valeurs hors ligne (laissez inchangés les espaces réservés comme {n}) et importez-la à nouveau. Les nouvelles langues apparaissent dans tous les menus de langue ; les textes manquants sont remplacés par le texte intégré, puis par l'anglais.",
     "Translate manually. Keep placeholders unchanged. Extra languages apply to email, not menus.": "Traduisez manuellement. Laissez les espaces réservés inchangés. Les langues supplémentaires s'appliquent aux e-mails, pas aux menus.",
     "Translation": "Traduction",

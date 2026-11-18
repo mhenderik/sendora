@@ -437,7 +437,6 @@
     "Times blocked": "botlu'pu'bogh mI'",
     "Too many languages (at most 32).": "Holmey law' law' (32 law' law'be').",
     "Too many translations (at most 3000).": "mughghachmey law' law' (3000 law' law'be').",
-    "Top shares": "ngeHghachmey nIv",
     "Translate buttons, labels and messages through JSON without rebuilding. Download a language, translate the values offline (keep placeholders such as {n} unchanged) and import it again. New languages appear in every language menu; missing texts fall back to the built-in text, then to English.": "chenqa'be'lu'taHvIS JSON lo'taHvIS leQmey, per yIqmey, QInmey je yImugh. Hol yISuq, ghun Hutlhbogh lo'laHghachmey yImugh ({n} rur placeholdermey yIchoHQo') 'ej yIqemqa'. Hoch Hol HaStaDaq Holmey chu' 'aghlu'; ghItlhmey tu'lu'be'chugh, ghunDaq ghItlh lo'lu', ghIq DIvI' Hol.",
     "Translate manually. Keep placeholders unchanged. Extra languages apply to email, not menus.": "ghop yImugh. placeholdermey yIchoHQo'. QInvaD neH ghoS Holmey latlh, HaStavaD ghoSbe'.",
     "Translation": "mughghach",

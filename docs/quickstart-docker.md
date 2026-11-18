@@ -12,7 +12,7 @@ mkdir data
 (umask 077; set -C; openssl rand 32 > database.key)
 ```
 
-The key is exactly 32 random bytes and encrypts the database. **Keep a copy in a safe place**: without it the data cannot be read, and it cannot be regenerated.
+The key is exactly 32 random bytes and encrypts the database and the stored share files. **Keep a copy in a safe place**: without it the data cannot be read, and it cannot be regenerated.
 
 On **Linux** the container runs as UID/GID 10001 and must own the data folder and be able to read the key:
 

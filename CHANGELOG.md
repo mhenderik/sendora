@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Security:** the administrator statistics no longer list the names and link IDs of
+  the most downloaded shares. With a share's link ID an administrator could open it,
+  which contradicted "administrators cannot see other users' shares". The statistics now
+  contain counts only (a test checks that no share name or link ID appears).
+- Documentation corrections: the key also protects the encrypted share files, key
+  rotation is not possible once files were uploaded since 0.1.2, only the owner (not
+  an administrator) can edit a share, and the footer version is visible to signed-in users.
+
 ## 0.1.4 (2026-11-18)
 
 - A wrong or missing database key is now reported as `database cannot be read with
