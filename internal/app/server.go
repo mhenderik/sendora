@@ -79,6 +79,12 @@ type Server struct {
 	importExit      func(int)
 	importDone      chan struct{}
 
+	// Orderly stop (jobs.go): the maintenance loop's done channel, and the
+	// once-only stop and system_stop record.
+	jobsDone     atomic.Pointer[chan struct{}]
+	stopOnce     sync.Once
+	stopRecorded sync.Once
+
 	// One-time code required for first-run setup (empty once an account exists).
 	setupCode string
 
@@ -325,7 +331,7 @@ func (s *Server) Router() http.Handler {
 				r.With(s.critical("user_deleted", "user")).Delete("/users/{id}", s.deleteUser)
 				r.With(s.critical("user_force_reset", "user")).Post("/users/{id}/force-reset-password", s.forceReset)
 				r.Post("/users/{id}/unlock-login", s.unlockLogin)
-				r.With(s.critical("mfa_reset", "user")).Post("/users/{id}/mfa/reset", s.mfaReset)
+				r.With(s.critical("mfa_reset_requested", "user")).Post("/users/{id}/mfa/reset", s.mfaReset)
 				r.Post("/users/{id}/welcome", s.resendWelcome)
 
 				r.Get("/settings", s.getSettings)

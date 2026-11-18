@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"runtime"
@@ -24,8 +25,13 @@ import (
 
 const (
 	auditViewedEvery = 5 * time.Minute
-	auditStatusTTL   = 5 * time.Second
+	// auditIPCacheTTL bounds how long the cached audit_log_ip value is trusted
+	// when a setting was written without moving SettingsGen.
+	auditIPCacheTTL = 30 * time.Second
 )
+
+// auditRetryBackoff is the pause before the single retry of a failed write.
+var auditRetryBackoff = 50 * time.Millisecond
 
 // Categories and outcomes of audit records.
 const (
@@ -55,6 +61,18 @@ type auditReq struct {
 	wrote    atomic.Bool // any record was written for this request
 	logged   atomic.Bool // the handler itself recorded an outcome
 	critical atomic.Pointer[auditEntry]
+	// unauth: refused by the auth middleware before any user was known (no,
+	// expired, revoked or forged token). Such requests name nobody and anyone on
+	// the internet can send them, so they are not recorded.
+	unauth atomic.Bool
+}
+
+// unauthenticated answers 401 for a request whose credentials do not verify.
+func (s *Server) unauthenticated(w http.ResponseWriter, r *http.Request) {
+	if st := auditReqFrom(r.Context()); st != nil {
+		st.unauth.Store(true)
+	}
+	jerr(w, http.StatusUnauthorized, "unauthorized")
 }
 
 type auditReqKeyType struct{}
@@ -75,10 +93,33 @@ type auditState struct {
 	viewMu sync.Mutex
 	viewed map[int64]time.Time
 
-	statusMu  sync.Mutex
-	statusVal store.AuditStatus
-	statusAt  time.Time
-	statusGen int64
+	ipCache atomic.Pointer[auditIPSetting]
+
+	// Retention purge state: audit_purge_failed is written when it starts
+	// failing, not on every run.
+	purgeMu      sync.Mutex
+	purgeFailing bool
+	purgeSince   time.Time
+
+	dlMu sync.Mutex
+	dlAt map[int64]time.Time // download_started records, per share (download_log.go)
+}
+
+type auditIPSetting struct {
+	gen uint64
+	on  bool
+	at  time.Time
+}
+
+// auditLogIP is the audit_log_ip setting, cached until the settings change.
+func (s *Server) auditLogIP() bool {
+	gen := s.St.SettingsGen() // read before the value, so a concurrent change is seen next time
+	if c := s.audit.ipCache.Load(); c != nil && c.gen == gen && time.Since(c.at) < auditIPCacheTTL {
+		return c.on
+	}
+	on := s.St.SettingBool("audit_log_ip")
+	s.audit.ipCache.Store(&auditIPSetting{gen: gen, on: on, at: time.Now()})
+	return on
 }
 
 // goroutineID identifies the calling goroutine. logEvent has no request
@@ -133,7 +174,7 @@ func classifyAction(action string) (category, outcome string) {
 		return catSecurity, outcome
 	case "system_start", "system_stop", "audit_purged", "audit_purge_failed":
 		return catSystem, outcome
-	case "mfa_reset":
+	case "mfa_reset_requested", "mfa_reset_confirmed":
 		return catAccount, outcome
 	}
 	switch {
@@ -190,13 +231,16 @@ func (s *Server) auditWrite(e auditEntry, st *auditReq) error {
 		e.Outcome = "ok"
 	}
 	var ip string
-	if st != nil && st.r != nil && s.St.SettingBool("audit_log_ip") {
+	if st != nil && st.r != nil && s.auditLogIP() {
 		ip = s.clientIP(st.r)
 	}
 	rec := store.AuditRecord{Category: e.Category, ActorID: e.ActorID, ActorName: clip(e.ActorName, 100), ActorRole: e.ActorRole,
 		Action: clip(e.Action, 80), Target: clip(e.Target, 160), Outcome: e.Outcome, Detail: e.Detail, IP: ip}
 	var err error
 	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			time.Sleep(auditRetryBackoff) // let a short lock or busy period pass
+		}
 		if h := s.audit.hook.Load(); h != nil {
 			if err = (*h)(); err != nil {
 				continue
@@ -247,9 +291,6 @@ func (s *Server) userTarget(id int64) string {
 	}
 	return label
 }
-
-// flushEvents is kept for callers of the former queue; writes are synchronous.
-func (s *Server) flushEvents() {}
 
 // auditCritical writes an outcome=attempted record BEFORE a critical action
 // runs. When the record cannot be stored it answers 503 and returns false, so
@@ -313,8 +354,10 @@ func isMutating(method string) bool {
 }
 
 // auditMiddleware gives every request an audit state and, after the handler ran,
-// records what the handler did not: denied access on authenticated routes and a
-// generic api_mutation entry for mutating requests.
+// records what the handler did not: denied access for a signed-in user and a
+// generic api_mutation entry for mutating requests. When the handler panics, the
+// outcome is recorded as status 500 before the panic continues to the
+// Recoverer outside this middleware.
 func (s *Server) auditMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		st := &auditReq{r: r}
@@ -323,39 +366,56 @@ func (s *Server) auditMiddleware(next http.Handler) http.Handler {
 		s.audit.reqs.Store(gid, st)
 		defer s.audit.reqs.Delete(gid)
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		defer func() {
+			if p := recover(); p != nil {
+				s.auditOutcome(r, st, http.StatusInternalServerError)
+				panic(p)
+			}
+		}()
 		next.ServeHTTP(ww, r)
 		code := ww.Status()
 		if code == 0 {
 			code = http.StatusOK
 		}
-		pattern := ""
-		if rc := chi.RouteContext(r.Context()); rc != nil {
-			pattern = rc.RoutePattern()
-		}
-		key := r.Method + " " + pattern
-		u := st.user.Load()
-		e := auditEntry{ActorRole: roleOfUser(u)}
-		if u != nil {
-			e.ActorID, e.ActorName = u.ID, u.Username
-		}
-		switch {
-		case st.critical.Load() != nil && !st.logged.Load():
-			c := st.critical.Load()
-			e.Category, e.Action, e.Target = c.Category, c.Action, c.Target
-			e.Outcome = outcomeOfStatus(code)
-			e.Detail = "status=" + strconv.Itoa(code)
-		case (code == http.StatusUnauthorized || code == http.StatusForbidden) && (u != nil || r.Header.Get("Authorization") != "") && !st.logged.Load():
-			e.Category, e.Action, e.Target, e.Outcome = catSecurity, "access_denied", pattern, "denied"
-			e.Detail = r.Method + " status=" + strconv.Itoa(code)
-		case isMutating(r.Method) && !st.wrote.Load() && auditExempt[key] == "":
-			e.Category, e.Action, e.Outcome = routeCategory(pattern), "api_mutation", outcomeOfStatus(code)
-			e.Action = key
-			e.Detail = "status=" + strconv.Itoa(code)
-		default:
-			return
-		}
-		_ = s.auditWrite(e, st)
+		s.auditOutcome(r, st, code)
 	})
+}
+
+// auditOutcome writes the record of a finished request that its handler did
+// not write itself, if any.
+func (s *Server) auditOutcome(r *http.Request, st *auditReq, code int) {
+	if st.unauth.Load() && st.user.Load() == nil {
+		return
+	}
+	pattern := ""
+	if rc := chi.RouteContext(r.Context()); rc != nil {
+		pattern = rc.RoutePattern()
+	}
+	key := r.Method + " " + pattern
+	u := st.user.Load()
+	e := auditEntry{ActorRole: roleOfUser(u)}
+	if u != nil {
+		e.ActorID, e.ActorName = u.ID, u.Username
+	}
+	switch {
+	case st.critical.Load() != nil && !st.logged.Load():
+		c := st.critical.Load()
+		e.Category, e.Action, e.Target = c.Category, c.Action, c.Target
+		e.Outcome = outcomeOfStatus(code)
+		e.Detail = "status=" + strconv.Itoa(code)
+	// Only a known, signed-in user who is refused. Expired, revoked or junk
+	// tokens from anywhere are not recorded: they would flood the log.
+	case (code == http.StatusUnauthorized || code == http.StatusForbidden) && u != nil && !st.logged.Load():
+		e.Category, e.Action, e.Target, e.Outcome = catSecurity, "access_denied", pattern, "denied"
+		e.Detail = r.Method + " status=" + strconv.Itoa(code)
+	case isMutating(r.Method) && !st.wrote.Load() && auditExempt[key] == "":
+		e.Category, e.Action, e.Outcome = routeCategory(pattern), "api_mutation", outcomeOfStatus(code)
+		e.Action = key
+		e.Detail = "status=" + strconv.Itoa(code)
+	default:
+		return
+	}
+	_ = s.auditWrite(e, st)
 }
 
 func outcomeOfStatus(code int) string {
@@ -394,27 +454,56 @@ func (s *Server) auditDecryptFailed(fileID int64) {
 	s.logEvent(0, "system", "file_decrypt_failed", "file#"+strconv.FormatInt(fileID, 10), "")
 }
 
-// auditRetentionDays is the effective retention (1..365; an invalid stored value
-// falls back to the default instead of shortening the log).
+// auditRetentionDays is the effective retention (90..365; an invalid stored
+// value falls back to the default instead of shortening the log).
 func (s *Server) auditRetentionDays() int {
-	n, ok := parseStrictInt(s.St.Setting("audit_retention_days"), 1, 365)
+	n, ok := parseStrictInt(s.St.Setting("audit_retention_days"), store.AuditRetentionMinDays, 365)
 	if !ok {
 		return 90
 	}
 	return n
 }
 
-// purgeAudit applies the retention; called from maintain().
+// purgeAudit applies the retention; called from maintain(). audit_purge_failed
+// is recorded when purging starts to fail, not on every run, and
+// /api/audit/status reports the state until a purge succeeds again. A purge
+// refused because the chain is broken stays refused: recovery is to verify the
+// database offline (sendora-db audit-verify), investigate, and restore a backup
+// from before the damage.
 func (s *Server) purgeAudit() {
 	n, err := s.St.AuditPurge(time.Now().UTC().AddDate(0, 0, -s.auditRetentionDays()))
+	a := &s.audit
+	a.purgeMu.Lock()
+	wasFailing := a.purgeFailing
+	a.purgeFailing = err != nil
+	if err != nil && !wasFailing {
+		a.purgeSince = time.Now().UTC()
+	}
+	a.purgeMu.Unlock()
 	if err != nil {
 		log.Printf("audit retention purge: %v", err)
-		s.logEvent(0, "system", "audit_purge_failed", "", "retention purge refused or failed")
+		if !wasFailing {
+			detail := "retention purge failed"
+			if errors.Is(err, store.ErrAuditPurgeRefused) {
+				detail = "retention purge refused: the records to be removed do not verify"
+			}
+			s.logEvent(0, "system", "audit_purge_failed", "", detail)
+		}
 		return
+	}
+	if wasFailing {
+		log.Printf("audit retention purge works again")
 	}
 	if n > 0 {
 		s.logEvent(0, "system", "audit_purged", "", strconv.FormatInt(n, 10)+" records past retention")
 	}
+}
+
+// auditPurgeState reports whether retention purges currently fail, and since when.
+func (s *Server) auditPurgeState() (bool, time.Time) {
+	s.audit.purgeMu.Lock()
+	defer s.audit.purgeMu.Unlock()
+	return s.audit.purgeFailing, s.audit.purgeSince
 }
 
 // auditStartup records the start of the process and checks the database key.
@@ -432,21 +521,12 @@ func (s *Server) auditStartup() {
 // auditShutdown records an orderly stop.
 func (s *Server) auditShutdown() { s.logEvent(0, "system", "system_stop", "", "") }
 
-// auditStatus verifies the chain, reusing a result for a few seconds while no
-// record was added.
-func (s *Server) auditStatus() (store.AuditStatus, error) {
-	a := &s.audit
-	a.statusMu.Lock()
-	defer a.statusMu.Unlock()
-	if !a.statusAt.IsZero() && time.Since(a.statusAt) < auditStatusTTL && a.statusGen == a.appended.Load() {
-		return a.statusVal, nil
-	}
-	st, err := s.St.AuditVerify()
-	if err != nil {
-		return st, err
-	}
-	a.statusVal, a.statusAt, a.statusGen = st, time.Now(), a.appended.Load()
-	return st, nil
+// auditStatus verifies the chain incrementally: only records added since the
+// last check are walked, with the same result as a full verification.
+func (s *Server) auditStatus(ctx context.Context) (store.AuditStatus, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	return s.St.AuditVerifyIncremental(ctx)
 }
 
 // auditViewedOnce records audit_viewed at most once per period per actor.
@@ -467,7 +547,9 @@ func (s *Server) auditViewedOnce(u *User) {
 }
 
 // auditorAllowed is the allowlist of an auditor session: its own profile and
-// password, and the audit endpoints. Everything else is refused.
+// password, its own second factors (the /api/users/me/mfa self-service routes
+// only ever act on the caller's factors; without them an auditor could not enrol
+// when MFA is required), and the audit endpoints. Everything else is refused.
 func auditorAllowed(r *http.Request) bool {
 	switch r.URL.Path {
 	case "/api/users/me":
@@ -475,7 +557,12 @@ func auditorAllowed(r *http.Request) bool {
 	case "/api/audit", "/api/audit/export", "/api/audit/status":
 		return r.Method == http.MethodGet
 	}
-	return false
+	return mfaSelfServicePath(r.URL.Path)
+}
+
+// mfaSelfServicePath reports the routes that manage the caller's own factors.
+func mfaSelfServicePath(p string) bool {
+	return p == "/api/users/me/mfa" || strings.HasPrefix(p, "/api/users/me/mfa/")
 }
 
 func (s *Server) auditor(next http.Handler) http.Handler {

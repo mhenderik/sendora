@@ -578,7 +578,6 @@ func TestWebAuthnNothingSensitiveInLogsEventsOrErrors(t *testing.T) {
 	secrets = append(secrets, ch)
 	e.want(e.waLoginFinish(mfaToken, dev, ch, virtual.Options{}), 200, "login")
 
-	e.s.flushEvents()
 	rows, err := e.s.St.DB.Query(`SELECT actor_name||' '||action||' '||target||' '||detail FROM audit_log`)
 	if err != nil {
 		t.Fatal(err)

@@ -12,19 +12,36 @@ import (
 	"time"
 )
 
-// RunJobs starts periodic maintenance until ctx is cancelled.
+// jobsStopWait bounds how long GracefulStop waits for the maintenance loop.
+const jobsStopWait = 5 * time.Second
+
+// RunJobs starts periodic maintenance until ctx is cancelled. The stop itself is
+// recorded by GracefulStop, after the loop has ended.
 func (s *Server) RunJobs(ctx context.Context) {
 	s.RunDownloadMail(ctx)
 	s.auditStartup()
+	// Verify the whole chain once in the background (in chunks that free the
+	// database connection in between); status requests then only check new records.
+	go func() {
+		st, err := s.St.AuditVerifyIncremental(ctx)
+		switch {
+		case err != nil && ctx.Err() == nil:
+			log.Printf("audit log verification at start-up: %v", err)
+		case err == nil && !st.OK:
+			log.Printf("WARNING: the audit log does not verify: first broken record %d (%s)", st.FirstBroken, st.Reason)
+		}
+	}()
 	s.maintain()
 	t := time.NewTicker(10 * time.Minute)
 	lastBackup := time.Time{}
+	done := make(chan struct{})
+	s.jobsDone.Store(&done)
 	go func() {
+		defer close(done)
 		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
-				s.auditShutdown()
 				return
 			case now := <-t.C:
 				s.maintain()
@@ -40,6 +57,41 @@ func (s *Server) RunJobs(ctx context.Context) {
 		}
 	}()
 }
+
+// GracefulStop stops serving and records the stop: it cancels the background
+// jobs, shuts the HTTP server down (shutdown waits for requests in flight; when
+// it fails or timeout passes, closeNow drops the remaining connections), waits
+// (bounded) for the maintenance loop, and then writes system_stop
+// synchronously, so the caller may close the store when it returns. Only the
+// first call does the work; concurrent calls wait for it.
+func (s *Server) GracefulStop(timeout time.Duration, stopJobs func(), shutdown func(context.Context) error, closeNow func() error) {
+	s.stopOnce.Do(func() {
+		if stopJobs != nil {
+			stopJobs()
+		}
+		if shutdown != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			if err := shutdown(ctx); err != nil {
+				log.Printf("HTTP shutdown: %v; closing the remaining connections", err)
+				if closeNow != nil {
+					closeNow()
+				}
+			}
+			cancel()
+		}
+		if done := s.jobsDone.Load(); done != nil {
+			select {
+			case <-*done:
+			case <-time.After(jobsStopWait):
+				log.Printf("background jobs did not stop within %s", jobsStopWait)
+			}
+		}
+		s.recordStop()
+	})
+}
+
+// recordStop writes system_stop once per process.
+func (s *Server) recordStop() { s.stopRecorded.Do(s.auditShutdown) }
 
 func (s *Server) maintain() {
 	now := time.Now()

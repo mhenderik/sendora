@@ -259,7 +259,6 @@ func TestApplicationURLChangeIsLogged(t *testing.T) {
 	admin := e.setup()
 	e.setting("logging_enabled", "true")
 	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"application_url": "https://secret-host.example.com"}), 200, "change")
-	e.s.flushEvents()
 	logs := e.do("GET", "/api/logs?limit=100", admin, nil)
 	if !strings.Contains(string(logs.Body), "application_url_changed") {
 		t.Fatal("change not logged", string(logs.Body))

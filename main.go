@@ -84,25 +84,28 @@ func main() {
 		// per request in the security middleware, so large transfers are unaffected.
 		MaxHeaderBytes: 64 << 10,
 	}
-	// A confirmed database import stops serving and jobs, then swaps and re-execs.
-	srv.SetImportStopper(func() {
-		cancelJobs()
-		sc, c := context.WithTimeout(context.Background(), 10*time.Second)
-		defer c()
-		if err := hs.Shutdown(sc); err != nil {
-			hs.Close()
-		}
-	})
+	// An orderly stop: jobs end, requests in flight finish (at most 10 seconds),
+	// then system_stop is written synchronously. A confirmed database import uses
+	// the same stop before it carries the audit log, swaps and re-execs.
+	gracefulStop := func() { srv.GracefulStop(10*time.Second, cancelJobs, hs.Shutdown, hs.Close) }
+	srv.SetImportStopper(gracefulStop)
+	stopped := make(chan struct{})
 	go func() {
 		<-ctx.Done()
-		sc, c := context.WithTimeout(context.Background(), 10*time.Second)
-		defer c()
-		hs.Shutdown(sc)
+		gracefulStop()
+		close(stopped)
 	}()
 	log.Printf("sendora %s listening on %s", version, hs.Addr)
 	if err := hs.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
-	// During an applied import the swap/re-exec runs in a goroutine; do not exit.
-	srv.AwaitImport()
+	// ListenAndServe returns as soon as the shutdown begins. During an applied
+	// import the swap/re-exec runs in a goroutine and owns the store; do not exit.
+	if srv.AwaitImport() {
+		return
+	}
+	<-stopped
+	if err := st.Close(); err != nil {
+		log.Printf("closing the database: %v", err)
+	}
 }

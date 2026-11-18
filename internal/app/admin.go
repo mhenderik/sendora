@@ -244,6 +244,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The transaction has committed and released the connection.
+	s.St.SettingsChanged() // caches keyed on SettingsGen (audit_log_ip) refresh
 	me := s.ctxUser(r)
 	s.logEvent(me.ID, me.Username, "settings_changed", "settings", settingsChangeDetail(updates, olds))
 	for _, k := range []string{"audit_retention_days", "audit_log_ip", "application_url"} {
@@ -305,7 +306,48 @@ func settingsChangeDetail(updates, olds map[string]string) string {
 		}
 		parts = append(parts, k+": "+auditValue(olds[k])+" -> "+auditValue(updates[k]))
 	}
-	return strings.Join(parts, "; ")
+	return joinWithinAuditField(parts)
+}
+
+// joinWithinAuditField joins parts with "; " so the result fits one audit
+// field. Parts that do not fit are not cut off silently: they are counted as
+// " (+N more)".
+func joinWithinAuditField(parts []string) string {
+	var b strings.Builder
+	for i, p := range parts {
+		sep := ""
+		if i > 0 {
+			sep = "; "
+		}
+		rest := len(parts) - i
+		limit := store.AuditFieldMax
+		if rest > 1 {
+			limit -= len(fmt.Sprintf(" (+%d more)", rest)) // keep room to count what follows
+		}
+		if b.Len()+len(sep)+len(p) > limit {
+			if i == 0 {
+				b.WriteString(clipBytes(p, store.AuditFieldMax-len(fmt.Sprintf(" (+%d more)", rest))))
+				rest--
+			}
+			if rest > 0 {
+				fmt.Fprintf(&b, " (+%d more)", rest)
+			}
+			return b.String()
+		}
+		b.WriteString(sep + p)
+	}
+	return b.String()
+}
+
+// clipBytes cuts v to at most n bytes at a character boundary.
+func clipBytes(v string, n int) string {
+	if len(v) <= n {
+		return v
+	}
+	for n > 0 && !utf8.RuneStart(v[n]) {
+		n--
+	}
+	return v[:n]
 }
 
 // ---------- branding & backgrounds ----------

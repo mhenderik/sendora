@@ -155,26 +155,29 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		h := r.Header.Get("Authorization")
 		tok := strings.TrimPrefix(h, "Bearer ")
 		if tok == "" || tok == h {
-			jerr(w, 401, "unauthorized")
+			s.unauthenticated(w, r)
 			return
 		}
 		claims := jwt.MapClaims{}
 		_, err := jwt.ParseWithClaims(tok, claims, func(t *jwt.Token) (any, error) { return s.key(keyAccess), nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 		if err != nil {
-			jerr(w, 401, "unauthorized")
+			s.unauthenticated(w, r)
 			return
 		}
 		var revoked int
 		if s.St.DB.QueryRow(`SELECT COUNT(*) FROM revoked_access_tokens WHERE hash=? AND expires_at>?`, hashToken(tok), time.Now()).Scan(&revoked) != nil || revoked != 0 {
-			jerr(w, 401, "unauthorized")
+			s.unauthenticated(w, r)
 			return
 		}
 		id, _ := strconv.ParseInt(fmt.Sprint(claims["sub"]), 10, 64)
 		u, err := s.userByID(id)
 		if err != nil || claims["purpose"] != "access" || claims["credential"] != s.credentialVersion(u) {
-			jerr(w, 401, "unauthorized")
+			s.unauthenticated(w, r)
 			return
 		}
+		// From here on the caller is a verified, existing user: a refusal below is
+		// recorded as access_denied with this actor (unverified tokens are not).
+		s.auditSetActor(r, u)
 		if u.IsGuest {
 			var valid int
 			if s.St.DB.QueryRow(`SELECT COUNT(*) FROM reverse_invites WHERE guest_user_id=? AND completed_at IS NULL AND expires_at>?`, u.ID, time.Now()).Scan(&valid) != nil || valid != 1 {
@@ -186,7 +189,6 @@ func (s *Server) auth(next http.Handler) http.Handler {
 				return
 			}
 		}
-		s.auditSetActor(r, u)
 		if u.Auditor && !auditorAllowed(r) {
 			jerr(w, 403, "auditor accounts are read-only")
 			return

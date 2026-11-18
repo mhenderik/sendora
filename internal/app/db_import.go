@@ -440,7 +440,6 @@ func (s *Server) applyImport(w http.ResponseWriter, r *http.Request) {
 	s.logEvent(me.ID, me.Username, "db_import_applied", name, fmt.Sprintf("users=%d admins=%d shares=%d files=%d", p.summary.Users, p.summary.Admins, p.summary.Shares, p.summary.Files))
 	jout(w, 202, map[string]any{"ok": true, "backup": name, "restarting": true})
 	_ = http.NewResponseController(w).Flush()
-	s.flushEvents()
 	go s.runImportSwap(p)
 }
 
@@ -450,8 +449,11 @@ func (s *Server) applyImport(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runImportSwap(p *preparedImport) {
 	defer close(s.importDone)
 	if s.importStop != nil {
-		s.importStop()
+		s.importStop() // GracefulStop in production: also records system_stop
 	}
+	// The stop is recorded before the log is carried, so the record is part of
+	// the carried trail (a no-op when the stopper already wrote it).
+	s.recordStop()
 	// The audit trail of this instance survives the import: it replaces the
 	// imported file's own, so a backup can neither erase nor roll back records.
 	if err := s.St.CarryAuditLog(p.path); err != nil {
@@ -479,15 +481,17 @@ func (s *Server) runImportSwap(p *preparedImport) {
 func (s *Server) SetImportStopper(stop func()) { s.importStop = stop }
 
 // AwaitImport blocks main while an applied import is swapping and re-executing,
-// so the process is not terminated by the HTTP server having been shut down.
-func (s *Server) AwaitImport() {
+// so the process is not terminated by the HTTP server having been shut down. It
+// reports whether an import was being applied (the import owns the store then).
+func (s *Server) AwaitImport() bool {
 	if !s.importApplying.Load() {
-		return
+		return false
 	}
 	select {
 	case <-s.importDone:
 	case <-time.After(5 * time.Minute):
 	}
+	return true
 }
 
 // execSelf replaces the process image; sockets are close-on-exec and the key is

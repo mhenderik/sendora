@@ -36,9 +36,18 @@ func likeEscape(v string) string {
 	return strings.ReplaceAll(v, `_`, `\_`)
 }
 
-const (
+const auditPageMax = 100
+
+// Variables so tests can shorten them.
+var (
 	auditExportMax = 500000
-	auditPageMax   = 100
+	// auditTotalCap bounds the COUNT(*) behind a page's total; above it the
+	// total is reported as the cap with total_capped=true.
+	auditTotalCap int64 = 10000
+	// auditExportPage is how many records one query of an export reads; each
+	// page is written to the client before the next is read, so the single
+	// database connection is free in between.
+	auditExportPage = 2000
 )
 
 // parseAuditTime accepts RFC 3339 or a plain date (UTC).
@@ -52,8 +61,6 @@ func parseAuditTime(v string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// auditFilter builds the WHERE clause of a log query. hideShare removes the
-// share category (administrators never see it).
 // searchTerms splits a search text into lower-case words; spaces, underscores, dashes
 // and the wildcards * and % all separate words.
 func searchTerms(v string) []string {
@@ -62,17 +69,20 @@ func searchTerms(v string) []string {
 	})
 }
 
-func auditFilter(q url.Values, hideShare bool) (where string, args []any, msg string) {
+// auditFilter builds the WHERE clause of a log query. Administrators and
+// auditors read the same records, share events included.
+//
+// Text matching uses LIKE on the bare columns (no lower() around them, which
+// would defeat the indexes): SQLite's LIKE is case-insensitive for ASCII, which
+// is also all that lower() folded.
+func auditFilter(q url.Values) (where string, args []any, msg string) {
 	conds := []string{"1=1"}
-	if hideShare {
-		conds = append(conds, "category<>'share'")
-	}
 	// Free text: every word (split on spaces, underscores, dashes and * wildcards) must
 	// occur somewhere in the action, actor, target, detail or category. So "create_user"
 	// finds "user_created" and "create" finds all creations.
 	for _, term := range searchTerms(q.Get("q")) {
 		p := "%" + likeEscape(term) + "%"
-		conds = append(conds, `(lower(action) LIKE ? ESCAPE '\' OR lower(actor_name) LIKE ? ESCAPE '\' OR lower(target) LIKE ? ESCAPE '\' OR lower(detail) LIKE ? ESCAPE '\' OR lower(category) LIKE ? ESCAPE '\')`)
+		conds = append(conds, `(action LIKE ? ESCAPE '\' OR actor_name LIKE ? ESCAPE '\' OR target LIKE ? ESCAPE '\' OR detail LIKE ? ESCAPE '\' OR category LIKE ? ESCAPE '\')`)
 		args = append(args, p, p, p, p, p)
 	}
 	if v := q.Get("category"); v != "" {
@@ -87,7 +97,7 @@ func auditFilter(q url.Values, hideShare bool) (where string, args []any, msg st
 		args = append(args, v)
 	}
 	if v := strings.ToLower(strings.TrimSpace(q.Get("actor"))); v != "" {
-		conds = append(conds, `lower(actor_name) LIKE ? ESCAPE '\'`)
+		conds = append(conds, `actor_name LIKE ? ESCAPE '\'`)
 		args = append(args, "%"+likeEscape(v)+"%")
 	}
 	if v := q.Get("outcome"); v != "" {
@@ -119,22 +129,32 @@ func auditFilter(q url.Values, hideShare bool) (where string, args []any, msg st
 	return strings.Join(conds, " AND "), args, ""
 }
 
-func parsePaging(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
+// parsePaging reads limit, offset and the optional keyset parameter before_seq
+// (only records with a smaller seq; offset then counts from there).
+func parsePaging(w http.ResponseWriter, r *http.Request) (limit, offset int, beforeSeq int64, ok bool) {
 	limit = 50
 	for key, dest := range map[string]*int{"limit": &limit, "offset": &offset} {
 		if value := r.URL.Query().Get(key); value != "" {
 			n, err := strconv.Atoi(value)
 			if err != nil || n < 0 || (key == "limit" && n == 0) {
 				jerr(w, 400, "invalid pagination")
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 			*dest = n
 		}
 	}
+	if value := r.URL.Query().Get("before_seq"); value != "" {
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n <= 0 {
+			jerr(w, 400, "invalid pagination")
+			return 0, 0, 0, false
+		}
+		beforeSeq = n
+	}
 	if limit > auditPageMax {
 		limit = auditPageMax
 	}
-	return limit, offset, true
+	return limit, offset, beforeSeq, true
 }
 
 const auditCols = `seq,ts,category,actor_id,actor_name,actor_role,action,target,outcome,detail,ip,prev_hash,hash`
@@ -163,58 +183,90 @@ func (s *Server) auditRows(where string, args []any, order string, limit, offset
 	return out, rows.Err()
 }
 
+// auditCount counts matching records, stopping at limit+1 so a broad filter
+// never walks the whole table.
+func (s *Server) auditCount(where string, args []any, limit int) (int64, error) {
+	var n int64
+	err := s.St.DB.QueryRow(`SELECT COUNT(*) FROM (SELECT 1 FROM audit_log WHERE `+where+` LIMIT ?)`, append(append([]any{}, args...), limit+1)...).Scan(&n)
+	return n, err
+}
+
 func auditTime(ts string) time.Time {
 	t, _ := time.Parse(store.AuditTimeLayout, ts)
 	return t
 }
 
-// listLogs: GET /api/logs (administrators). Every category except share.
+// auditPage is one page of the log, newest first.
+type auditPage struct {
+	recs    []store.AuditRecord
+	total   int64 // matching records (without before_seq), at most auditTotalCap
+	capped  bool  // more than auditTotalCap records match
+	nextSeq int64 // before_seq of the next page; 0 when this is the last page
+}
+
+// readAuditPage is the query shared by /api/audit and /api/logs. It writes the
+// error response itself and returns false then.
+func (s *Server) readAuditPage(w http.ResponseWriter, r *http.Request) (auditPage, bool) {
+	var p auditPage
+	limit, offset, beforeSeq, ok := parsePaging(w, r)
+	if !ok {
+		return p, false
+	}
+	where, args, msg := auditFilter(r.URL.Query())
+	if msg != "" {
+		jerr(w, 400, msg)
+		return p, false
+	}
+	total, err := s.auditCount(where, args, int(auditTotalCap))
+	if err != nil {
+		jerr(w, 500, "database error")
+		return p, false
+	}
+	p.total, p.capped = min(total, auditTotalCap), total > auditTotalCap
+	pageWhere, pageArgs := where, args
+	if beforeSeq > 0 {
+		pageWhere += " AND seq<?"
+		pageArgs = append(append([]any{}, args...), beforeSeq)
+	}
+	if p.recs, err = s.auditRows(pageWhere, pageArgs, "DESC", limit, offset); err != nil {
+		jerr(w, 500, "database error")
+		return p, false
+	}
+	if len(p.recs) == limit {
+		p.nextSeq = p.recs[len(p.recs)-1].Seq
+	}
+	if u := s.ctxUser(r); u != nil {
+		s.auditViewedOnce(u)
+	}
+	return p, true
+}
+
+// listLogs: GET /api/logs (administrators). The same records as /api/audit,
+// with the field names this endpoint has always used.
 func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
-	limit, offset, ok := parsePaging(w, r)
+	p, ok := s.readAuditPage(w, r)
 	if !ok {
 		return
 	}
-	where, args, msg := auditFilter(r.URL.Query(), false)
-	if msg != "" {
-		jerr(w, 400, msg)
-		return
-	}
-	var total int64
-	if err := s.St.DB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE `+where, args...).Scan(&total); err != nil {
-		jerr(w, 500, "database error")
-		return
-	}
-	recs, err := s.auditRows(where, args, "DESC", limit, offset)
-	if err != nil {
-		jerr(w, 500, "database error")
-		return
-	}
-	out := make([]map[string]any, 0, len(recs))
-	for _, x := range recs {
+	out := make([]map[string]any, 0, len(p.recs))
+	for _, x := range p.recs {
 		out = append(out, map[string]any{"id": x.Seq, "created_at": auditTime(x.TS), "actor": x.ActorName, "role": x.ActorRole,
 			"category": x.Category, "action": x.Action, "target": x.Target, "outcome": x.Outcome, "detail": x.Detail})
 	}
-	jout(w, 200, map[string]any{"logs": out, "total": total, "enabled": true, "retention_days": s.auditRetentionDays()})
+	jout(w, 200, map[string]any{"logs": out, "total": p.total, "total_capped": p.capped, "next_before_seq": p.nextSeq,
+		"enabled": true, "retention_days": s.auditRetentionDays()})
 }
 
 // logsStatus: GET /api/logs/status (administrators): whether the chain verifies.
 func (s *Server) logsStatus(w http.ResponseWriter, r *http.Request) {
-	st, err := s.auditStatus()
+	st, err := s.auditStatus(r.Context())
 	if err != nil {
 		jerr(w, 500, "database error")
 		return
 	}
-	jout(w, 200, map[string]any{"verified": st.OK, "retention_days": s.auditRetentionDays(), "ip_logging": s.St.SettingBool("audit_log_ip")})
-}
-
-func writeCSV(w http.ResponseWriter, name string, records [][]string) {
-	h := w.Header()
-	h.Set("Content-Type", "text/csv; charset=utf-8")
-	h.Set("Content-Disposition", `attachment; filename="`+name+`-`+time.Now().UTC().Format("20060102-150405")+`.csv"`)
-	h.Set("Cache-Control", "no-store")
-	h.Set("X-Content-Type-Options", "nosniff")
-	cw := csv.NewWriter(w)
-	cw.WriteAll(records)
+	refused, _ := s.auditPurgeState()
+	jout(w, 200, map[string]any{"verified": st.OK, "retention_days": s.auditRetentionDays(), "ip_logging": s.St.SettingBool("audit_log_ip"),
+		"purge_refused": refused})
 }
 
 // exportDetail describes an export for the audit trail: format, number of records
@@ -229,31 +281,10 @@ func exportDetail(format string, n int, q url.Values) string {
 	return strings.Join(parts, " ")
 }
 
-// exportLogs: GET /api/logs/export (administrators), CSV without share events.
+// exportLogs: GET /api/logs/export (administrators): the same export as
+// /api/audit/export (CSV by default), under the file name sendora-logs.
 func (s *Server) exportLogs(w http.ResponseWriter, r *http.Request) {
-	where, args, msg := auditFilter(r.URL.Query(), false)
-	if msg != "" {
-		jerr(w, 400, msg)
-		return
-	}
-	recs, err := s.auditRows(where, args, "ASC", auditExportMax+1, 0)
-	if err != nil {
-		jerr(w, 500, "database error")
-		return
-	}
-	if len(recs) > auditExportMax {
-		jerr(w, 413, "too many records; narrow the filter")
-		return
-	}
-	records := [][]string{{"id", "time_utc", "category", "user", "role", "action", "target", "outcome", "details"}}
-	for _, x := range recs {
-		records = append(records, []string{strconv.FormatInt(x.Seq, 10), x.TS, x.Category, csvSafe(x.ActorName), x.ActorRole,
-			csvSafe(x.Action), csvSafe(x.Target), x.Outcome, csvSafe(x.Detail)})
-	}
-	if u := s.ctxUser(r); u != nil {
-		s.logEvent(u.ID, u.Username, "audit_exported", "audit_log", exportDetail("csv", len(recs), r.URL.Query()))
-	}
-	writeCSV(w, "sendora-logs", records)
+	s.exportAudit(w, r, "sendora-logs")
 }
 
 // ---------- auditor endpoints ----------
@@ -263,39 +294,33 @@ func auditJSON(x store.AuditRecord) map[string]any {
 		"action": x.Action, "target": x.Target, "outcome": x.Outcome, "detail": x.Detail, "ip": x.IP, "prev_hash": x.PrevHash, "hash": x.Hash}
 }
 
-// auditList: GET /api/audit (auditors): every category.
+// auditList: GET /api/audit (auditors and administrators): every category.
 func (s *Server) auditList(w http.ResponseWriter, r *http.Request) {
-	limit, offset, ok := parsePaging(w, r)
+	p, ok := s.readAuditPage(w, r)
 	if !ok {
 		return
 	}
-	where, args, msg := auditFilter(r.URL.Query(), false)
-	if msg != "" {
-		jerr(w, 400, msg)
-		return
-	}
-	var total int64
-	if err := s.St.DB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE `+where, args...).Scan(&total); err != nil {
-		jerr(w, 500, "database error")
-		return
-	}
-	recs, err := s.auditRows(where, args, "DESC", limit, offset)
-	if err != nil {
-		jerr(w, 500, "database error")
-		return
-	}
-	out := make([]map[string]any, 0, len(recs))
-	for _, x := range recs {
+	out := make([]map[string]any, 0, len(p.recs))
+	for _, x := range p.recs {
 		out = append(out, auditJSON(x))
 	}
-	if u := s.ctxUser(r); u != nil {
-		s.auditViewedOnce(u)
-	}
-	jout(w, 200, map[string]any{"records": out, "total": total, "retention_days": s.auditRetentionDays()})
+	jout(w, 200, map[string]any{"records": out, "total": p.total, "total_capped": p.capped, "next_before_seq": p.nextSeq,
+		"retention_days": s.auditRetentionDays()})
 }
 
-// auditExport: GET /api/audit/export?format=csv|jsonl (auditors).
+// auditExport: GET /api/audit/export?format=csv|jsonl (auditors and administrators).
 func (s *Server) auditExport(w http.ResponseWriter, r *http.Request) {
+	s.exportAudit(w, r, "sendora-audit")
+}
+
+var auditCSVHeader = []string{"seq", "time_utc", "category", "actor_id", "user", "role", "action", "target", "outcome", "details", "ip", "prev_hash", "hash"}
+
+// exportAudit streams the matching records oldest first. The number of records
+// is counted (cheaply, capped) and an oversized export refused with 413 before
+// anything is loaded; the export is then recorded, and only after that served,
+// in pages of auditExportPage records read by seq. The export covers the
+// records that existed when it started, so the count in its record is exact.
+func (s *Server) exportAudit(w http.ResponseWriter, r *http.Request, name string) {
 	format := r.URL.Query().Get("format")
 	if format == "" {
 		format = "csv"
@@ -304,54 +329,89 @@ func (s *Server) auditExport(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "format must be csv or jsonl")
 		return
 	}
-	where, args, msg := auditFilter(r.URL.Query(), false)
+	where, args, msg := auditFilter(r.URL.Query())
 	if msg != "" {
 		jerr(w, 400, msg)
 		return
 	}
-	recs, err := s.auditRows(where, args, "ASC", auditExportMax+1, 0)
+	var last int64
+	if err := s.St.DB.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM audit_log`).Scan(&last); err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	where += " AND seq<=?"
+	args = append(args, last)
+	n, err := s.auditCount(where, args, auditExportMax)
 	if err != nil {
 		jerr(w, 500, "database error")
 		return
 	}
-	if len(recs) > auditExportMax {
+	if n > int64(auditExportMax) {
 		jerr(w, 413, "too many records; narrow the filter")
 		return
 	}
 	if u := s.ctxUser(r); u != nil {
-		s.logEvent(u.ID, u.Username, "audit_exported", "audit_log", exportDetail(format, len(recs), r.URL.Query()))
-	}
-	if format == "csv" {
-		records := [][]string{{"seq", "time_utc", "category", "actor_id", "user", "role", "action", "target", "outcome", "details", "ip", "prev_hash", "hash"}}
-		for _, x := range recs {
-			records = append(records, []string{strconv.FormatInt(x.Seq, 10), x.TS, x.Category, strconv.FormatInt(x.ActorID, 10), csvSafe(x.ActorName), x.ActorRole,
-				csvSafe(x.Action), csvSafe(x.Target), x.Outcome, csvSafe(x.Detail), x.IP, x.PrevHash, x.Hash})
-		}
-		writeCSV(w, "sendora-audit", records)
-		return
+		s.logEvent(u.ID, u.Username, "audit_exported", "audit_log", exportDetail(format, int(n), r.URL.Query()))
 	}
 	h := w.Header()
-	h.Set("Content-Type", "application/x-ndjson; charset=utf-8")
-	h.Set("Content-Disposition", `attachment; filename="sendora-audit-`+time.Now().UTC().Format("20060102-150405")+`.jsonl"`)
+	if format == "csv" {
+		h.Set("Content-Type", "text/csv; charset=utf-8")
+	} else {
+		h.Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	}
+	h.Set("Content-Disposition", `attachment; filename="`+name+`-`+time.Now().UTC().Format("20060102-150405")+`.`+format+`"`)
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")
+	var cw *csv.Writer
 	enc := json.NewEncoder(w)
-	for _, x := range recs {
-		enc.Encode(x)
+	if format == "csv" {
+		cw = csv.NewWriter(w)
+		cw.Write(auditCSVHeader)
+	}
+	cursor := int64(0)
+	pageWhere := where + " AND seq>?"
+	for {
+		recs, err := s.auditRows(pageWhere, append(append([]any{}, args...), cursor), "ASC", auditExportPage, 0)
+		if err != nil {
+			// The response has started; a truncated file must not look complete.
+			panic(http.ErrAbortHandler)
+		}
+		for _, x := range recs {
+			if cw != nil {
+				cw.Write([]string{strconv.FormatInt(x.Seq, 10), x.TS, x.Category, strconv.FormatInt(x.ActorID, 10), csvSafe(x.ActorName), x.ActorRole,
+					csvSafe(x.Action), csvSafe(x.Target), x.Outcome, csvSafe(x.Detail), x.IP, x.PrevHash, x.Hash})
+			} else if enc.Encode(x) != nil {
+				return // the client went away
+			}
+		}
+		if cw != nil {
+			if cw.Flush(); cw.Error() != nil {
+				return
+			}
+		}
+		if len(recs) < auditExportPage {
+			return
+		}
+		cursor = recs[len(recs)-1].Seq
 	}
 }
 
-// auditStatusHandler: GET /api/audit/status (auditors).
+// auditStatusHandler: GET /api/audit/status (auditors and administrators).
 func (s *Server) auditStatusHandler(w http.ResponseWriter, r *http.Request) {
-	st, err := s.auditStatus()
+	st, err := s.auditStatus(r.Context())
 	if err != nil {
 		jerr(w, 500, "database error")
 		return
 	}
+	refused, since := s.auditPurgeState()
 	out := map[string]any{"verified": st.OK, "count": st.Count, "oldest_ts": st.OldestTS, "last_seq": st.LastSeq,
 		"retention_days": s.auditRetentionDays(), "ip_logging": s.St.SettingBool("audit_log_ip"),
 		"checkpoint":     map[string]any{"seq": st.CheckpointSeq, "hash": st.CheckpointHash},
-		"write_failures": s.audit.fails.Load()}
+		"write_failures": s.audit.fails.Load(),
+		"purge_refused":  refused}
+	if refused {
+		out["purge_refused_since"] = since.Format(time.RFC3339)
+	}
 	if !st.OK {
 		out["first_broken_seq"] = st.FirstBroken
 		out["reason"] = st.Reason
