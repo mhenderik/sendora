@@ -391,6 +391,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -405,6 +406,15 @@ import (
 	"time"
 	"unsafe"
 )
+
+// cipherKeyLiteral returns the SQLCipher raw-key literal x'<hex>' in a fresh
+// byte slice that the caller wipes after use.
+func cipherKeyLiteral(key []byte) []byte {
+	lit := make([]byte, 3+2*len(key))
+	lit[0], lit[1], lit[len(lit)-1] = 'x', '\'', '\''
+	hex.Encode(lit[2:], key)
+	return lit
+}
 
 // SQLiteTimestampFormats is timestamp formats understood by both this module
 // and SQLite.  The first format in the slice will be used when saving time
@@ -1796,10 +1806,16 @@ func (d *SQLiteDriver) Open(dsn string) (driver.Conn, error) {
 			C.sqlite3_close_v2(db)
 			return nil, errors.New("SQLCipher key must contain 32 bytes")
 		}
-		rawKey := fmt.Sprintf("x'%x'", d.CipherKey)
-		key := C.CString(rawKey)
-		rc := C.sqlite3_key(db, unsafe.Pointer(key), C.int(len(rawKey)))
-		C.free(unsafe.Pointer(key))
+		// The hex key is built in a byte slice and in a C buffer that are both
+		// wiped right after sqlite3_key, so no string copy of it is left behind.
+		rawKey := cipherKeyLiteral(d.CipherKey)
+		key := C.malloc(C.size_t(len(rawKey)))
+		cbuf := unsafe.Slice((*byte)(key), len(rawKey))
+		copy(cbuf, rawKey)
+		rc := C.sqlite3_key(db, key, C.int(len(rawKey)))
+		clear(cbuf)
+		clear(rawKey)
+		C.free(key)
 		if rc != C.SQLITE_OK {
 			err := lastError(db)
 			C.sqlite3_close_v2(db)

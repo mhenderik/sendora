@@ -29,6 +29,14 @@ func env(k, def string) string {
 }
 
 func main() {
+	if err := app.DisableCoreDumps(); err != nil {
+		log.Printf("WARNING: could not disable core dumps: %v", err)
+	}
+	// A readable or foreign-owned secret file stops the start, like the database key file.
+	if err := app.CheckSecretFiles(); err != nil {
+		log.Fatal(err)
+	}
+	app.WarnPlainSecrets()
 	// A short signing secret could be guessed offline from any captured token.
 	if sec, err := app.JWTSecretFromEnv(); err != nil {
 		log.Fatal(err)
@@ -40,6 +48,8 @@ func main() {
 		log.Fatal(err)
 	}
 	st, err := store.OpenEncryptedRecovering(env("DATA_DIR", "./data"), key, os.Getenv("SENDORA_DB_INITIALIZE") == "true", log.Printf)
+	// The store keeps its own copies; do not leave this one lying around.
+	clear(key)
 	if err != nil {
 		log.Fatal(err)
 	}

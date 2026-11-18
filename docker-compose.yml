@@ -17,6 +17,13 @@ services:
       - ./sendora-data:/data
     secrets:
       - sendora_db_key
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
 secrets:
   sendora_db_key:
