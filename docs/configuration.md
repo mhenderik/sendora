@@ -62,7 +62,11 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_IP_BAN_ALLOWLIST` | empty | `ip_ban_allowlist` |
 | `SENDORA_IP_BAN_ENABLED` | `true` | `ip_ban_enabled` |
 | `SENDORA_LOCAL_LOGIN_ENABLED` | `true` | `local_login_enabled` |
-| `SENDORA_AUDIT_LOG_IP` | `false` | `audit_log_ip` |
+| `SENDORA_AUDIT_FORWARD_STDOUT` | `false` | `audit_forward_stdout` (see *Forwarding the audit log*) |
+| `SENDORA_AUDIT_FORWARD_SYSLOG` | empty (off) | `audit_forward_syslog` (`host:port`) |
+| `SENDORA_AUDIT_FORWARD_SYSLOG_TLS` | `true` | `audit_forward_syslog_tls` |
+| `SENDORA_AUDIT_FORWARD_WEBHOOK_URL` | empty (off) | `audit_forward_webhook_url` |
+| `SENDORA_AUDIT_LOG_IP` | `false` | `audit_log_ip` (also decides whether the recipient address of a download is stored) |
 | `SENDORA_AUDIT_RETENTION_DAYS` | `90` | `audit_retention_days` (90 to 365; a stored value below 90 is raised to 90) |
 | `SENDORA_MAX_EXPIRY_TIME` | `30` | `max_expiry_time` |
 | `SENDORA_MAX_SHARE_SIZE` | `2048` | `max_share_size` |
@@ -91,6 +95,29 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_UI_DEFAULT_BACKGROUND` | `true` | `ui_default_background` |
 | `SENDORA_UI_SLIDESHOW_SECONDS` | `30` | `ui_slideshow_seconds` |
 | `SENDORA_UI_USE_UNSPLASH` | `false` | `ui_use_unsplash` |
+
+### Forwarding the audit log
+
+A copy of the audit log outside the host survives an attacker who controls the server (see the threat model). Admin → Security → Logging, or the variables above, configure up to three destinations at once:
+
+- **Standard output** (`audit_forward_stdout=true`): one JSON line per record, `{"sendora_audit":{...}}`, for the container log collector.
+- **Syslog** (`audit_forward_syslog=host:port`): RFC 5424 messages over TCP with octet-counting framing (RFC 6587; RFC 5425 when `audit_forward_syslog_tls=true`, the default, with certificate verification against the system roots). Facility 13 (log audit), severity warning for denied or failed outcomes, informational otherwise; APP-NAME `sendora`, MSGID `audit` or `chain_head`; the message is the same JSON as on standard output.
+- **Webhook** (`audit_forward_webhook_url`): HTTPS `POST` of a JSON array of such objects (batches of up to 100), TLS verified, redirects not followed; any 2xx answer counts as delivered. Plain `http://` is accepted for `localhost` only. A bearer token is read from the file named by `SENDORA_AUDIT_FORWARD_WEBHOOK_TOKEN_FILE` (same permission rule as every other `*_FILE` secret); never put credentials in the URL, which is visible in the settings and in the audit log.
+
+Every record is forwarded with all its fields including `seq`, `prev_hash` and `hash`, so the receiver can verify the chain and detect gaps. Every five minutes, at start and at an orderly stop, a heartbeat `{"sendora_audit_chain_head":{"last_seq":…,"hash":"…","ts":"…","reason":"start|periodic|stop"}}` carries the current end of the chain; it is not part of the chain. A head that moves backwards, or records missing below it, means the local log was changed or truncated.
+
+Forwarding never blocks or fails a request: each destination has an in-memory queue of 10,000 records, failed deliveries are retried with exponential backoff (1 second up to 5 minutes), and a full queue drops records and counts them. Delivery is at least once (a retried batch may arrive twice; deduplicate on `seq`). `GET /api/audit/status` and `GET /api/logs/status` report per destination `enabled`, `last_success`, `last_error` (an error class such as `connect`, `tls`, `timeout`, `http_status_503` or `token_file`, never an address or secret), `last_error_at`, `queued`, `dropped`, `failed` and `delivered`. Destinations on link-local addresses (including cloud metadata services) are refused, both when saved and after DNS resolution; private (RFC 1918) and loopback addresses are allowed. When a destination is removed or changed, the record of that settings change is still delivered to the old destination.
+
+### Readiness and metrics
+
+- `GET /api/health` is the liveness probe: the process answers HTTP.
+- `GET /api/health/ready` (no authentication) answers `200` or `503` with `{"status":"ok|fail","checks":{...}}`. Checks: `database` (a query), `audit_log` (the last audit write succeeded and the database is writable; no record is written), `disk` (at least 256 MiB free in `DATA_DIR`), `backup` (only while `backups_enabled`: the newest backup is at most 48 hours old, i.e. two automatic backup intervals; tolerated during the first hour after a start) and `audit_chain` (the incremental chain verification; while the start-up verification of a large log is still running the last known result is used). Use it as the Kubernetes readiness probe.
+- `GET /api/metrics` serves Prometheus text format and is **off (404)** unless `SENDORA_METRICS_TOKEN_FILE` names a file holding a token (same permission rule as the other `*_FILE` secrets). Scrapers send it as `Authorization: Bearer <token>`. Counters: `sendora_logins_total{result="ok|failed"}`, `sendora_mfa_failures_total`, `sendora_audit_write_failures_total`, `sendora_audit_forward_dropped_total{sink}`, `sendora_audit_forward_failed_total{sink}`, `sendora_decrypt_failures_total`, `sendora_ip_bans_total`, `sendora_downloads_started_total`, `sendora_uploads_completed_total`. Gauges: `sendora_upload_sessions_active`, `sendora_verified_download_slots_in_use`, `sendora_audit_forward_queue_length{sink}`. Counters restart at zero with the process.
+
+| Variable | Purpose |
+|---|---|
+| `SENDORA_AUDIT_FORWARD_WEBHOOK_TOKEN_FILE` | File with the bearer token for the audit webhook (optional). |
+| `SENDORA_METRICS_TOKEN_FILE` | File with the bearer token for `/api/metrics`; without it the endpoint is off. |
 
 ### Login providers
 

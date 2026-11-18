@@ -56,12 +56,12 @@ Status: written for 0.1.5 from the code and from independent code reviews. Sendo
 Mitigated for the database, for new share files and for backups. **Residual:** files uploaded before 0.1.2; upload parts in progress and temporary download snapshots (plain, short-lived); branding images; file names, sizes, counts and modification times (no padding).
 
 ### 5.2 Malicious or compromised administrator
-- Cannot read shares, download history or share names through the interface or the API (statistics are counts). The audit log is readable by administrators and auditors alike; it names shares only as `share#N`, so an administrator can see when shares are created, changed or downloaded and by whom, but not what they are called or what they contain. Every export of the log is recorded before it is served.
+- Cannot read shares, download history or share names through the interface or the API (statistics are counts). The audit log is readable by administrators and auditors alike; it names shares only as `share#N`, so an administrator can see when shares are created, changed or downloaded and by whom, but not what they are called or what they contain. Every export of the log and every backup download is recorded before it is served.
 - Cannot silently take over an account (see 4), cannot switch off or wipe the audit log.
 - **Residual:** an administrator can still delete a user (and so that user's shares), change settings, import a database and, with access to the host, everything the host operator can. Administrators can see user names and email addresses.
 
 ### 5.3 Host operator or memory access
-Not defended. The key and plain data are in process memory; the key file is readable by the service account. Mitigations are operational: disable core dumps, restrict host access, keep the key apart from the data, forward the audit log off the host.
+Not defended. The key and plain data are in process memory; the key file is readable by the service account. Mitigations are operational: disable core dumps, restrict host access, keep the key apart from the data, forward the audit log off the host (standard output, syslog or webhook with a periodic chain-head heartbeat; see [configuration](configuration.md#forwarding-the-audit-log)).
 
 ### 5.4 Account attacks
 Credential stuffing, password guessing, MFA bypass, session theft. Mitigated by bcrypt (cost 12), lockout, IP bans, TOTP and WebAuthn, rotating refresh tokens with reuse detection, short access tokens (15 min), absolute session limit (30 days). **Residual:** account lockout can be used to annoy a known username; OIDC logins rely on the identity provider's own MFA.

@@ -916,5 +916,14 @@
   "format must be csv or jsonl": "formaat moet csv of jsonl zijn",
   "Audit log retention (days, 90-365)": "Bewaartermijn auditlogboek (dagen, 90-365)",
   "Security settings": "Beveiligingsinstellingen",
-  "Two-step verification, the account password policy and the audit log are under Security.": "Tweestapsverificatie, het wachtwoordbeleid voor accounts en het auditlogboek staan onder Beveiliging."
+  "Two-step verification, the account password policy and the audit log are under Security.": "Tweestapsverificatie, het wachtwoordbeleid voor accounts en het auditlogboek staan onder Beveiliging.",
+  "Forward the audit log to another system": "Auditlog doorsturen naar een ander systeem",
+  "Write each audit log entry to standard output as one JSON line": "Elke auditlogregel als één JSON-regel naar standaarduitvoer schrijven",
+  "Syslog server (host:port, empty = off)": "Syslogserver (host:poort, leeg = uit)",
+  "Use TLS for syslog (certificate is verified)": "TLS gebruiken voor syslog (certificaat wordt gecontroleerd)",
+  "Webhook URL (https, empty = off)": "Webhook-URL (https, leeg = uit)",
+  "Each entry is sent with its sequence number and hashes, so the receiving system can check that nothing was removed or changed; every five minutes the latest position of the log is sent as well. Do not put credentials in the webhook URL: the bearer token is read from the file named by SENDORA_AUDIT_FORWARD_WEBHOOK_TOKEN_FILE. Delivery problems never block Sendora; they are counted in the audit log status.": "Elke regel wordt met zijn volgnummer en hashes verstuurd, zodat het ontvangende systeem kan controleren dat er niets is verwijderd of gewijzigd; elke vijf minuten wordt ook de laatste positie van het log verstuurd. Zet geen inloggegevens in de webhook-URL: het bearer-token wordt gelezen uit het bestand dat SENDORA_AUDIT_FORWARD_WEBHOOK_TOKEN_FILE aanwijst. Afleverproblemen houden Sendora nooit tegen; ze worden geteld in de status van het auditlog.",
+  "audit_forward_syslog must be host:port": "audit_forward_syslog moet de vorm host:poort hebben",
+  "audit log forwarding to link-local or cloud metadata addresses is not allowed": "het auditlog doorsturen naar link-local- of cloud-metadata-adressen is niet toegestaan",
+  "audit_forward_webhook_url must be an https:// URL without credentials (http only for localhost)": "audit_forward_webhook_url moet een https://-URL zonder inloggegevens zijn (http alleen voor localhost)"
 }

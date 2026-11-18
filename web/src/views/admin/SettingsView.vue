@@ -8,7 +8,7 @@ import { gbToBytes, bytesToGB } from '../../quota.mjs'
 const s = ref(null), msg = ref(''), err = ref(''), quotaGB = ref(''), managed = ref([])
 // Settings from the server configuration (ConfigMap) are shown read-only.
 const m = k => managed.value.includes(k)
-const SECURITY_KEYS = ['mfa_policy', 'mfa_reminder_days', 'mfa_totp_enabled', 'mfa_webauthn_enabled', 'account_password_require_upper', 'account_password_require_lower', 'account_password_require_digit', 'account_password_require_symbol', 'account_password_min_length', 'audit_retention_days', 'audit_log_ip']
+const SECURITY_KEYS = ['mfa_policy', 'mfa_reminder_days', 'mfa_totp_enabled', 'mfa_webauthn_enabled', 'account_password_require_upper', 'account_password_require_lower', 'account_password_require_digit', 'account_password_require_symbol', 'account_password_min_length', 'audit_retention_days', 'audit_log_ip', 'audit_forward_stdout', 'audit_forward_syslog', 'audit_forward_syslog_tls', 'audit_forward_webhook_url']
 async function load() {
   const settings = await api('/settings')
   quotaGB.value = bytesToGB(settings.default_storage_quota_bytes)
