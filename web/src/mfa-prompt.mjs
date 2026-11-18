@@ -12,4 +12,13 @@ export function shouldPromptMFA({ user, hasPassword, boot, dismissed }) {
   return !!(boot?.mfa_totp_enabled || boot?.mfa_webauthn_enabled)
 }
 
+export const DAY_MS = 86400000
+
+// A dismissed reminder stays away for `days` days (setting mfa_reminder_days, default 1).
+// With 0 days it only stays away for the rest of the browser session.
+export function reminderSuppressed({ days, dismissedAt, sessionDismissed, now = Date.now() }) {
+  if (!(days > 0)) return !!sessionDismissed
+  return Number(dismissedAt) > 0 && now - Number(dismissedAt) < days * DAY_MS
+}
+
 export const mfaPromptKey = userId => 'sendora.mfaPrompt.' + userId

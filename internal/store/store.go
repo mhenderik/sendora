@@ -277,6 +277,7 @@ var defaults = []struct{ Key, Grp, Val string }{
 	{"share_password_require_digit", "system", "false"},
 	{"share_password_require_symbol", "system", "false"},
 	{"mfa_policy", "system", "off"},
+	{"mfa_reminder_days", "system", "1"},
 	{"idle_logout_minutes", "system", "60"},
 	{"ip_ban_enabled", "system", "true"},
 	{"ip_ban_allowlist", "system", ""},

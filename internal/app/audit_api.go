@@ -54,15 +54,26 @@ func parseAuditTime(v string) (time.Time, bool) {
 
 // auditFilter builds the WHERE clause of a log query. hideShare removes the
 // share category (administrators never see it).
+// searchTerms splits a search text into lower-case words; spaces, underscores, dashes
+// and the wildcards * and % all separate words.
+func searchTerms(v string) []string {
+	return strings.FieldsFunc(strings.ToLower(v), func(r rune) bool {
+		return unicode.IsSpace(r) || r == '_' || r == '-' || r == '*' || r == '%'
+	})
+}
+
 func auditFilter(q url.Values, hideShare bool) (where string, args []any, msg string) {
 	conds := []string{"1=1"}
 	if hideShare {
 		conds = append(conds, "category<>'share'")
 	}
-	if v := strings.ToLower(strings.TrimSpace(q.Get("q"))); v != "" {
-		p := "%" + likeEscape(v) + "%"
-		conds = append(conds, `(lower(action) LIKE ? ESCAPE '\' OR lower(actor_name) LIKE ? ESCAPE '\' OR lower(target) LIKE ? ESCAPE '\' OR lower(detail) LIKE ? ESCAPE '\')`)
-		args = append(args, p, p, p, p)
+	// Free text: every word (split on spaces, underscores, dashes and * wildcards) must
+	// occur somewhere in the action, actor, target, detail or category. So "create_user"
+	// finds "user_created" and "create" finds all creations.
+	for _, term := range searchTerms(q.Get("q")) {
+		p := "%" + likeEscape(term) + "%"
+		conds = append(conds, `(lower(action) LIKE ? ESCAPE '\' OR lower(actor_name) LIKE ? ESCAPE '\' OR lower(target) LIKE ? ESCAPE '\' OR lower(detail) LIKE ? ESCAPE '\' OR lower(category) LIKE ? ESCAPE '\')`)
+		args = append(args, p, p, p, p, p)
 	}
 	if v := q.Get("category"); v != "" {
 		if !auditCategories[v] {
@@ -163,7 +174,7 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	where, args, msg := auditFilter(r.URL.Query(), true)
+	where, args, msg := auditFilter(r.URL.Query(), false)
 	if msg != "" {
 		jerr(w, 400, msg)
 		return
@@ -208,7 +219,7 @@ func writeCSV(w http.ResponseWriter, name string, records [][]string) {
 
 // exportLogs: GET /api/logs/export (administrators), CSV without share events.
 func (s *Server) exportLogs(w http.ResponseWriter, r *http.Request) {
-	where, args, msg := auditFilter(r.URL.Query(), true)
+	where, args, msg := auditFilter(r.URL.Query(), false)
 	if msg != "" {
 		jerr(w, 400, msg)
 		return

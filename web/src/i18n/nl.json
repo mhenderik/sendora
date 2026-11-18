@@ -871,5 +871,7 @@
   "Two-step verification is not set up yet": "Tweestapsverificatie is nog niet ingesteld",
   "Your account is protected by a password only. Set up an authenticator app or a passkey to protect it better.": "Je account is alleen met een wachtwoord beveiligd. Stel een authenticator-app of een passkey in om het beter te beveiligen.",
   "Set up now": "Nu instellen",
-  "Remind me later": "Herinner me later"
+  "Remind me later": "Herinner me later",
+  "Remind users who skipped two-step setup again after (days, 0 = at every sign-in)": "Herinner gebruikers die tweestapsverificatie hebben overgeslagen opnieuw na (dagen, 0 = bij elke aanmelding)",
+  "Accounts with a local password and no second factor see a reminder after signing in. Dismissing it hides it for this many days in that browser.": "Accounts met een lokaal wachtwoord en zonder tweede factor zien na het aanmelden een herinnering. Wegklikken verbergt die in die browser zoveel dagen."
 }

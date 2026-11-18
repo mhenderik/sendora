@@ -188,45 +188,53 @@ func TestAuditCriticalActionRefusedWhenAuditWriteFails(t *testing.T) {
 	e.want(e.do("POST", "/api/users", admin, map[string]any{"username": "dave", "password": "password123", "email": "d@x.io"}), 201, "create user")
 }
 
-func TestAuditAdminCannotSeeShareEventsAuditorCan(t *testing.T) {
+func TestAuditAdminAndAuditorSeeTheSameEvents(t *testing.T) {
 	e := newEnv(t)
 	admin := e.setup()
 	bob := e.mkUser(admin, "bob", false)
 	auditor := e.mkAuditor(admin, "audrey")
-	sh := e.share(bob, map[string]string{"a.txt": "abc"}, nil)
+	sh := e.share(bob, map[string]string{"a.txt": "abc"}, map[string]any{"name": "BobSecretShareName"})
 	e.want(sh, 201, "share")
 	e.want(e.do("GET", "/api/shares/"+sh.S("long_id")+"/download", "", nil), 200, "download")
 
+	// Administrators see share events, but never share names, link IDs or file names.
 	body := string(e.do("GET", "/api/logs?limit=100", admin, nil).Body)
-	if strings.Contains(body, "share_created") || strings.Contains(body, "download_started") || strings.Contains(body, `"category":"share"`) {
-		t.Fatalf("administrator sees share events: %s", body)
+	for _, want := range []string{"share_created", "download_started", "user_created"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("administrator misses %s: %s", want, body)
+		}
 	}
-	if !strings.Contains(body, "user_created") {
-		t.Fatal("administrator should see non-share events")
+	for _, leak := range []string{"BobSecretShareName", sh.S("long_id"), "a.txt"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("audit log leaks %q: %s", leak, body)
+		}
 	}
 	exp := e.do("GET", "/api/logs/export", admin, nil)
 	e.want(exp, 200, "admin export")
-	if strings.Contains(string(exp.Body), "share_created") || strings.Contains(string(exp.Body), "download_started") {
-		t.Fatal("export leaks share events")
+	if !strings.Contains(string(exp.Body), "share_created") {
+		t.Fatal("admin export misses share events")
 	}
-	e.want(e.do("GET", "/api/logs?category=share", admin, nil), 200, "share category filter")
-	if r := e.do("GET", "/api/logs?category=share", admin, nil); r.J()["total"].(float64) != 0 {
-		t.Fatal("share category must stay empty for administrators")
+	if r := e.do("GET", "/api/logs?category=share", admin, nil); r.J()["total"].(float64) == 0 {
+		t.Fatal("share category must be visible to administrators")
 	}
-	if r := e.do("GET", "/api/logs?q=share_created", admin, nil); r.J()["total"].(float64) != 0 {
-		t.Fatal("search finds share events")
+	if r := e.do("GET", "/api/logs?q=share_created", admin, nil); r.J()["total"].(float64) == 0 {
+		t.Fatal("search must find share events")
 	}
 
-	r := e.do("GET", "/api/audit?limit=100", auditor, nil)
-	e.want(r, 200, "auditor list")
-	if !strings.Contains(string(r.Body), "share_created") || !strings.Contains(string(r.Body), "download_started") {
-		t.Fatalf("auditor must see share events: %s", r.Body)
+	// The auditor endpoints return the same records for an administrator.
+	// (Reading the log is itself recorded once per reader, so let both read once
+	// before comparing.)
+	e.want(e.do("GET", "/api/audit?limit=100", auditor, nil), 200, "auditor list")
+	e.want(e.do("GET", "/api/audit?limit=100", admin, nil), 200, "administrator reads /api/audit")
+	ra := e.do("GET", "/api/audit?limit=100", auditor, nil)
+	rb := e.do("GET", "/api/audit?limit=100", admin, nil)
+	if ra.J()["total"] != rb.J()["total"] {
+		t.Fatalf("administrator and auditor see different logs: %v vs %v", ra.J()["total"], rb.J()["total"])
 	}
-	e.want(e.do("GET", "/api/audit", admin, nil), 403, "admin cannot read /api/audit")
-	e.want(e.do("GET", "/api/audit", bob, nil), 403, "user cannot read /api/audit")
-	e.want(e.do("GET", "/api/audit", "", nil), 401, "anonymous")
-	e.want(e.do("GET", "/api/logs", auditor, nil), 403, "auditor cannot use admin logs")
-	e.want(e.do("GET", "/api/logs/export", auditor, nil), 403, "auditor cannot use admin export")
+	e.want(e.do("GET", "/api/audit/status", admin, nil), 200, "administrator reads the chain status")
+	e.want(e.do("GET", "/api/audit/export?format=jsonl", admin, nil), 200, "administrator exports JSONL")
+	// Ordinary users never read it.
+	e.want(e.do("GET", "/api/audit", bob, nil), 403, "user cannot read the audit log")
 }
 
 func TestAuditorEndpointsFiltersExportAndViewThrottle(t *testing.T) {
@@ -252,8 +260,19 @@ func TestAuditorEndpointsFiltersExportAndViewThrottle(t *testing.T) {
 	if r := e.do("GET", "/api/audit?action=bulk_event&actor=TESTER&q=t129", auditor, nil); r.J()["total"].(float64) != 1 {
 		t.Fatalf("filters: %s", r.Body)
 	}
-	if r := e.do("GET", "/api/audit?q=100%25", auditor, nil); r.J()["total"].(float64) != 0 {
-		t.Fatal("wildcard must be literal")
+	// Words are separated by spaces, underscores, dashes and * wildcards, and each may
+	// occur anywhere: "bulk*event", "event bulk" and "bulk_event" find the same records.
+	base := e.do("GET", "/api/audit?q=bulk_event", auditor, nil).J()["total"].(float64)
+	if base == 0 {
+		t.Fatal("word search finds nothing")
+	}
+	for _, q := range []string{"bulk*event", "event+bulk", "BULK-EVENT", "bulk"} {
+		if got := e.do("GET", "/api/audit?q="+q, auditor, nil).J()["total"].(float64); got != base {
+			t.Fatalf("search %q: %v results, want %v", q, got, base)
+		}
+	}
+	if got := e.do("GET", "/api/audit?q=create", auditor, nil).J()["total"].(float64); got == 0 {
+		t.Fatal("partial word must match")
 	}
 	future := time.Now().UTC().AddDate(0, 0, 2).Format("2006-01-02")
 	if r := e.do("GET", "/api/audit?from="+future, auditor, nil); r.J()["total"].(float64) != 0 {
@@ -557,7 +576,7 @@ func TestAuditorIsReadOnlyAndNeverAdmin(t *testing.T) {
 	e.want(put(map[string]any{"admin": false, "auditor": true}), 200, "grant auditor")
 	e.want(put(map[string]any{"admin": true}), 400, "make an auditor admin without removing the role")
 	e.want(put(map[string]any{"admin": true, "auditor": false}), 200, "swap auditor for admin")
-	e.want(e.do("GET", "/api/audit", user, nil), 403, "old token of the demoted user")
+	e.want(e.do("GET", "/api/audit", user, nil), 200, "the former auditor is now an administrator, who reads the same log")
 	// Auditors are not administrators: admin routes stay closed.
 	e.want(e.do("GET", "/api/users", auditor, nil), 403, "auditor user list")
 	if r := auditRowsWhere(e, "action='user_role_changed'"); len(r) != 2 {

@@ -98,8 +98,27 @@ func validateMFASetting(key, val string) (owned bool, err error) {
 			return true, fmt.Errorf("%s must be true or false", key)
 		}
 		return true, nil
+	case "mfa_reminder_days":
+		if _, ok := parseStrictInt(val, 0, mfaReminderMaxDays); !ok {
+			return true, fmt.Errorf("mfa_reminder_days must be a whole number of days from 0 to %d (0 = ask again at every sign-in)", mfaReminderMaxDays)
+		}
+		return true, nil
 	}
 	return false, nil
+}
+
+// How long a dismissed "two-step verification is not set up" reminder stays away.
+const (
+	mfaReminderDefaultDays = 1
+	mfaReminderMaxDays     = 365
+)
+
+func (s *Server) mfaReminderDays() int {
+	n, ok := parseStrictInt(s.St.Setting("mfa_reminder_days"), 0, mfaReminderMaxDays)
+	if !ok {
+		return mfaReminderDefaultDays
+	}
+	return n
 }
 
 // mfaGlobal is the stored policy; a corrupt value fails closed to "all".

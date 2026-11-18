@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { shouldPromptMFA, mfaPromptKey } from './mfa-prompt.mjs'
+import { shouldPromptMFA, mfaPromptKey, reminderSuppressed, DAY_MS } from './mfa-prompt.mjs'
 
 const boot = { mfa_totp_enabled: true, mfa_webauthn_enabled: false }
 const user = { id: 3, mfa_enabled: false }
@@ -29,4 +29,19 @@ test('does not ask guests or auditors, or when no method can be enrolled', () =>
 
 test('dismissal is remembered per user', () => {
   assert.notEqual(mfaPromptKey(1), mfaPromptKey(2))
+})
+
+test('a dismissed reminder returns after the configured number of days', () => {
+  const now = 1_000_000_000_000
+  const at = now - (DAY_MS - 1000) // dismissed just under a day ago
+  assert.equal(reminderSuppressed({ days: 1, dismissedAt: at, now }), true)
+  assert.equal(reminderSuppressed({ days: 1, dismissedAt: now - DAY_MS - 1000, now }), false)
+  assert.equal(reminderSuppressed({ days: 7, dismissedAt: now - 3 * DAY_MS, now }), true)
+  assert.equal(reminderSuppressed({ days: 7, dismissedAt: now - 8 * DAY_MS, now }), false)
+  assert.equal(reminderSuppressed({ days: 1, dismissedAt: 0, now }), false)
+})
+
+test('with 0 days the reminder only stays away for the browser session', () => {
+  assert.equal(reminderSuppressed({ days: 0, dismissedAt: Date.now(), sessionDismissed: false }), false)
+  assert.equal(reminderSuppressed({ days: 0, dismissedAt: 0, sessionDismissed: true }), true)
 })

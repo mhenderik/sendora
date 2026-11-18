@@ -480,7 +480,7 @@ func auditorAllowed(r *http.Request) bool {
 
 func (s *Server) auditor(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if u := s.ctxUser(r); u == nil || !u.Auditor {
+		if u := s.ctxUser(r); u == nil || !(u.Auditor || u.Admin) {
 			jerr(w, 403, "forbidden")
 			return
 		}

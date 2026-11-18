@@ -37,7 +37,7 @@ const (
 	polOwner accessPolicy = "owner"
 	// polAdmin: administrators only.
 	polAdmin accessPolicy = "admin"
-	// polAuditor: auditors only (administrators are refused as well).
+	// polAuditor: the audit log: auditors and administrators read the same log.
 	polAuditor accessPolicy = "auditor"
 	// polGuestAllowed: every signed-in principal including guests and auditors.
 	polGuestAllowed accessPolicy = "guest-allowed"
@@ -233,7 +233,7 @@ func (p accessPolicy) allows(who principal) bool {
 	case polAdmin:
 		return who == pAdmin
 	case polAuditor:
-		return who == pAuditor
+		return who == pAuditor || who == pAdmin
 	case polGuestAllowed:
 		return who != pAnon
 	case polUserOrGuest:
@@ -677,9 +677,10 @@ func TestRouteAccessAdminSeesNoShareIdentifiers(t *testing.T) {
 			}
 		}
 	}
-	// Share-category audit events are visible to auditors only.
-	if got := a.do("GET", "/api/logs?category=share", admin, nil); got.Code != 200 || got.J()["total"].(float64) != 0 {
-		t.Errorf("admin log shows share events: %d %s", got.Code, got.Body)
+	// Administrators and auditors read the same audit log. It names shares only by
+	// number (share#N), never by name, link ID or file name (checked above).
+	if got := a.do("GET", "/api/logs?category=share", admin, nil); got.Code != 200 || got.J()["total"].(float64) == 0 {
+		t.Errorf("admin log must show share events too: %d %s", got.Code, got.Body)
 	}
 	aud := a.do("GET", "/api/audit?category=share", a.token(pAuditor), nil)
 	a.want(aud, 200, "auditor audit log")
@@ -703,8 +704,9 @@ func TestRouteAccessAuditorAndAdminAreSeparated(t *testing.T) {
 			}
 		case polAuditor:
 			auditRoutes++
-			if r := a.do(method, fx.path(spec, route, false), a.token(pAdmin), spec.body); r.Code != 403 {
-				t.Errorf("administrator reached audit route %s: %d %s", spec.key, r.Code, r.Body)
+			// Administrators read the same audit log as auditors.
+			if r := a.do(method, fx.path(spec, route, false), a.token(pAdmin), spec.body); r.Code != 200 {
+				t.Errorf("administrator cannot read audit route %s: %d %s", spec.key, r.Code, r.Body)
 			}
 		}
 		// The auditor may only use its allowlist (plus the public routes).

@@ -499,6 +499,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		"mfa_policy":                     s.mfaGlobal(),
 		"idle_logout_minutes":            s.idleLogoutMinutes(),
 		"mfa_totp_enabled":               s.mfaTOTPEnabled(),
+		"mfa_reminder_days":              s.mfaReminderDays(),
 		"mfa_webauthn_enabled":           s.mfaWebAuthnEnabled(),
 		"webauthn_available":             webauthnAvailable(s.mfaAppURL()),
 	}

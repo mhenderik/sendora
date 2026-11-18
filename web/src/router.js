@@ -29,7 +29,7 @@ const routes = [
       { path: 'security', component: () => import('./views/admin/Security.vue') },
       { path: 'languages', component: () => import('./views/admin/Languages.vue') },
       { path: 'backups', component: () => import('./views/admin/Backups.vue') },
-      { path: 'logs', component: () => import('./views/admin/Logs.vue') }
+      { path: 'logs', component: () => import('./views/Audit.vue') }
     ]
   },
   { path: '/:pathMatch(.*)*', redirect: '/' }

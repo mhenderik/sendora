@@ -9,7 +9,7 @@ import { onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { session as sess, refresh as refreshSession } from './api'
 import { createIdleMonitor } from './idle.mjs'
 import { isBusy } from './transfers.mjs'
-import { shouldPromptMFA, mfaPromptKey } from './mfa-prompt.mjs'
+import { shouldPromptMFA, mfaPromptKey, reminderSuppressed } from './mfa-prompt.mjs'
 
 const router = useRouter(), route = useRoute()
 const ready = true
@@ -27,11 +27,20 @@ watchEffect(() => {
 // The same call tells whether the account uses a local password, which decides if we
 // remind the user that two-step verification is not set up yet.
 const mfaPrompt = ref(false), mfaBtn = ref(null)
-function mfaDismissed(id) { try { return sessionStorage.getItem(mfaPromptKey(id)) === '1' } catch { return false } }
+// A dismissed reminder returns after mfa_reminder_days days (default 1; 0 = next sign-in).
+// The time is kept in this browser; the session flag covers the 0-day case.
+function mfaDismissed(id) {
+  let dismissedAt = 0, sessionDismissed = false
+  try { dismissedAt = Number(localStorage.getItem(mfaPromptKey(id))) || 0 } catch {}
+  try { sessionDismissed = sessionStorage.getItem(mfaPromptKey(id)) === '1' } catch {}
+  return reminderSuppressed({ days: app.boot?.mfa_reminder_days ?? 1, dismissedAt, sessionDismissed })
+}
 function dismissMfa() {
   const id = session.user?.id
   mfaPrompt.value = false
-  if (id) { try { sessionStorage.setItem(mfaPromptKey(id), '1') } catch {} }
+  if (!id) return
+  try { localStorage.setItem(mfaPromptKey(id), String(Date.now())) } catch {}
+  try { sessionStorage.setItem(mfaPromptKey(id), '1') } catch {}
 }
 function setupMfa() { dismissMfa(); router.push('/profile') }
 watch(mfaPrompt, async open => { if (open) { await nextTick(); mfaBtn.value?.focus() } })
