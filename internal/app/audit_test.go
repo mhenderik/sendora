@@ -766,3 +766,51 @@ func TestAuditCriticalRoutesAreGuarded(t *testing.T) {
 		}
 	}
 }
+
+// Whoever downloads the audit log is recorded: who, when, format, how many records
+// and which filters. The record is written before the export is served, and an
+// export is refused when it cannot be recorded.
+func TestAuditExportsAreRecordedBeforeServing(t *testing.T) {
+	e := newEnv(t)
+	admin := e.setup()
+	auditor := e.mkAuditor(admin, "audrey")
+
+	e.want(e.do("GET", "/api/logs/export?q=login&category=auth", admin, nil), 200, "admin CSV export")
+	e.want(e.do("GET", "/api/audit/export?format=jsonl&from=2020-01-01", auditor, nil), 200, "auditor JSONL export")
+	e.want(e.do("GET", "/api/audit/export?format=csv", admin, nil), 200, "admin CSV export through the audit endpoint")
+
+	rows := auditRowsWhere(e, "action='audit_exported'")
+	byRole := map[string]int{}
+	var okDetails []string
+	for _, r := range rows {
+		byRole[r.Role+"/"+r.Outcome]++
+		if r.Target != "audit_log" {
+			t.Fatalf("unexpected target %q", r.Target)
+		}
+		if r.Outcome == "ok" {
+			okDetails = append(okDetails, r.Detail)
+		}
+	}
+	if byRole["admin/attempted"] != 2 || byRole["admin/ok"] != 2 || byRole["auditor/attempted"] != 1 || byRole["auditor/ok"] != 1 {
+		t.Fatalf("every export needs an attempted and an ok record, got %v", byRole)
+	}
+	joined := strings.Join(okDetails, " | ")
+	for _, want := range []string{"csv", "jsonl", "records", "q=login", "category=auth", "from=2020-01-01"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("export details miss %q: %s", want, joined)
+		}
+	}
+
+	// Without a record there is no export.
+	fail := func() error { return errors.New("forced audit failure") }
+	e.s.audit.hook.Store(&fail)
+	for _, c := range []struct{ who, path string }{
+		{admin, "/api/logs/export"}, {admin, "/api/audit/export?format=jsonl"}, {auditor, "/api/audit/export"},
+	} {
+		r := e.do("GET", c.path, c.who, nil)
+		if r.Code != 503 || strings.Contains(string(r.Body), "sendora-audit") || strings.Contains(string(r.Body), "prev_hash") {
+			t.Fatalf("%s served without being recorded: %d %.80s", c.path, r.Code, r.Body)
+		}
+	}
+	e.s.audit.hook.Store(nil)
+}

@@ -51,11 +51,11 @@ onMounted(() => { load(0); loadStatus() })
       <strong v-else>{{ t('Chain BROKEN at record {n}: {reason}', { n: status.first_broken_seq, reason: status.reason }) }}</strong>
       <div class="muted">{{ t('Records: {n}', { n: status.count }) }} · {{ t('Oldest: {d}', { d: fmtDate(status.oldest_ts) }) }} · {{ t('Retention: {n} day(s)', { n: status.retention_days }) }} · {{ t('Checkpoint: {n}', { n: status.checkpoint.seq }) }} · {{ t('Write failures: {n}', { n: status.write_failures }) }}</div>
     </div>
-    <form class="actions" style="margin:12px 0" @submit.prevent="search">
-      <input v-model="f.q" :placeholder="t('Filter (action, user, target)')" style="max-width:240px" />
+    <form class="audit-filters" @submit.prevent="search">
+      <input v-model="f.q" :placeholder="t('Filter (action, user, target)')" />
       <select v-model="f.category" :aria-label="t('Category')"><option value="">{{ t('All categories') }}</option><option v-for="c in categories" :key="c" :value="c">{{ c }}</option></select>
-      <input v-model="f.action" :placeholder="t('Action')" style="max-width:160px" />
-      <input v-model="f.actor" :placeholder="t('User')" style="max-width:140px" />
+      <input v-model="f.action" :placeholder="t('Action')" />
+      <input v-model="f.actor" :placeholder="t('User')" />
       <select v-model="f.outcome" :aria-label="t('Outcome')"><option value="">{{ t('All outcomes') }}</option><option v-for="o in outcomes" :key="o" :value="o">{{ o }}</option></select>
       <input v-model="f.from" type="date" :aria-label="t('From')" /><input v-model="f.to" type="date" :aria-label="t('To')" />
       <button class="small secondary">{{ t('Search') }}</button></form>
@@ -70,3 +70,7 @@ onMounted(() => { load(0); loadStatus() })
       <button class="small secondary" :disabled="busy || offset + limit >= data.total" @click="load(offset + limit)">{{ t('Next') }}</button></div>
   </div>
 </template>
+<style scoped>
+.audit-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:12px 0;align-items:center}
+.audit-filters button{justify-self:start}
+</style>

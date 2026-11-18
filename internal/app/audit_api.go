@@ -217,6 +217,18 @@ func writeCSV(w http.ResponseWriter, name string, records [][]string) {
 	cw.WriteAll(records)
 }
 
+// exportDetail describes an export for the audit trail: format, number of records
+// and the filters used, so it is clear which part of the log left the system.
+func exportDetail(format string, n int, q url.Values) string {
+	parts := []string{format, strconv.Itoa(n) + " records"}
+	for _, k := range []string{"q", "category", "action", "actor", "outcome", "from", "to"} {
+		if v := strings.TrimSpace(q.Get(k)); v != "" {
+			parts = append(parts, k+"="+clip(v, 40))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // exportLogs: GET /api/logs/export (administrators), CSV without share events.
 func (s *Server) exportLogs(w http.ResponseWriter, r *http.Request) {
 	where, args, msg := auditFilter(r.URL.Query(), false)
@@ -239,7 +251,7 @@ func (s *Server) exportLogs(w http.ResponseWriter, r *http.Request) {
 			csvSafe(x.Action), csvSafe(x.Target), x.Outcome, csvSafe(x.Detail)})
 	}
 	if u := s.ctxUser(r); u != nil {
-		s.logEvent(u.ID, u.Username, "logs_exported", "audit_log", strconv.Itoa(len(recs))+" entries")
+		s.logEvent(u.ID, u.Username, "audit_exported", "audit_log", exportDetail("csv", len(recs), r.URL.Query()))
 	}
 	writeCSV(w, "sendora-logs", records)
 }
@@ -307,7 +319,7 @@ func (s *Server) auditExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if u := s.ctxUser(r); u != nil {
-		s.logEvent(u.ID, u.Username, "audit_exported", "audit_log", format+" "+strconv.Itoa(len(recs))+" records")
+		s.logEvent(u.ID, u.Username, "audit_exported", "audit_log", exportDetail(format, len(recs), r.URL.Query()))
 	}
 	if format == "csv" {
 		records := [][]string{{"seq", "time_utc", "category", "actor_id", "user", "role", "action", "target", "outcome", "details", "ip", "prev_hash", "hash"}}

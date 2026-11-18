@@ -312,7 +312,8 @@ func (s *Server) Router() http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(s.auditor)
 				r.Get("/audit", s.auditList)
-				r.Get("/audit/export", s.auditExport)
+				// An export is recorded BEFORE it is served; without a record there is no export.
+				r.With(s.critical("audit_exported", "audit_log")).Get("/audit/export", s.auditExport)
 				r.Get("/audit/status", s.auditStatusHandler)
 			})
 
@@ -338,7 +339,7 @@ func (s *Server) Router() http.Handler {
 				r.Get("/ip-bans", s.listIPBansHandler)
 				r.Delete("/ip-bans", s.deleteIPBanHandler)
 				r.Get("/logs", s.listLogs)
-				r.Get("/logs/export", s.exportLogs)
+				r.With(s.critical("audit_exported", "audit_log")).Get("/logs/export", s.exportLogs)
 				r.Get("/logs/status", s.logsStatus)
 
 				r.Get("/themes", s.listThemes)

@@ -17,10 +17,17 @@
   (default off). Changes are themselves audited with the old and new value. The old
   `logging_enabled` and `log_retention_hours` settings and their `SENDORA_*` variables
   are ignored; the existing event log (24 hours at most) is dropped by the migration.
-- New read-only `auditor` role (mutually exclusive with administrator). Auditors see
-  all categories through `/api/audit`, export CSV or JSON Lines and see the chain status;
-  administrators keep `/api/logs` but never see share events (uploads, downloads,
-  previews, invites) and see only whether the chain verifies.
+- New read-only `auditor` role (mutually exclusive with administrator). Auditors and
+  administrators read the same audit log: all categories through `/api/audit` (the admin
+  Logs page is the same page), CSV or JSON Lines export with the chain hashes, and the
+  chain status. Share events name a share only by number (`share#N`), never by name,
+  link ID or file name, and nobody can read share content through the log.
+- **Every download of the audit log is recorded** (person, role, format, number of records
+  and the filters used). The record is written before the export is served; if it cannot
+  be written, the export is refused. The old `logs_exported` action is now `audit_exported`.
+- **Audit log search** works on words: spaces, underscores, dashes and `*` separate them,
+  and each word may occur anywhere in the action, user, target, detail or category, so
+  `create_user`, `user create` and `create` all find `user_created`.
 - `sendora-db audit-verify -source <db> -key-file <key> [-json]` verifies the chain
   offline and exits non-zero on a break. Importing a database keeps this instance's
   audit log instead of replacing it with the backup's.
@@ -136,9 +143,15 @@
   image, video and audio types is ever shown inline). All remain configurable.
 - **Two-step verification reminder:** a signed-in account that signs in with a local
   password and has no second factor yet gets a dialog ("Two-step verification is not set
-  up yet") with *Set up now* and *Remind me later* (hidden for the rest of that browser
-  session). Accounts that use an identity provider, guests and auditors are not asked.
+  up yet") with *Set up now* and *Remind me later*. A dismissed reminder returns after
+  `mfa_reminder_days` days (Admin -> Settings, default 1, 0 = at the next sign-in; kept in
+  the browser). Accounts that use an identity provider, guests and auditors are not asked.
   A required policy (`admins` or `all`) still applies only to local accounts.
+- **Theme editor:** colours show as a swatch plus hex field and every change is previewed
+  at once on the running interface (for you only, until saved); leaving the editor restores
+  the previous theme. Built-in themes can no longer be overwritten: "Copy and edit" creates
+  a new custom theme.
+- Checkboxes and radio buttons are drawn by the application and no longer show as dark blocks.
 - **Startup:** Sendora refuses to start when `JWT_SECRET_FILE`, the SMTP password
   file or a provider client-secret file is writable by the group or accessible to
   others, or owned by another user (the rule of the database key file). It logs a
