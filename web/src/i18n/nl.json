@@ -859,7 +859,6 @@
   "Retention: {n} day(s)": "Bewaartijd: {n} dag(en)",
   "Checkpoint: {n}": "Controlepunt: {n}",
   "Write failures: {n}": "Schrijffouten: {n}",
-  "Audit log retention (days, 1-365)": "Bewaartijd auditlog (dagen, 1-365)",
   "Store the IP address of each audit log entry": "IP-adres bij elke auditlogregel opslaan",
   "The audit log is always on and tamper-evident; it cannot be switched off or edited. Entries older than the retention period are deleted automatically. Every change to these settings is itself recorded.": "Het auditlog staat altijd aan en is manipulatiebestendig; het kan niet worden uitgezet of aangepast. Regels ouder dan de bewaartijd worden automatisch verwijderd. Elke wijziging van deze instellingen wordt zelf ook vastgelegd.",
   "Auditor (read-only access to the audit log)": "Auditor (alleen-lezen toegang tot het auditlog)",
@@ -914,5 +913,6 @@
   "invalid to time": "ongeldige eindtijd",
   "invalid category": "ongeldige categorie",
   "invalid outcome": "ongeldige uitkomst",
-  "format must be csv or jsonl": "formaat moet csv of jsonl zijn"
+  "format must be csv or jsonl": "formaat moet csv of jsonl zijn",
+  "Audit log retention (days, 90-365)": "Bewaartermijn auditlogboek (dagen, 90-365)"
 }

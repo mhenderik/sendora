@@ -62,7 +62,7 @@
  "At least {n} characters",
  "Attempted",
  "Audit log",
- "Audit log retention (days, 1-365)",
+ "Audit log retention (days, 90-365)",
  "Auditor",
  "Auditor (read-only access to the audit log)",
  "Authenticator app",
