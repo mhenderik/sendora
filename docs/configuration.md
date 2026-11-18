@@ -40,7 +40,7 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 
 | Variable | Default | Admin setting |
 |---|---|---|
-| `SENDORA_ACCOUNT_PASSWORD_MIN_LENGTH` | `12` (new installations; `8` before 0.1.5) | `account_password_min_length` |
+| `SENDORA_ACCOUNT_PASSWORD_MIN_LENGTH` | `8` | `account_password_min_length` |
 | `SENDORA_ACCOUNT_PASSWORD_REQUIRE_DIGIT` | `false` | `account_password_require_digit` |
 | `SENDORA_ACCOUNT_PASSWORD_REQUIRE_LOWER` | `false` | `account_password_require_lower` |
 | `SENDORA_ACCOUNT_PASSWORD_REQUIRE_SYMBOL` | `false` | `account_password_require_symbol` |
@@ -66,13 +66,14 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_AUDIT_RETENTION_DAYS` | `90` | `audit_retention_days` (1 to 365) |
 | `SENDORA_MAX_EXPIRY_TIME` | `30` | `max_expiry_time` |
 | `SENDORA_MAX_SHARE_SIZE` | `2048` | `max_share_size` |
-| `SENDORA_MFA_POLICY` | `admins` (new installations; `off` before 0.1.5) | `mfa_policy` |
+| `SENDORA_MFA_POLICY` | `off` | `mfa_policy` |
+| `SENDORA_MFA_REMINDER_DAYS` | `1` | `mfa_reminder_days` |
 | `SENDORA_MFA_TOTP_ENABLED` | `true` | `mfa_totp_enabled` |
 | `SENDORA_MFA_WEBAUTHN_ENABLED` | `true` | `mfa_webauthn_enabled` |
 | `SENDORA_REGISTRATION_EMAIL_DOMAINS` | empty | `registration_email_domains` |
 | `SENDORA_REQUIRE_EMAIL_VERIFICATION` | `true` | `require_email_verification` |
 | `SENDORA_REQUIRE_SHARE_PASSWORD` | `false` | `require_share_password` |
-| `SENDORA_SHARE_PASSWORD_MIN_LENGTH` | `10` (new installations; `8` before 0.1.5) | `share_password_min_length` |
+| `SENDORA_SHARE_PASSWORD_MIN_LENGTH` | `8` | `share_password_min_length` |
 | `SENDORA_SHARE_PASSWORD_REQUIRE_DIGIT` | `false` | `share_password_require_digit` |
 | `SENDORA_SHARE_PASSWORD_REQUIRE_LOWER` | `false` | `share_password_require_lower` |
 | `SENDORA_SHARE_PASSWORD_REQUIRE_SYMBOL` | `false` | `share_password_require_symbol` |
