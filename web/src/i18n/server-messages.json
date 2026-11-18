@@ -315,7 +315,17 @@
     "invalid background",
     "uploads by invitation are turned off",
     "registration failed",
-    "this login provider is managed by the server configuration and cannot be changed here"
+    "this login provider is managed by the server configuration and cannot be changed here",
+    "an administrator cannot set another user's password; use 'Send password reset link' instead",
+    "this user has no verified email address, so they cannot confirm the reset; stop the application and use the offline tool 'sendora-db mfa-reset' instead",
+    "outgoing email (SMTP) is not configured, so the user cannot confirm the reset; configure it, or stop the application and use the offline tool 'sendora-db mfa-reset'",
+    "applying an import requires your current password; set a local password under your profile first",
+    "this user's email address is not verified; ask them to use 'Forgot password' or confirm the address first",
+    "this account cannot receive a reset link",
+    "this user has no local password to reset",
+    "this user has no verified email address; they will be asked to change their password at next sign-in",
+    "the reset email could not be prepared",
+    "the email could not be delivered; check the SMTP settings"
   ],
   "dynamic": [
     "%d file(s) in %d share(s) are missing on disk and cannot be downloaded after the import.",

@@ -9,6 +9,7 @@ const routes = [
   { path: '/register', component: () => import('./views/Register.vue') },
   { path: '/forgot-password', component: () => import('./views/Forgot.vue') },
   { path: '/reset-password/:token', component: () => import('./views/Reset.vue') },
+  { path: '/mfa-reset/:token', component: () => import('./views/MfaResetConfirm.vue') },
   { path: '/share/:id', component: () => import('./views/Share.vue') },
   { path: '/invite/:token', component: () => import('./views/Invite.vue') },
   { path: '/shares', component: () => import('./views/MyShares.vue'), meta: { auth: true } },
