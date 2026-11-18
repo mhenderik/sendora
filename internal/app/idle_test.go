@@ -98,8 +98,10 @@ func TestIdleRefreshWindow(t *testing.T) {
 	}
 	e.want(e.do("POST", "/api/auth/refresh", "", nil, "Cookie", next), 401, "still refused")
 
-	// Zero disables the rule entirely.
-	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"idle_logout_minutes": 0}), 200, "never")
+	// Zero disables the rule entirely. (Deleting every refresh token above also
+	// ended the administrator's session, so a token without a session is used.)
+	adminUser, _ := e.s.userByID(1)
+	e.want(e.do("PUT", "/api/settings", e.s.accessToken(adminUser), map[string]any{"idle_logout_minutes": 0}), 200, "never")
 	login = idleLogin(e, "idler")
 	cookie = idleCookie(t, login)
 	idleAge(t, e, 40*24*time.Hour)

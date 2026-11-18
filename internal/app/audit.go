@@ -168,9 +168,9 @@ func classifyAction(action string) (category, outcome string) {
 	}
 	switch action {
 	case "login_ok", "login_failed", "login_lockout", "logout", "mfa_login_ok", "mfa_failed", "mfa_enrolled", "mfa_removed",
-		"session_reuse_detected", "password_changed", "password_reset":
+		"session_reuse_detected", "password_changed", "password_reset", "session_revoked", "session_expired_provider":
 		return catAuth, outcome
-	case "ip_banned", "ip_unbanned", "access_denied", "file_decrypt_failed", "key_fingerprint_changed", "audit_viewed", "audit_exported":
+	case "ip_banned", "ip_unbanned", "access_denied", "file_decrypt_failed", "key_fingerprint_changed", "audit_viewed", "audit_exported", "access_review_exported":
 		return catSecurity, outcome
 	case "system_start", "system_stop", "audit_purged", "audit_purge_failed":
 		return catSystem, outcome
@@ -549,15 +549,16 @@ func (s *Server) auditViewedOnce(u *User) {
 // auditorAllowed is the allowlist of an auditor session: its own profile and
 // password, its own second factors (the /api/users/me/mfa self-service routes
 // only ever act on the caller's factors; without them an auditor could not enrol
-// when MFA is required), and the audit endpoints. Everything else is refused.
+// when MFA is required), its own sessions, the audit endpoints and the
+// read-only access-review report. Everything else is refused.
 func auditorAllowed(r *http.Request) bool {
 	switch r.URL.Path {
 	case "/api/users/me":
 		return r.Method == http.MethodGet || r.Method == http.MethodPut
-	case "/api/audit", "/api/audit/export", "/api/audit/status":
+	case "/api/audit", "/api/audit/export", "/api/audit/status", "/api/access-review", "/api/access-review/export":
 		return r.Method == http.MethodGet
 	}
-	return mfaSelfServicePath(r.URL.Path)
+	return mfaSelfServicePath(r.URL.Path) || sessionSelfService(r)
 }
 
 // mfaSelfServicePath reports the routes that manage the caller's own factors.

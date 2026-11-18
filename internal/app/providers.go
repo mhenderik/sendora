@@ -323,6 +323,12 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		fail(msg)
 		return
 	}
+	if u.Disabled {
+		s.logEvent(u.ID, u.Username, "login_failed", "", "account disabled; provider "+p.Name)
+		fail(msgAccountDisabled)
+		return
+	}
+	u.authMethod = authMethodProvider
 	if !s.issueSession(w, r, u) {
 		fail("session changed; log in again")
 		return
@@ -448,6 +454,9 @@ func (s *Server) resolveExternalUser(p *Provider, id extIdentity) (*User, string
 		return nil, "could not create account"
 	}
 	nid, _ := res.LastInsertId()
+	if _, err := tx.Exec(`UPDATE users SET created_by=? WHERE id=?`, clip("provider "+p.Name, 160), nid); err != nil {
+		return nil, "could not create account"
+	}
 	if _, err := tx.Exec(`INSERT INTO user_auth_providers(user_id,provider_id,provider_user_id) VALUES(?,?,?)`, nid, p.ID, id.Sub); err != nil {
 		return nil, "could not link account"
 	}

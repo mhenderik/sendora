@@ -6,6 +6,7 @@ import { t, tr } from '../../i18n'
 import { app } from '../../state'
 import { accountPolicy, passwordProblems } from '../../sharepolicy.mjs'
 import PasswordHints from '../../components/PasswordHints.vue'
+import UserAccessActions from '../../components/UserAccessActions.vue'
 const users = ref([]), err = ref(''), edit = ref(null), defaultQuotaGB = ref(null), info = ref(''), smtpReady = ref(false), busy = ref(false)
 // Result of a row action (reset link, MFA reset, unlock), shown next to that user's row.
 const rowNote = ref(null), rowBusy = ref(0)
@@ -124,13 +125,14 @@ async function force(u) {
     </form>
     <div class="table-wrap"><table>
       <tr><th>{{ t('Username') }}</th><th>{{ t('Source') }}</th><th>{{ t('Name') }}</th><th>{{ t('Email') }}</th><th>{{ t('Storage quota') }}</th><th /></tr>
-      <tr v-for="u in users" :key="u.id"><td>{{ u.username }} <span v-if="u.admin" class="badge on">{{ t('Admin') }}</span> <span v-if="u.auditor" class="badge">{{ t('Auditor') }}</span> <span v-if="mfaOn() && u.mfa_enabled" class="badge on" :title="t('Two-step verification is on')">MFA</span> <span v-if="mfaOn() && u.mfa_policy === 'required'" class="badge" :title="t('Required for this user')">{{ t('MFA required') }}</span> <span v-if="mfaOn() && u.mfa_policy === 'exempt'" class="badge off" :title="t('Exempt (not required)')">{{ t('MFA exempt') }}</span></td><td>{{ sourceLabel(u) }}</td><td>{{ u.name }}</td><td>{{ u.email }}</td>
+      <tr v-for="u in users" :key="u.id"><td>{{ u.username }} <span v-if="u.disabled" class="badge off" :title="u.disabled_reason || ''">{{ t('Disabled') }}</span> <span v-if="u.admin" class="badge on">{{ t('Admin') }}</span> <span v-if="u.auditor" class="badge">{{ t('Auditor') }}</span> <span v-if="mfaOn() && u.mfa_enabled" class="badge on" :title="t('Two-step verification is on')">MFA</span> <span v-if="mfaOn() && u.mfa_policy === 'required'" class="badge" :title="t('Required for this user')">{{ t('MFA required') }}</span> <span v-if="mfaOn() && u.mfa_policy === 'exempt'" class="badge off" :title="t('Exempt (not required)')">{{ t('MFA exempt') }}</span></td><td>{{ sourceLabel(u) }}</td><td>{{ u.name }}</td><td>{{ u.email }}</td>
         <td>{{ fmtGBShort(u.quota_bytes) }}<br /><span class="muted">{{ t(u.quota_inherits_default ? 'Global default' : 'Personal override') }}<br />{{ t('Stored files') }}: {{ fmtGBShort(u.storage_used_bytes) }}<br />{{ t('Reserved uploads') }}: {{ fmtGBShort(u.storage_reserved_bytes) }}</span>
           <p v-if="u.login_locked_until * 1000 > Date.now()" class="err">{{ t('Local login locked until') }} {{ fmtDate(new Date(u.login_locked_until * 1000).toISOString()) }}</p></td>
         <td class="actions" style="margin:0"><button class="small secondary" @click="open(u)">{{ t('Edit') }}</button>
           <button v-if="u.login_locked_until * 1000 > Date.now()" class="small secondary" :disabled="rowBusy === u.id" @click="unlock(u)">{{ t('Unlock local login') }}</button>
           <button class="small secondary" :disabled="rowBusy === u.id || !!mailBlocked(u)" :title="mailBlocked(u)" @click="force(u)">{{ t('Send password reset link') }}</button>
           <button v-if="mfaOn() && u.mfa_enabled" class="small secondary" :disabled="rowBusy === u.id || !!mailBlocked(u)" :title="mailBlocked(u)" @click="resetMfa(u)">{{ t('Request MFA reset') }}</button>
+          <UserAccessActions :user="u" @changed="load" @note="(kind, text) => setRowNote(u, kind, text)" />
           <button class="small danger" :disabled="u.id === session.user.id || rowBusy === u.id" @click="del(u)">{{ t('Delete') }}</button>
           <p v-if="rowNote && rowNote.id === u.id" class="row-note" :class="rowNote.kind" :role="rowNote.kind === 'err' ? 'alert' : 'status'">{{ rowNote.text }}</p></td></tr>
     </table></div>

@@ -538,7 +538,9 @@ func TestAuditorIsReadOnlyAndNeverAdmin(t *testing.T) {
 	auditor = login.S("access_token")
 
 	// Table-driven over every authenticated route: nothing outside the allowlist works.
-	allowed := map[string]bool{"GET /api/users/me": true, "PUT /api/users/me": true, "GET /api/audit": true, "GET /api/audit/export": true, "GET /api/audit/status": true}
+	allowed := map[string]bool{"GET /api/users/me": true, "PUT /api/users/me": true, "GET /api/audit": true, "GET /api/audit/export": true, "GET /api/audit/status": true,
+		"GET /api/access-review": true, "GET /api/access-review/export": true,
+		"GET /api/users/me/sessions": true, "POST /api/users/me/sessions/revoke-others": true, "DELETE /api/users/me/sessions/{id}": true}
 	public := func(p string) bool {
 		return !strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/api/auth/") || strings.HasPrefix(p, "/api/shares/{id}") && !strings.HasPrefix(p, "/api/shares/{id}/") ||
 			strings.HasPrefix(p, "/api/shares/{id}/unlock") || strings.HasPrefix(p, "/api/shares/{id}/download") || strings.HasPrefix(p, "/api/shares/{id}/preview") ||
@@ -757,6 +759,8 @@ func TestAuditCriticalRoutesAreGuarded(t *testing.T) {
 		"POST /api/users/{id}/force-reset-password": false, "POST /api/users/{id}/mfa/reset": false, "PUT /api/settings": false,
 		"POST /api/auth-providers": false, "PUT /api/auth-providers/{id}": false, "DELETE /api/auth-providers/{id}": false,
 		"POST /api/backups": false, "DELETE /api/backups/{name}": false, "POST /api/backups/import": false, "POST /api/backups/import/apply": false,
+		"POST /api/users/{id}/disable": false, "POST /api/users/{id}/enable": false, "POST /api/users/{id}/sessions/revoke": false,
+		"GET /api/access-review/export": false,
 	}
 	critName := runtime.FuncForPC(reflect.ValueOf(e.s.critical("x", "y")).Pointer()).Name()
 	_ = critName

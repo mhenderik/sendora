@@ -315,6 +315,9 @@ func (s *Server) sessionOrChallenge(w http.ResponseWriter, r *http.Request, u *U
 
 // completeMFALogin finishes a login after any second factor succeeded.
 func (s *Server) completeMFALogin(w http.ResponseWriter, r *http.Request, u *User, method string) {
+	if s.refuseDisabledSignIn(w, u, method) {
+		return
+	}
 	s.clearAuthFailures(u.ID)
 	s.logEvent(u.ID, u.Username, "mfa_login_ok", "", method)
 	s.logEvent(u.ID, u.Username, "login_ok", "", "")

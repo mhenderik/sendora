@@ -85,8 +85,14 @@ func scanShare(row interface{ Scan(...any) error }) (*Share, error) {
 	return sh, nil
 }
 
+// shareByLongID loads a share for the public link routes. While its owner's
+// account is disabled the link answers like an expired share (deactivate.go).
 func (s *Server) shareByLongID(id string) (*Share, error) {
-	return scanShare(s.St.DB.QueryRow(`SELECT `+shareCols+` FROM shares s LEFT JOIN users u ON u.id=s.user_id WHERE s.long_id=?`, id))
+	sh, err := scanShare(s.St.DB.QueryRow(`SELECT `+shareCols+` FROM shares s LEFT JOIN users u ON u.id=s.user_id WHERE s.long_id=?`, id))
+	if err == nil && s.shareOwnerDisabled(sh.ID) {
+		sh.Expired = true
+	}
+	return sh, err
 }
 
 func (s *Server) shareByID(id int64) (*Share, error) {

@@ -7,6 +7,7 @@ import { emailLanguages, app } from '../state'
 import { accountPolicy, passwordProblems } from '../sharepolicy.mjs'
 import PasswordHints from '../components/PasswordHints.vue'
 import MfaSecurity from '../components/MfaSecurity.vue'
+import SessionsCard from '../components/SessionsCard.vue'
 const f = ref({ name: '', email: '', password: '', currentPassword: '', language: 'en', ui_language: 'en' }), msg = ref(''), err = ref(''), linked = ref([]), hasPw = ref(true)
 const storage = ref(null)
 async function load() {
@@ -57,5 +58,6 @@ async function unlink(p) { try { await api('/users/me/providers/' + p.id, { meth
         <button type="button" class="small secondary" @click="unlink(p)">{{ t('Unlink') }}</button></div></div>
   </form>
   <MfaSecurity />
+  <SessionsCard />
   </div>
 </template>

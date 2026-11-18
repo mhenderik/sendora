@@ -8,7 +8,7 @@ import { t, tr } from '../../i18n'
 
 const KEYS = ['mfa_policy', 'mfa_reminder_days', 'mfa_totp_enabled', 'mfa_webauthn_enabled',
   'account_password_require_upper', 'account_password_require_lower', 'account_password_require_digit', 'account_password_require_symbol', 'account_password_min_length',
-  'audit_retention_days', 'audit_log_ip']
+  'audit_retention_days', 'audit_log_ip', 'provider_session_max_hours']
 const s = ref(null), managed = ref([]), msg = ref(''), err = ref(''), busy = ref(false)
 const m = k => managed.value.includes(k)
 const accountFlags = [['account_password_require_upper', tr('Require an uppercase letter')], ['account_password_require_lower', tr('Require a lowercase letter')], ['account_password_require_digit', tr('Require a digit')], ['account_password_require_symbol', tr('Require a symbol')]]
@@ -49,6 +49,10 @@ async function save() {
     <label v-for="[k, l] in accountFlags" :key="k" class="check"><input :disabled="m(k)" type="checkbox" :checked="s[k] === 'true'" @change="s[k] = String($event.target.checked)" /> {{ t(l) }}</label>
     <label for="acct-min">{{ t('Minimum password length (1-72)') }}</label><input id="acct-min" :disabled="m('account_password_min_length')" v-model="s.account_password_min_length" type="number" min="1" max="72" />
     <p class="muted">{{ t('Applies to local accounts when a password is set or changed (setup, registration, reset, profile, administrators). Existing passwords keep working until they are next changed.') }}</p>
+
+    <h2 style="margin-top:20px">{{ t('Sessions') }}</h2>
+    <label for="provider-session-hours">{{ t('Sign in at the provider again after (hours, 1-720)') }}</label><input id="provider-session-hours" :disabled="m('provider_session_max_hours')" v-model="s.provider_session_max_hours" type="number" min="1" max="720" />
+    <p class="muted">{{ t('Sessions started through a sign-in provider (Entra, OpenID Connect, Google, GitHub), and all sessions of accounts without a local password, end after this many hours. The user then signs in at the provider again, so an account disabled or removed there loses access here too.') }}</p>
 
     <h2 style="margin-top:20px">{{ t('Logging') }}</h2>
     <label for="audit-retention">{{ t('Audit log retention (days, 90-365)') }}</label><input id="audit-retention" :disabled="m('audit_retention_days')" v-model="s.audit_retention_days" type="number" min="90" max="365" />

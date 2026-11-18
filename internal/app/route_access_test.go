@@ -140,6 +140,9 @@ var routeTable = []routeSpec{
 	rs("POST /api/users/me/mfa/webauthn/finish", polSelf).withSoft("needs a begun ceremony", 400, 403),
 	rs("PUT /api/users/me/mfa/webauthn/{id}", polSelf).withSoft("{id} is a security key of the caller; the fixture has none", 404),
 	rs("POST /api/users/me/mfa/webauthn/{id}/remove", polSelf).withSoft("{id} is a security key of the caller; the fixture has none", 400, 403, 404),
+	rs("GET /api/users/me/sessions", polSelf),
+	rs("POST /api/users/me/sessions/revoke-others", polSelf),
+	rs("DELETE /api/users/me/sessions/{id}", polSelf).withSoft("{id} is a session of the caller; the fixture uses an unknown id", 404),
 
 	// ---- shares: owner only ----
 	rs("GET /api/shares", polUser), // lists the caller's own shares
@@ -170,6 +173,8 @@ var routeTable = []routeSpec{
 	rs("GET /api/audit", polAuditor),
 	rs("GET /api/audit/export", polAuditor),
 	rs("GET /api/audit/status", polAuditor),
+	rs("GET /api/access-review", polAuditor),
+	rs("GET /api/access-review/export", polAuditor),
 
 	// ---- administration ----
 	rs("GET /api/users", polAdmin),
@@ -180,6 +185,9 @@ var routeTable = []routeSpec{
 	rs("POST /api/users/{id}/unlock-login", polAdmin),
 	rs("POST /api/users/{id}/mfa/reset", polAdmin),
 	rs("POST /api/users/{id}/welcome", polAdmin),
+	rs("POST /api/users/{id}/disable", polAdmin),
+	rs("POST /api/users/{id}/enable", polAdmin),
+	rs("POST /api/users/{id}/sessions/revoke", polAdmin),
 	rs("GET /api/settings", polAdmin),
 	rs("PUT /api/settings", polAdmin),
 	rs("POST /api/settings/branding/{kind}", polAdmin),
@@ -716,12 +724,14 @@ func TestRouteAccessAuditorAndAdminAreSeparated(t *testing.T) {
 			}
 		}
 	}
-	// Exactly the own-profile routes: GET/PUT /api/users/me and the nine
-	// self-service routes of the caller's own second factors.
-	if auditorOK != 11 {
-		t.Errorf("auditor is allowed on %d non-audit routes, want 11 (GET/PUT /api/users/me and /api/users/me/mfa*)", auditorOK)
+	// Exactly the own-profile routes: GET/PUT /api/users/me, the nine
+	// self-service routes of the caller's own second factors and the three
+	// routes of the caller's own sessions.
+	if auditorOK != 14 {
+		t.Errorf("auditor is allowed on %d non-audit routes, want 14 (GET/PUT /api/users/me, /api/users/me/mfa* and /api/users/me/sessions*)", auditorOK)
 	}
-	if adminRoutes < 40 || auditRoutes != 3 {
+	// The audit log (3 routes) and the read-only access review (2 routes).
+	if adminRoutes < 40 || auditRoutes != 5 {
 		t.Errorf("walked %d admin and %d audit routes", adminRoutes, auditRoutes)
 	}
 	// Auditors are read-only everywhere else, whatever the method and path.

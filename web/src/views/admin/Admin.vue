@@ -6,6 +6,7 @@ import { t } from '../../i18n'
     <div class="tabs">
       <router-link to="/admin/stats">{{ t('Statistics') }}</router-link>
       <router-link to="/admin/users">{{ t('Users') }}</router-link>
+      <router-link to="/admin/access-review">{{ t('Access review') }}</router-link>
       <router-link to="/admin/settings">{{ t('Settings') }}</router-link>
       <router-link to="/admin/branding">{{ t('Branding') }}</router-link>
       <router-link to="/admin/themes">{{ t('Themes') }}</router-link>

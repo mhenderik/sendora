@@ -41,18 +41,22 @@ type User struct {
 	MFAEnabled           bool   `json:"mfa_enabled"`
 	MFARequired          bool   `json:"mfa_required"`
 	MFAEnrollRequired    bool   `json:"mfa_enroll_required"`
+	Disabled             bool   `json:"disabled"`
+	DisabledReason       string `json:"disabled_reason,omitempty"`
+	sessionID            string // session (refresh-token family) of the request's access token
+	authMethod           string // how that session was signed in (see sessions.go)
 	mfaEpoch             int64  `json:"-"`
 	loginFailures        int64  `json:"-"`
 	loginLockedUntil     int64  `json:"-"`
 	passwordHash         string
 }
 
-const userCols = `id,username,name,email,admin,must_change_password,is_guest,is_auditor,email_verified,created_at,password_hash,language,ui_language,quota_bytes,login_failures,login_locked_until,quota_inherits_default,(SELECT value FROM settings WHERE key='default_storage_quota_bytes'),mfa_policy,mfa_epoch`
+const userCols = `id,username,name,email,admin,must_change_password,is_guest,is_auditor,email_verified,created_at,password_hash,language,ui_language,quota_bytes,login_failures,login_locked_until,quota_inherits_default,(SELECT value FROM settings WHERE key='default_storage_quota_bytes'),mfa_policy,mfa_epoch,disabled_at IS NOT NULL,disabled_reason`
 
 func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 	u := &User{}
 	var quota, inheritance, defaultQuota sql.NullString
-	err := row.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Admin, &u.MustChangePassword, &u.IsGuest, &u.Auditor, &u.EmailVerified, &u.CreatedAt, &u.passwordHash, &u.Language, &u.UILanguage, &quota, &u.loginFailures, &u.loginLockedUntil, &inheritance, &defaultQuota, &u.MFAPolicy, &u.mfaEpoch)
+	err := row.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Admin, &u.MustChangePassword, &u.IsGuest, &u.Auditor, &u.EmailVerified, &u.CreatedAt, &u.passwordHash, &u.Language, &u.UILanguage, &quota, &u.loginFailures, &u.loginLockedUntil, &inheritance, &defaultQuota, &u.MFAPolicy, &u.mfaEpoch, &u.Disabled, &u.DisabledReason)
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +95,9 @@ func (s *Server) accessTokenAt(u *User, authTime time.Time) string {
 		"auth_time":  authTime.Unix(),
 		"exp":        time.Now().Add(15 * time.Minute).Unix(),
 	}
+	if u.sessionID != "" {
+		claims["sid"], claims["amr"] = u.sessionID, u.authMethod // revoked with its session (sessions.go)
+	}
 	// Required but not yet enrolled: the token only reaches the enrolment routes.
 	// It is decided when a token is issued (login/refresh), so a stricter policy
 	// takes effect at the next login or refresh, not in the middle of a session.
@@ -120,8 +127,17 @@ func (s *Server) requestAuthTime(r *http.Request) time.Time {
 	return time.Time{}
 }
 
+// issueSession starts a new session after a sign-in (password, second factor,
+// provider, setup, registration or invite) and records the sign-in time.
 func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, u *User) bool {
-	return s.issueSessionSince(w, r, u, time.Now())
+	if u.authMethod == "" && !u.IsGuest {
+		u.authMethod = authMethodPassword // a fresh sign-in never inherits a stale token's method
+	}
+	ok := s.issueSessionSince(w, r, u, time.Now())
+	if ok && !u.IsGuest {
+		s.noteSignIn(u.ID)
+	}
+	return ok
 }
 
 // sessionStartOf is the sign-in time of the current request's session, used when
@@ -138,13 +154,16 @@ func (s *Server) issueSessionSince(w http.ResponseWriter, r *http.Request, u *Us
 	rt := randHex(32)
 	now := time.Now()
 	exp := start.Add(sessionMaxAge)
-	res, err := s.St.DB.Exec(`INSERT INTO refresh_tokens(hash,user_id,expires_at,issued_at,session_started) SELECT ?,id,?,?,? FROM users WHERE id=? AND password_hash=? AND email=? AND must_change_password=?`, hashToken(rt), exp, now, start, u.ID, u.passwordHash, u.Email, u.MustChangePassword)
+	sid, method := randHex(16), s.sessionMethodFor(r, u)
+	ua, ip := s.sessionClientInfo(r)
+	res, err := s.St.DB.Exec(`INSERT INTO refresh_tokens(hash,user_id,expires_at,issued_at,session_started,session_id,user_agent,ip,auth_method) SELECT ?,id,?,?,?,?,?,?,? FROM users WHERE id=? AND password_hash=? AND email=? AND must_change_password=? AND disabled_at IS NULL`, hashToken(rt), exp, now, start, sid, ua, ip, method, u.ID, u.passwordHash, u.Email, u.MustChangePassword)
 	if err != nil {
 		return false
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
 		return false
 	}
+	u.sessionID, u.authMethod = sid, method
 	http.SetCookie(w, &http.Cookie{Name: "refresh", Value: rt, Path: "/api/auth", Expires: exp, HttpOnly: true,
 		SameSite: http.SameSiteLaxMode, Secure: s.secureCookies(r)})
 	return true
@@ -178,6 +197,9 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		// From here on the caller is a verified, existing user: a refusal below is
 		// recorded as access_denied with this actor (unverified tokens are not).
 		s.auditSetActor(r, u)
+		if !s.sessionStillValid(w, u, claims) {
+			return
+		}
 		if u.IsGuest {
 			var valid int
 			if s.St.DB.QueryRow(`SELECT COUNT(*) FROM reverse_invites WHERE guest_user_id=? AND completed_at IS NULL AND expires_at>?`, u.ID, time.Now()).Scan(&valid) != nil || valid != 1 {
@@ -308,6 +330,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	s.noteCreatedBy(id, "setup")
 	u, _ := s.userByID(id)
 	s.sessionResponse(w, r, u)
 }
@@ -392,6 +415,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		rejectLogin(w)
 		return
 	}
+	if s.refuseDisabledSignIn(w, u, "") {
+		return
+	}
 	s.rehashPassword(u, c.Password) // upgrade an older, cheaper hash before the credential version is used
 	if !u.EmailVerified {
 		jout(w, 403, map[string]any{"error": "email not verified", "needs_verification": true})
@@ -420,22 +446,26 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 401, "no session")
 		return
 	}
-	idleMinutes := s.idleLogoutMinutes() // read before the transaction takes the only connection
+	// Read before the transaction takes the only connection.
+	idleMinutes, providerHours := s.idleLogoutMinutes(), s.providerSessionMaxHours()
+	ua, ip := s.sessionClientInfo(r)
 	tx, err := s.St.DB.Begin()
 	if err != nil {
 		jerr(w, 500, "database error")
 		return
 	}
 	defer tx.Rollback()
-	// end refuses the refresh, keeping the token deleted, and clears the cookie.
-	end := func() {
+	// endWith refuses the refresh, keeping the token deleted, and clears the cookie.
+	endWith := func(msg string) {
 		tx.Commit()
 		s.clearRefreshCookie(w, r)
-		jerr(w, 401, "session expired")
+		jerr(w, 401, msg)
 	}
+	end := func() { endWith("session expired") }
 	var uid int64
 	var issued, started sql.NullTime
-	if err := tx.QueryRow(`DELETE FROM refresh_tokens WHERE hash=? AND expires_at>? RETURNING user_id,issued_at,session_started`, hashToken(c.Value), time.Now()).Scan(&uid, &issued, &started); err != nil {
+	var sid, method sql.NullString
+	if err := tx.QueryRow(`DELETE FROM refresh_tokens WHERE hash=? AND expires_at>? RETURNING user_id,issued_at,session_started,session_id,auth_method`, hashToken(c.Value), time.Now()).Scan(&uid, &issued, &started, &sid, &method); err != nil {
 		var victim int64
 		var spentAt time.Time
 		if tx.QueryRow(`SELECT user_id,spent_at FROM refresh_spent WHERE hash=? AND expires_at>?`, hashToken(c.Value), time.Now()).Scan(&victim, &spentAt) == nil {
@@ -475,6 +505,17 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 		end()
 		return
 	}
+	if u.Disabled {
+		endWith(msgAccountDisabled)
+		return
+	}
+	if providerOnlySession(u, method.String) && now.Sub(start) >= time.Duration(providerHours)*time.Hour {
+		// Deprovisioning at the identity provider must take effect: after this
+		// limit the user signs in at the provider again.
+		endWith(msgProviderSessionExpired)
+		s.logEvent(u.ID, u.Username, "session_expired_provider", s.userTarget(u.ID), "after "+strconv.Itoa(providerHours)+" hours")
+		return
+	}
 	if u.IsGuest {
 		var valid int
 		if tx.QueryRow(`SELECT COUNT(*) FROM reverse_invites WHERE guest_user_id=? AND completed_at IS NULL AND expires_at>?`, uid, time.Now()).Scan(&valid) != nil || valid != 1 {
@@ -503,10 +544,21 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rt, exp := randHex(32), start.Add(sessionMaxAge)
-	if _, err := tx.Exec(`INSERT INTO refresh_tokens(hash,user_id,expires_at,issued_at,session_started) VALUES(?,?,?,?,?)`, hashToken(rt), uid, exp, now, start); err != nil {
+	if !sid.Valid || sid.String == "" {
+		sid = sql.NullString{String: randHex(16), Valid: true}
+	}
+	if method.String == "" {
+		method.String = authMethodPassword
+		if u.IsGuest {
+			method.String = authMethodInvite
+		}
+	}
+	// The session keeps its id; the user agent and address are the latest seen.
+	if _, err := tx.Exec(`INSERT INTO refresh_tokens(hash,user_id,expires_at,issued_at,session_started,session_id,user_agent,ip,auth_method) VALUES(?,?,?,?,?,?,?,?,?)`, hashToken(rt), uid, exp, now, start, sid.String, ua, ip, method.String); err != nil {
 		jerr(w, 500, "session failed")
 		return
 	}
+	u.sessionID, u.authMethod = sid.String, method.String
 	if err := tx.Commit(); err != nil {
 		jerr(w, 500, "session failed")
 		return
@@ -716,6 +768,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	s.noteCreatedBy(id, "self-registration")
 	u, err := s.userByID(id)
 	if err != nil {
 		jerr(w, 500, "user policy unavailable")
@@ -990,9 +1043,13 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 500, "profile update failed")
 		return
 	}
+	if emailChanged {
+		s.noteEmailChange(u.ID, u)
+	}
 	if emailChanged && email != "" {
 		s.sendVerification(nu)
 	}
+	nu.sessionID, nu.authMethod = u.sessionID, u.authMethod // the returned token stays bound to this session
 	if emailChanged || b.Password != "" {
 		s.issueSessionSince(w, r, nu, s.sessionStartOf(r))
 	}
@@ -1158,12 +1215,13 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	me := s.ctxUser(r)
+	s.noteCreatedBy(id, s.userTarget(me.ID))
 	u, err := s.userByID(id)
 	if err != nil {
 		jerr(w, 500, "user policy unavailable")
 		return
 	}
-	me := s.ctxUser(r)
 	out := struct {
 		*User
 		WelcomeEmail string `json:"welcome_email,omitempty"`
@@ -1313,11 +1371,15 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		detail = "password changed"
 	}
 	s.logEvent(me2.ID, me2.Username, "user_updated", s.userTarget(id), detail)
+	if email != target.Email {
+		s.noteEmailChange(id, me2)
+	}
 	if emailChangedByAdmin {
 		s.logEvent(me2.ID, me2.Username, "user_email_changed", s.userTarget(id), "email_verified reset")
 		s.notifyEmailChanged(target)
 	}
 	if target.Admin != admin || target.Auditor != newAuditor {
+		s.noteRoleChange(id, me2)
 		s.logEvent(me2.ID, me2.Username, "user_role_changed", s.userTarget(id), "admin="+strconv.FormatBool(admin)+" auditor="+strconv.FormatBool(newAuditor))
 	}
 	if b.MFAPolicy != nil && *b.MFAPolicy != target.MFAPolicy {

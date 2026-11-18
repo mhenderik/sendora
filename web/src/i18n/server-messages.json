@@ -341,7 +341,17 @@
     "invalid to time",
     "invalid category",
     "invalid outcome",
-    "format must be csv or jsonl"
+    "format must be csv or jsonl",
+    "account disabled",
+    "you cannot disable your own account",
+    "cannot disable the last active administrator",
+    "account already disabled",
+    "account is not disabled",
+    "the reason must be at most 200 characters without control characters",
+    "session not found",
+    "session ended",
+    "your sign-in through the identity provider has expired; sign in again",
+    "access review unavailable"
   ],
   "dynamic": [
     "%d file(s) in %d share(s) are missing on disk and cannot be downloaded after the import.",
