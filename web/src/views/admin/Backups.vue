@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { api, session, fmtBytes, fmtDate } from '../../api'
+import { api, session, fmtBytes, fmtDate, downloadBlob } from '../../api'
 import { t } from '../../i18n'
 import { keyProblem, importForm, waitForRestart } from '../../dbimport.mjs'
 import { begin as beginTransfer } from '../../transfers.mjs'
@@ -56,9 +56,8 @@ onMounted(load)
 async function create() { err.value = ''; try { await api('/backups', { method: 'POST' }); load() } catch (e) { err.value = e.message } }
 async function del(b) { if (confirm(t('Delete backup?'))) { await api('/backups/' + b.name, { method: 'DELETE' }); load() } }
 async function dl(b) {
-  const r = await fetch('/api/backups/' + b.name, { headers: { Authorization: 'Bearer ' + session.token } })
-  if (!r.ok) { err.value = t('Download failed'); return }
-  const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = b.name; a.click()
+  err.value = ''
+  try { await downloadBlob('/backups/' + encodeURIComponent(b.name), b.name) } catch (e) { err.value = e.message || t('Download failed') }
 }
 </script>
 <template>

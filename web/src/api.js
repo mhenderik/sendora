@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import { translateMessage } from './i18n/mark.mjs'
+import { filenameFromDisposition } from './content-disposition.mjs'
 
 export const session = reactive({ token: null, user: null, ready: false })
 let refreshing = null
@@ -38,15 +39,44 @@ export class ApiError extends Error {
   }
 }
 
-export async function api(path, opts = {}) {
+// One request with a single refresh-and-retry when the access token has expired.
+async function request(path, opts = {}) {
   let r = await raw(path, opts)
   if (r.status === 401 && session.token && !opts.noRetry) {
     if (await refresh()) r = await raw(path, opts)
   }
+  return r
+}
+
+async function errorData(r) {
   const ct = r.headers.get('content-type') || ''
-  const data = ct.includes('json') ? await r.json().catch(() => null) : null
+  return ct.includes('json') ? await r.json().catch(() => null) : null
+}
+
+export async function api(path, opts = {}) {
+  const r = await request(path, opts)
+  const data = await errorData(r)
   if (!r.ok) throw new ApiError(r.status, data)
   return data
+}
+
+// Fetches a file with the same authentication, retry and (translated) errors as api().
+// Returns the blob and the file name from Content-Disposition ('' when absent).
+export async function fetchBlob(path, opts = {}) {
+  const r = await request(path, opts)
+  if (!r.ok) throw new ApiError(r.status, await errorData(r))
+  return { blob: await r.blob(), filename: filenameFromDisposition(r.headers.get('content-disposition')) }
+}
+
+// Downloads a file through fetchBlob and hands it to the browser as a save; returns the file name used.
+export async function downloadBlob(path, fallbackName, opts = {}) {
+  const { blob, filename } = await fetchBlob(path, opts)
+  const name = filename || fallbackName
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob); a.download = name
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000)
+  return name
 }
 
 export function setSession(d) { session.token = d.access_token; session.user = d.user }
@@ -55,16 +85,6 @@ export async function logout() {
   const headers = session.token ? { Authorization: 'Bearer ' + session.token } : {}
   await fetch('/api/auth/logout', { method: 'POST', headers }).catch(() => {})
   session.token = null; session.user = null
-}
-
-// download via fetch so the Authorization/share headers are kept; returns blob url trigger
-export async function saveBlob(path, filename, headers = {}) {
-  const r = await fetch('/api' + path, { headers })
-  if (!r.ok) throw new ApiError(r.status, await r.json().catch(() => null))
-  const blob = await r.blob()
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob); a.download = filename; a.click()
-  setTimeout(() => URL.revokeObjectURL(a.href), 10000)
 }
 
 export function fmtBytes(n) {
