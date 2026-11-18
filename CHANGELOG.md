@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.5 (2026-11-18)
+
 - **Security:** the administrator statistics no longer list the names and link IDs of
   the most downloaded shares. With a share's link ID an administrator could open it,
   which contradicted "administrators cannot see other users' shares". The statistics now

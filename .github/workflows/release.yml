@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to build (without v), e.g. 0.1.4"
+        description: "Version to build (without v), e.g. 0.1.5"
         required: true
 
 permissions:
