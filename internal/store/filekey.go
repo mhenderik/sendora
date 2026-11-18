@@ -20,11 +20,11 @@ func KeyFingerprint(key []byte) string {
 	return hex.EncodeToString(m.Sum(nil)[:8])
 }
 
-// KeyFingerprint is the fingerprint of this store's key ("" for the plaintext
+// KeyFingerprint is the fingerprint of this store's key ("none" for the plaintext
 // fixture store).
 func (s *Store) KeyFingerprint() string {
 	if !s.IsEncrypted() {
-		return ""
+		return "none"
 	}
 	return KeyFingerprint(s.cipherKey)
 }

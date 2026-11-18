@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"sync"
 	"sync/atomic"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
@@ -20,6 +21,9 @@ type Store struct {
 	cipherKey   []byte
 	fileKey     []byte
 	settingsGen atomic.Uint64
+	auditMu     sync.Mutex
+	auditOnce   sync.Once
+	auditMacFn  func([]byte) []byte
 }
 
 // SettingsGen changes whenever SetSetting writes; caches use it to refresh.
@@ -162,16 +166,6 @@ CREATE TABLE IF NOT EXISTS reverse_invites (
   completed_at DATETIME,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE IF NOT EXISTS event_log (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  created_at DATETIME NOT NULL,
-  actor_id INTEGER,
-  actor_name TEXT NOT NULL DEFAULT '',
-  action TEXT NOT NULL,
-  target TEXT NOT NULL DEFAULT '',
-  detail TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS idx_event_log_created ON event_log(created_at);
 `
 
 // Open is the plaintext legacy/fixture opener. The application entrypoint must
@@ -242,7 +236,7 @@ func initSchema(db *sql.DB) error {
 // runMigrations is the additive migration sequence shared by openStore and
 // PrepareImported. Order matters: seed runs between the policy and brand steps.
 func (s *Store) runMigrations() error {
-	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders} {
+	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders, s.migrateAudit} {
 		if err := step(); err != nil {
 			return err
 		}
@@ -295,8 +289,8 @@ var defaults = []struct{ Key, Grp, Val string }{
 	{"account_password_require_symbol", "system", "false"},
 	{"allow_preview", "system", "true"},
 	{"local_login_enabled", "system", "true"},
-	{"logging_enabled", "system", "false"},
-	{"log_retention_hours", "system", "24"},
+	{"audit_retention_days", "system", "90"},
+	{"audit_log_ip", "system", "false"},
 	{"smtp_host", "email", ""},
 	{"smtp_port", "email", "587"},
 	{"smtp_user", "email", ""},

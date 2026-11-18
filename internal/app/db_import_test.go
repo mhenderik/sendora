@@ -441,7 +441,6 @@ func TestImportApplyFlow(t *testing.T) {
 	admin := e.setup()
 	bob := e.mkUser(admin, "bob", false)
 	dataDir := e.s.St.DataDir
-	e.s.St.SetSetting("logging_enabled", "true")
 	logs := &syncBuf{}
 	log.SetOutput(logs)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
@@ -555,10 +554,10 @@ func TestImportApplyFlow(t *testing.T) {
 
 	// Audit events carry counts and the backup name only.
 	var detail, target string
-	if err := e.s.St.DB.QueryRow(`SELECT target,detail FROM event_log WHERE action='db_import_applied'`).Scan(&target, &detail); err != nil || target != name || detail != "users=2 admins=1 shares=0 files=0" {
+	if err := e.s.St.DB.QueryRow(`SELECT target,detail FROM audit_log WHERE action='db_import_applied' AND outcome='ok'`).Scan(&target, &detail); err != nil || target != name || detail != "users=2 admins=1 shares=0 files=0" {
 		t.Fatalf("applied event: %q %q %v", target, detail, err)
 	}
-	if err := e.s.St.DB.QueryRow(`SELECT target,detail FROM event_log WHERE action='db_import_prepared'`).Scan(&target, &detail); err != nil || target != "" || detail != "users=2 admins=1 shares=0 files=0" {
+	if err := e.s.St.DB.QueryRow(`SELECT target,detail FROM audit_log WHERE action='db_import_prepared' AND outcome='ok'`).Scan(&target, &detail); err != nil || target != "" || detail != "users=2 admins=1 shares=0 files=0" {
 		t.Fatalf("prepared event: %q %q %v", target, detail, err)
 	}
 
@@ -636,7 +635,7 @@ func TestImportApplyFlow(t *testing.T) {
 
 	// No key material, token or file names anywhere observable.
 	var evAll string
-	rows, _ := st2.DB.Query(`SELECT action||actor_name||target||detail FROM event_log`)
+	rows, _ := st2.DB.Query(`SELECT action||actor_name||target||detail FROM audit_log`)
 	for rows != nil && rows.Next() {
 		var x string
 		rows.Scan(&x)

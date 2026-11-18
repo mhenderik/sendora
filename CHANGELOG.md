@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.5
+
+### Audit log
+
+- The optional, best-effort 24-hour activity log is replaced by an always-on,
+  tamper-evident audit log. Every record is chained to the previous one with an
+  HMAC-SHA256 keyed from the database key (editing, deleting, inserting or reordering a
+  record is detected at a definite sequence number). Records are written synchronously;
+  a failed write is retried once, reported on stderr and counted.
+- Critical administrator actions (users and roles, settings, login providers, backups,
+  database import, MFA reset, password reset) write an `attempted` record before they
+  run and are refused with 503 when that record cannot be stored. A middleware records
+  every other mutating request (`api_mutation`) and denied access (`access_denied`).
+- New settings `audit_retention_days` (1 to 365, default 90) and `audit_log_ip`
+  (default off). Changes are themselves audited with the old and new value. The old
+  `logging_enabled` and `log_retention_hours` settings and their `SENDORA_*` variables
+  are ignored; the existing event log (24 hours at most) is dropped by the migration.
+- New read-only `auditor` role (mutually exclusive with administrator). Auditors see
+  all categories through `/api/audit`, export CSV or JSON Lines and see the chain status;
+  administrators keep `/api/logs` but never see share events (uploads, downloads,
+  previews, invites) and see only whether the chain verifies.
+- `sendora-db audit-verify -source <db> -key-file <key> [-json]` verifies the chain
+  offline and exits non-zero on a break. Importing a database keeps this instance's
+  audit log instead of replacing it with the backup's.
+
 ## Unreleased
 
 ## 0.1.5 (2026-11-18)

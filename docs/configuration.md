@@ -62,8 +62,8 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_IP_BAN_ALLOWLIST` | empty | `ip_ban_allowlist` |
 | `SENDORA_IP_BAN_ENABLED` | `true` | `ip_ban_enabled` |
 | `SENDORA_LOCAL_LOGIN_ENABLED` | `true` | `local_login_enabled` |
-| `SENDORA_LOG_RETENTION_HOURS` | `24` | `log_retention_hours` |
-| `SENDORA_LOGGING_ENABLED` | `false` | `logging_enabled` |
+| `SENDORA_AUDIT_LOG_IP` | `false` | `audit_log_ip` |
+| `SENDORA_AUDIT_RETENTION_DAYS` | `90` | `audit_retention_days` (1 to 365) |
 | `SENDORA_MAX_EXPIRY_TIME` | `30` | `max_expiry_time` |
 | `SENDORA_MAX_SHARE_SIZE` | `2048` | `max_share_size` |
 | `SENDORA_MFA_POLICY` | `admins` (new installations; `off` before 0.1.5) | `mfa_policy` |

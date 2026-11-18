@@ -82,9 +82,6 @@ func (s *Server) normalizeSetting(k, str string) (string, error) {
 	if owned, err := validateMFASetting(k, str); owned && err != nil {
 		return "", err
 	}
-	if owned, err := validateLogSetting(k, str); owned && err != nil {
-		return "", err
-	}
 	if k == settingLocalLogin {
 		norm, ok := normalizeLocalLoginSetting(str)
 		if !ok {
@@ -156,7 +153,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 				jerr(w, 400, "invalid value for "+k)
 				return
 			}
-			if owned, _ := validateLogSetting(k, ""); owned {
+			if k == "audit_retention_days" || k == "audit_log_ip" {
 				jerr(w, 400, "invalid value for "+k)
 				return
 			}
@@ -226,7 +223,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	oldAppURL := s.St.Setting("application_url")
+	olds := make(map[string]string, len(updates))
+	for k := range updates {
+		olds[k] = s.St.Setting(k)
+	}
 	tx, err := s.St.DB.Begin()
 	if err != nil {
 		jerr(w, 500, "settings update failed")
@@ -244,28 +244,68 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The transaction has committed and released the connection.
-	if _, touched := updates["logging_enabled"]; touched {
-		if on, _ := parseStrictBool(updates["logging_enabled"]); !on {
-			s.eventLog.state.Store(&logState{retention: eventLogMinRetentionHours, at: time.Now(), gen: s.St.SettingsGen()})
-			s.wipeEventLog()
-		}
-	}
-	s.refreshLogState()
-	keys := make([]string, 0, len(updates))
-	for k := range updates {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
 	me := s.ctxUser(r)
-	s.logEvent(me.ID, me.Username, "settings_changed", "settings", strings.Join(keys, ","))
-	if v, ok := updates["application_url"]; ok && v != oldAppURL {
-		// Emailed links are built from it; the values themselves are not logged.
-		s.logEvent(me.ID, me.Username, "application_url_changed", "settings", "")
+	s.logEvent(me.ID, me.Username, "settings_changed", "settings", settingsChangeDetail(updates, olds))
+	for _, k := range []string{"audit_retention_days", "audit_log_ip", "application_url"} {
+		if v, ok := updates[k]; ok && v != olds[k] {
+			s.logEvent(me.ID, me.Username, map[string]string{"audit_retention_days": "audit_retention_changed", "audit_log_ip": "audit_ip_logging_changed", "application_url": "application_url_changed"}[k], "settings", auditValue(olds[k])+" -> "+auditValue(v))
+		}
 	}
 	if np, ok := updates["mfa_policy"]; ok {
 		s.logEvent(me.ID, me.Username, "mfa_policy_changed", "settings", "policy="+np)
 	}
 	jout(w, 200, map[string]any{"ok": true})
+}
+
+// auditValue is a setting value made safe for one audit line.
+func auditValue(v string) string {
+	v = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, v)
+	return "'" + clip(v, 80) + "'"
+}
+
+// secretSettingName reports settings whose value must never reach the audit log.
+func secretSettingName(k string) bool {
+	if secretKeys[k] {
+		return true
+	}
+	if strings.Contains(k, "secret") {
+		return true
+	}
+	for _, suffix := range []string{"_pass", "_password", "_token", "_key"} {
+		if strings.HasSuffix(k, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// settingsChangeDetail lists the changed settings: names always, old and new
+// values only for settings that are not secret.
+func settingsChangeDetail(updates, olds map[string]string) string {
+	keys := make([]string, 0, len(updates))
+	for k, v := range updates {
+		if v != olds[k] {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return "no changes"
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if secretSettingName(k) || strings.HasPrefix(k, "tpl_") {
+			parts = append(parts, k)
+			continue
+		}
+		parts = append(parts, k+": "+auditValue(olds[k])+" -> "+auditValue(updates[k]))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // ---------- branding & backgrounds ----------

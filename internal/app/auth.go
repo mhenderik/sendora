@@ -20,6 +20,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+const msgAdminAuditorExclusive = "an account cannot be both administrator and auditor"
+
 type User struct {
 	ID                   int64  `json:"id"`
 	Username             string `json:"username"`
@@ -28,6 +30,7 @@ type User struct {
 	Admin                bool   `json:"admin"`
 	MustChangePassword   bool   `json:"must_change_password"`
 	IsGuest              bool   `json:"is_guest"`
+	Auditor              bool   `json:"auditor"`
 	EmailVerified        bool   `json:"email_verified"`
 	CreatedAt            string `json:"created_at"`
 	Language             string `json:"language"`
@@ -44,12 +47,12 @@ type User struct {
 	passwordHash         string
 }
 
-const userCols = `id,username,name,email,admin,must_change_password,is_guest,email_verified,created_at,password_hash,language,ui_language,quota_bytes,login_failures,login_locked_until,quota_inherits_default,(SELECT value FROM settings WHERE key='default_storage_quota_bytes'),mfa_policy,mfa_epoch`
+const userCols = `id,username,name,email,admin,must_change_password,is_guest,is_auditor,email_verified,created_at,password_hash,language,ui_language,quota_bytes,login_failures,login_locked_until,quota_inherits_default,(SELECT value FROM settings WHERE key='default_storage_quota_bytes'),mfa_policy,mfa_epoch`
 
 func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 	u := &User{}
 	var quota, inheritance, defaultQuota sql.NullString
-	err := row.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Admin, &u.MustChangePassword, &u.IsGuest, &u.EmailVerified, &u.CreatedAt, &u.passwordHash, &u.Language, &u.UILanguage, &quota, &u.loginFailures, &u.loginLockedUntil, &inheritance, &defaultQuota, &u.MFAPolicy, &u.mfaEpoch)
+	err := row.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Admin, &u.MustChangePassword, &u.IsGuest, &u.Auditor, &u.EmailVerified, &u.CreatedAt, &u.passwordHash, &u.Language, &u.UILanguage, &quota, &u.loginFailures, &u.loginLockedUntil, &inheritance, &defaultQuota, &u.MFAPolicy, &u.mfaEpoch)
 	if err != nil {
 		return nil, err
 	}
@@ -182,6 +185,11 @@ func (s *Server) auth(next http.Handler) http.Handler {
 				jerr(w, 403, "guest session is upload-only")
 				return
 			}
+		}
+		s.auditSetActor(r, u)
+		if u.Auditor && !auditorAllowed(r) {
+			jerr(w, 403, "auditor accounts are read-only")
+			return
 		}
 		if u.MustChangePassword && !(r.URL.Path == "/api/users/me" && (r.Method == http.MethodGet || r.Method == http.MethodPut)) {
 			jerr(w, 403, "password change required")
@@ -1083,6 +1091,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		credentials
 		Admin                bool   `json:"admin"`
+		Auditor              bool   `json:"auditor"`
 		MustChangePassword   bool   `json:"must_change_password"`
 		QuotaBytes           *int64 `json:"quota_bytes"`
 		QuotaInheritsDefault *bool  `json:"quota_inherits_default"`
@@ -1094,6 +1103,10 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validUsername(b.Username) {
 		jerr(w, 400, msgInvalidUsername)
+		return
+	}
+	if b.Admin && b.Auditor {
+		jerr(w, 400, msgAdminAuditorExclusive)
 		return
 	}
 	if !s.requireAccountPassword(w, b.Password) {
@@ -1136,6 +1149,13 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	if b.Auditor {
+		if _, err := s.St.DB.Exec(`UPDATE users SET is_auditor=1 WHERE id=? AND admin=0`, id); err != nil {
+			s.St.DB.Exec(`DELETE FROM users WHERE id=?`, id)
+			jerr(w, 500, "user creation failed")
+			return
+		}
+	}
 	u, err := s.userByID(id)
 	if err != nil {
 		jerr(w, 500, "user policy unavailable")
@@ -1163,6 +1183,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		Name, Email          *string
 		Password             string
 		Admin                *bool   `json:"admin"` // omitted = unchanged
+		Auditor              *bool   `json:"auditor"`
 		QuotaBytes           *int64  `json:"quota_bytes"`
 		QuotaInheritsDefault *bool   `json:"quota_inherits_default"`
 		MFAPolicy            *string `json:"mfa_policy"`
@@ -1227,6 +1248,14 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	// Another user's address changed by an administrator is unverified again, so
 	// the administrator cannot use it to take over the account.
 	emailChangedByAdmin := id != me.ID && !strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(target.Email))
+	newAuditor := target.Auditor
+	if b.Auditor != nil {
+		newAuditor = *b.Auditor
+	}
+	if admin && newAuditor {
+		jerr(w, 400, msgAdminAuditorExclusive)
+		return
+	}
 	hash := target.passwordHash
 	if b.Password != "" {
 		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
@@ -1249,6 +1278,10 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if n, err := res.RowsAffected(); err != nil || n != 1 {
 		jerr(w, 409, "user changed; retry")
+		return
+	}
+	if _, err := tx.Exec(`UPDATE users SET is_auditor=? WHERE id=?`, newAuditor, id); err != nil {
+		jerr(w, 500, "user update failed")
 		return
 	}
 	if b.Password != "" || email != target.Email {
@@ -1281,6 +1314,9 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	if emailChangedByAdmin {
 		s.logEvent(me2.ID, me2.Username, "user_email_changed", s.userTarget(id), "email_verified reset")
 		s.notifyEmailChanged(target)
+	}
+	if target.Admin != admin || target.Auditor != newAuditor {
+		s.logEvent(me2.ID, me2.Username, "user_role_changed", s.userTarget(id), "admin="+strconv.FormatBool(admin)+" auditor="+strconv.FormatBool(newAuditor))
 	}
 	if b.MFAPolicy != nil && *b.MFAPolicy != target.MFAPolicy {
 		s.logEvent(me2.ID, me2.Username, "mfa_policy_changed", s.userTarget(id), "policy="+*b.MFAPolicy)

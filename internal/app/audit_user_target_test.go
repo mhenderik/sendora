@@ -9,7 +9,6 @@ import (
 func TestLogNamesTheTargetUser(t *testing.T) {
 	e := newEnv(t)
 	admin := e.setup()
-	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"logging_enabled": true}), 200, "enable logging")
 	e.mkUser(admin, "victim", false)
 	var id int64
 	if err := e.s.St.DB.QueryRow(`SELECT id FROM users WHERE username='victim'`).Scan(&id); err != nil {

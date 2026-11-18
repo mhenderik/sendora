@@ -101,8 +101,9 @@ watch(() => app.boot?.idle_logout_minutes, () => { if (monitor) monitor.setLimit
         <span>{{ app.boot?.application_name }}</span>
       </router-link>
       <nav>
-        <router-link to="/">{{ t('Upload') }}</router-link>
-        <router-link to="/shares">{{ t('My shares') }}</router-link>
+        <router-link v-if="!session.user.auditor" to="/">{{ t('Upload') }}</router-link>
+        <router-link v-if="!session.user.auditor" to="/shares">{{ t('My shares') }}</router-link>
+        <router-link v-if="session.user.auditor" to="/audit">{{ t('Audit log') }}</router-link>
         <router-link v-if="session.user.admin" to="/admin">{{ t('Admin') }}</router-link>
         <router-link to="/profile">{{ session.user.name || session.user.username }}</router-link>
         <select v-if="app.boot?.show_language_selector" :value="lang" @change="chooseLanguage($event.target.value)" :disabled="languageBusy" :aria-label="t('Language')">

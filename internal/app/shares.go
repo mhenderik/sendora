@@ -561,11 +561,13 @@ func (s *Server) openStoredFile(f FileInfo) (io.ReadSeekCloser, time.Time, error
 	key := s.St.FileKey()
 	if key == nil {
 		file.Close()
+		s.auditDecryptFailed(f.ID)
 		return nil, time.Time{}, errIntegrity
 	}
 	r, err := filecrypt.NewReader(file, st.Size(), f.Size, key, f.encID)
 	if err != nil {
 		file.Close()
+		s.auditDecryptFailed(f.ID)
 		return nil, time.Time{}, errIntegrity
 	}
 	return r, st.ModTime(), nil
@@ -671,6 +673,9 @@ func (s *Server) ownedShare(w http.ResponseWriter, r *http.Request) *Share {
 	sh, err := s.shareByID(id)
 	u := s.ctxUser(r)
 	if err != nil || !sh.userID.Valid || sh.userID.Int64 != u.ID {
+		if err == nil {
+			s.auditAccessDenied(r, catShare, "share#"+strconv.FormatInt(id, 10), "share belongs to another account")
+		}
 		jerr(w, 404, "share not found")
 		return nil
 	}

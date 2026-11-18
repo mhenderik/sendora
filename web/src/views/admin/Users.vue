@@ -11,7 +11,7 @@ const users = ref([]), err = ref(''), edit = ref(null), defaultQuotaGB = ref(nul
 const SOURCES = { entra: 'Microsoft Entra ID', oidc: 'OpenID Connect', google: 'Google', github: 'GitHub' }
 const sourceLabel = u => (u.sources || []).map(s => s === 'local' ? t('Local') : (SOURCES[s] || s)).join(' + ') || '—'
 const mfaOn = () => app.boot?.mfa_policy && app.boot.mfa_policy !== 'off'
-const blank = () => ({ id: 0, username: '', name: '', email: '', password: '', admin: false, must_change_password: true, mfa_policy: 'inherit', send_welcome: true, quota_inherits_default: true, quota_gb: defaultQuotaGB.value })
+const blank = () => ({ id: 0, username: '', name: '', email: '', password: '', admin: false, auditor: false, must_change_password: true, mfa_policy: 'inherit', send_welcome: true, quota_inherits_default: true, quota_gb: defaultQuotaGB.value })
 function open(u) { edit.value = { ...u, password: '', mfa_policy: u.mfa_policy || 'inherit', quota_gb: bytesToGB(u.quota_bytes) } }
 function inheritanceChanged() { if (edit.value.quota_inherits_default) edit.value.quota_gb = defaultQuotaGB.value }
 async function load() {
@@ -38,7 +38,7 @@ async function save() {
   try {
     // An administrator never sets another user's password: new users get one at creation
     // (and choose their own through the welcome email); existing users use the reset link.
-    const body = { username: u.username, name: u.name, email: u.email, admin: u.admin, ...quotaPayload(u.quota_inherits_default, u.quota_gb) }
+    const body = { username: u.username, name: u.name, email: u.email, admin: u.admin, auditor: !!u.auditor, ...quotaPayload(u.quota_inherits_default, u.quota_gb) }
     if (!u.id) { body.password = u.password; body.must_change_password = u.must_change_password }
     if (u.id && mfaOn()) body.mfa_policy = u.mfa_policy
     err.value = info.value = ''
@@ -97,7 +97,8 @@ async function force(u) {
       <p v-if="edit.id" class="muted">{{ t('Administrators cannot set another user\'s password: use "Send password reset link" in the user list. Changing the email address signs the user out, marks the new address as unverified and notifies the previous address.') }}</p>
       <label class="check"><input type="checkbox" v-model="edit.quota_inherits_default" @change="inheritanceChanged" /> {{ t('Use global storage default') }} ({{ defaultQuotaGB }} GB)</label>
       <label>{{ t('Storage quota (GB)') }}</label><input v-model="edit.quota_gb" :disabled="edit.quota_inherits_default" type="text" inputmode="decimal" pattern="[0-9]+([.,][0-9]{1,9})?" maxlength="64" required />
-      <label class="check"><input type="checkbox" v-model="edit.admin" :disabled="edit.id === session.user.id" /> {{ t('Admin') }}</label>
+      <label class="check"><input type="checkbox" v-model="edit.admin" :disabled="edit.id === session.user.id" @change="edit.admin && (edit.auditor = false)" /> {{ t('Admin') }}</label>
+      <label class="check"><input type="checkbox" v-model="edit.auditor" :disabled="edit.admin" /> {{ t('Auditor (read-only access to the audit log)') }}</label>
       <template v-if="edit.id && mfaOn()">
         <label for="user-mfa">{{ t('Two-step verification') }}</label>
         <select id="user-mfa" v-model="edit.mfa_policy"><option value="inherit">{{ t('Follow global setting') }}</option><option value="required">{{ t('Required for this user') }}</option><option value="exempt">{{ t('Exempt (not required)') }}</option></select>
@@ -113,7 +114,7 @@ async function force(u) {
     </form>
     <div class="table-wrap"><table>
       <tr><th>{{ t('Username') }}</th><th>{{ t('Source') }}</th><th>{{ t('Name') }}</th><th>{{ t('Email') }}</th><th>{{ t('Storage quota') }}</th><th /></tr>
-      <tr v-for="u in users" :key="u.id"><td>{{ u.username }} <span v-if="u.admin" class="badge on">{{ t('Admin') }}</span> <span v-if="mfaOn() && u.mfa_enabled" class="badge on" :title="t('Two-step verification is on')">MFA</span> <span v-if="mfaOn() && u.mfa_policy === 'required'" class="badge" :title="t('Required for this user')">{{ t('MFA required') }}</span> <span v-if="mfaOn() && u.mfa_policy === 'exempt'" class="badge off" :title="t('Exempt (not required)')">{{ t('MFA exempt') }}</span></td><td>{{ sourceLabel(u) }}</td><td>{{ u.name }}</td><td>{{ u.email }}</td>
+      <tr v-for="u in users" :key="u.id"><td>{{ u.username }} <span v-if="u.admin" class="badge on">{{ t('Admin') }}</span> <span v-if="u.auditor" class="badge">{{ t('Auditor') }}</span> <span v-if="mfaOn() && u.mfa_enabled" class="badge on" :title="t('Two-step verification is on')">MFA</span> <span v-if="mfaOn() && u.mfa_policy === 'required'" class="badge" :title="t('Required for this user')">{{ t('MFA required') }}</span> <span v-if="mfaOn() && u.mfa_policy === 'exempt'" class="badge off" :title="t('Exempt (not required)')">{{ t('MFA exempt') }}</span></td><td>{{ sourceLabel(u) }}</td><td>{{ u.name }}</td><td>{{ u.email }}</td>
         <td>{{ fmtGBShort(u.quota_bytes) }}<br /><span class="muted">{{ t(u.quota_inherits_default ? 'Global default' : 'Personal override') }}<br />{{ t('Stored files') }}: {{ fmtGBShort(u.storage_used_bytes) }}<br />{{ t('Reserved uploads') }}: {{ fmtGBShort(u.storage_reserved_bytes) }}</span>
           <p v-if="u.login_locked_until * 1000 > Date.now()" class="err">{{ t('Local login locked until') }} {{ fmtDate(new Date(u.login_locked_until * 1000).toISOString()) }}</p></td>
         <td class="actions" style="margin:0"><button class="small secondary" @click="open(u)">{{ t('Edit') }}</button>

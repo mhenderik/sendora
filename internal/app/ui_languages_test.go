@@ -179,14 +179,13 @@ func TestPublicUIEndpoints(t *testing.T) {
 
 func TestUILanguageEventLogHasCountsOnly(t *testing.T) {
 	e, admin := uiEnv(t)
-	e.s.St.SetSetting("logging_enabled", "true")
 	e.want(e.do("POST", "/api/ui-languages", admin, map[string]any{"code": "pt-br", "name": "Português", "translations": map[string]string{"Save": "Salvar-geheim"}}), 200, "import")
 	e.want(e.do("DELETE", "/api/ui-languages/pt-br", admin, nil), 200, "delete")
 	e.s.flushEvents()
 	var detail, target string
-	e.s.St.DB.QueryRow(`SELECT target,detail FROM event_log WHERE action='ui_language_imported'`).Scan(&target, &detail)
+	e.s.St.DB.QueryRow(`SELECT target,detail FROM audit_log WHERE action='ui_language_imported'`).Scan(&target, &detail)
 	var deleted int
-	e.s.St.DB.QueryRow(`SELECT COUNT(*) FROM event_log WHERE action='ui_language_deleted'`).Scan(&deleted)
+	e.s.St.DB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='ui_language_deleted'`).Scan(&deleted)
 	if deleted != 1 {
 		t.Fatal("delete not logged")
 	}

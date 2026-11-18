@@ -15,7 +15,7 @@ import (
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|verify-files|mfa-reset [flags]")
+		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|verify-files|audit-verify|mfa-reset [flags]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	source := flags.String("source", "", "database source path; stop the app before offline operations")
@@ -24,7 +24,7 @@ func run(args []string) error {
 	plaintext := flags.Bool("plaintext", false, "explicit legacy plaintext verification")
 	user := flags.String("user", "", "username for mfa-reset")
 	dataDir := flags.String("data-dir", "", "data directory holding shares/ (verify-files; default: directory of -source)")
-	asJSON := flags.Bool("json", false, "verify-files: machine-readable output")
+	asJSON := flags.Bool("json", false, "verify-files and audit-verify: machine-readable output")
 	names := flags.Bool("names", false, "verify-files: also print share and file names (sensitive)")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -132,6 +132,23 @@ func run(args []string) error {
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(counts)
+	case "audit-verify":
+		st, err := store.VerifyAuditDatabase(*source, key)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			if err := json.NewEncoder(os.Stdout).Encode(st); err != nil {
+				return err
+			}
+		} else if st.OK {
+			fmt.Printf("Audit chain verified: %d records, last seq %d, checkpoint seq %d.\n", st.Count, st.LastSeq, st.CheckpointSeq)
+		} else {
+			fmt.Printf("Audit chain BROKEN at seq %d (%s). %d records examined.\n", st.FirstBroken, st.Reason, st.Count)
+		}
+		if !st.OK {
+			return fmt.Errorf("audit chain broken at seq %d", st.FirstBroken)
+		}
 	default:
 		return errors.New("unknown command")
 	}

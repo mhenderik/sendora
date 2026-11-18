@@ -14,6 +14,7 @@ const routes = [
   { path: '/invite/:token', component: () => import('./views/Invite.vue') },
   { path: '/shares', component: () => import('./views/MyShares.vue'), meta: { auth: true } },
   { path: '/profile', component: () => import('./views/Profile.vue'), meta: { auth: true } },
+  { path: '/audit', component: () => import('./views/Audit.vue'), meta: { auth: true, auditor: true } },
   {
     path: '/admin', component: () => import('./views/admin/Admin.vue'), meta: { auth: true, admin: true },
     children: [
@@ -41,6 +42,9 @@ router.beforeEach(to => {
   if (to.meta.auth && !session.user) return { path: '/login', query: { next: to.fullPath } }
   if (to.meta.auth && (session.user?.must_change_password || session.user?.mfa_enroll_required) && to.path !== '/profile') return '/profile'
   if (to.meta.admin && !session.user?.admin) return '/'
+  if (to.meta.auditor && !session.user?.auditor) return '/'
+  // Auditor accounts are read-only: they only see the audit log and their profile.
+  if (session.user?.auditor && to.path !== '/audit' && to.path !== '/profile' && !to.path.startsWith('/share/') && !to.meta.public) return '/audit'
   if (session.user?.is_guest && !['/', '/invite'].some(p => to.path === p || to.path.startsWith('/invite/')) && !to.path.startsWith('/share/')) return '/'
 })
 export default router
