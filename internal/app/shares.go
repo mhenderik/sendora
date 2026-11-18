@@ -320,6 +320,7 @@ func (w *downloadWriter) Write(p []byte) (int, error) {
 
 func (s *Server) downloadResponse(w http.ResponseWriter, r *http.Request, sh *Share, fileID *int64, jobID int64) http.ResponseWriter {
 	shareID, ip := sh.ID, s.clientIP(r)
+	rangeHeader := r.Header.Get("Range")
 	recorded := &downloadWriter{ResponseWriter: w, started: func() error {
 		startedAt := time.Now().UTC()
 		tx, err := s.St.DB.Begin()
@@ -345,7 +346,11 @@ func (s *Server) downloadResponse(w http.ResponseWriter, r *http.Request, sh *Sh
 		if fileID != nil {
 			detail = "file#" + strconv.FormatInt(*fileID, 10)
 		}
-		s.logEvent(0, "public", "download_started", "share#"+strconv.FormatInt(shareID, 10), detail)
+		// The downloads table keeps every start; the audit log only the first
+		// request of a download, so range requests cannot flood it.
+		if s.downloadLogAllowed(shareID, rangeHeader) {
+			s.logEvent(0, "public", "download_started", "share#"+strconv.FormatInt(shareID, 10), detail)
+		}
 		return nil
 	}}
 	return &idleResponseWriter{ResponseWriter: recorded, controller: http.NewResponseController(recorded), timeout: s.transferTimeout()}
