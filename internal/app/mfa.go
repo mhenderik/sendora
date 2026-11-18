@@ -13,7 +13,6 @@ import (
 
 	"github.com/mhenderik/sendora/internal/webauthnlite"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -711,42 +710,3 @@ func (s *Server) mfaRecoveryRegenerate(w http.ResponseWriter, r *http.Request) {
 // ---------- admin ----------
 
 func validMFAUserPolicy(v string) bool { return v == "inherit" || v == "required" || v == "exempt" }
-
-// mfaReset: POST /api/users/{id}/mfa/reset (admin)
-func (s *Server) mfaReset(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil || id <= 0 {
-		jerr(w, 404, "not found")
-		return
-	}
-	var guest bool
-	if s.St.DB.QueryRow(`SELECT is_guest FROM users WHERE id=?`, id).Scan(&guest) != nil || guest {
-		jerr(w, 404, "not found")
-		return
-	}
-	tx, err := s.St.DB.Begin()
-	if err != nil {
-		jerr(w, 500, "database error")
-		return
-	}
-	defer tx.Rollback()
-	for _, q := range []string{
-		`DELETE FROM user_totp WHERE user_id=?`,
-		`DELETE FROM user_recovery_codes WHERE user_id=?`,
-		`DELETE FROM user_webauthn WHERE user_id=?`,
-		`DELETE FROM refresh_tokens WHERE user_id=?`,
-		`UPDATE users SET mfa_epoch=mfa_epoch+1 WHERE id=?`,
-	} {
-		if _, err := tx.Exec(q, id); err != nil {
-			jerr(w, 500, "reset failed")
-			return
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		jerr(w, 500, "reset failed")
-		return
-	}
-	me := s.ctxUser(r)
-	s.logEvent(me.ID, me.Username, "mfa_reset", s.userTarget(id), "")
-	jout(w, 200, map[string]any{"ok": true})
-}

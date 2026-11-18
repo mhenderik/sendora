@@ -3,7 +3,22 @@ package store
 import "fmt"
 
 var MailLanguages = []string{"en", "nl", "de", "fr", "es"}
-var MailEvents = []string{"share_created", "share_downloaded", "share_expiring", "password_reset", "verify_email", "reverse_invite", "reverse_completed", "welcome"}
+var MailEvents = []string{"share_created", "share_downloaded", "share_expiring", "password_reset", "verify_email", "reverse_invite", "reverse_completed", "welcome",
+	"admin_password_reset", "account_email_changed_notice", "mfa_reset_requested", "mfa_reset_done"}
+
+// OptionalMailEvents were added after the first translation-file format; a file
+// without them still imports and keeps the current text of those events.
+var OptionalMailEvents = []string{"welcome", "admin_password_reset", "account_email_changed_notice", "mfa_reset_requested", "mfa_reset_done"}
+
+// IsOptionalMailEvent reports whether a translation file may omit the event.
+func IsOptionalMailEvent(event string) bool {
+	for _, e := range OptionalMailEvents {
+		if e == event {
+			return true
+		}
+	}
+	return false
+}
 
 func ValidLanguage(language string) bool {
 	for _, l := range MailLanguages {
@@ -19,6 +34,9 @@ func ValidLanguage(language string) bool {
 func MailDefaults(event, language string) (string, string) {
 	if event == "welcome" {
 		return welcomeMailDefaults(language)
+	}
+	if subject, body, ok := securityMailDefaults(event, language); ok {
+		return subject, body
 	}
 	if event != "share_downloaded" {
 		return legacyMailDefaults(event, language)

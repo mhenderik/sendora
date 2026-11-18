@@ -225,6 +225,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	oldAppURL := s.St.Setting("application_url")
 	tx, err := s.St.DB.Begin()
 	if err != nil {
 		jerr(w, 500, "settings update failed")
@@ -256,6 +257,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(keys)
 	me := s.ctxUser(r)
 	s.logEvent(me.ID, me.Username, "settings_changed", "settings", strings.Join(keys, ","))
+	if v, ok := updates["application_url"]; ok && v != oldAppURL {
+		// Emailed links are built from it; the values themselves are not logged.
+		s.logEvent(me.ID, me.Username, "application_url_changed", "settings", "")
+	}
 	if np, ok := updates["mfa_policy"]; ok {
 		s.logEvent(me.ID, me.Username, "mfa_policy_changed", "settings", "policy="+np)
 	}

@@ -239,6 +239,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/register", s.register)
 			r.Post("/verify-email", s.verifyEmail)
 			r.Post("/resend-verification", s.resendVerification)
+			r.Post("/mfa-reset/confirm", s.mfaResetConfirm)
 			r.Post("/mfa/totp", s.mfaLogin("totp"))
 			r.Post("/mfa/recovery", s.mfaLogin("recovery"))
 			r.Post("/mfa/webauthn/begin", s.mfaWebAuthnLoginBegin)

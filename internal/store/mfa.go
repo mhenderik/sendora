@@ -69,7 +69,15 @@ CREATE TABLE IF NOT EXISTS user_webauthn (
   name TEXT NOT NULL DEFAULT '',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_used_at DATETIME);
-CREATE INDEX IF NOT EXISTS user_webauthn_user ON user_webauthn(user_id);`); err != nil {
+CREATE INDEX IF NOT EXISTS user_webauthn_user ON user_webauthn(user_id);
+CREATE TABLE IF NOT EXISTS mfa_reset_requests (
+  hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  requested_by INTEGER NOT NULL DEFAULT 0,
+  expires_at DATETIME NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS mfa_reset_requests_user ON mfa_reset_requests(user_id);`); err != nil {
 		return err
 	}
 	return tx.Commit()

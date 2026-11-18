@@ -13,6 +13,8 @@ import (
 // welcome email stays valid.
 const welcomeTokenTTL = 7 * 24 * time.Hour
 
+const msgWelcomeUnverified = "this user's email address is not verified; ask them to use 'Forgot password' or confirm the address first"
+
 // Outcomes reported to the administrator.
 const (
 	welcomeSent    = "sent"
@@ -94,6 +96,16 @@ func (s *Server) resendWelcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	me := s.ctxUser(r)
+	// The link lets its holder set the password, so it may only go to an address
+	// the user proved is theirs, or to an account that never finished its welcome
+	// (an address changed by an administrator drops those links, see updateUser).
+	var pending int
+	s.St.DB.QueryRow(`SELECT COUNT(*) FROM password_resets WHERE user_id=? AND kind='welcome'`, u.ID).Scan(&pending)
+	if !u.EmailVerified && pending == 0 {
+		s.logEvent(me.ID, me.Username, "user_welcome", s.userTarget(id), "welcome="+welcomeSkipped)
+		jerr(w, 409, msgWelcomeUnverified)
+		return
+	}
 	outcome, note := s.sendWelcome(r, me, u)
 	s.logEvent(me.ID, me.Username, "user_welcome", s.userTarget(id), "welcome="+outcome)
 	switch outcome {
