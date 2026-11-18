@@ -266,7 +266,7 @@ func (s *Server) logsStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	refused, _ := s.auditPurgeState()
 	jout(w, 200, map[string]any{"verified": st.OK, "retention_days": s.auditRetentionDays(), "ip_logging": s.St.SettingBool("audit_log_ip"),
-		"purge_refused": refused})
+		"purge_refused": refused, "forwarding": s.fwd.status(s)})
 }
 
 // exportDetail describes an export for the audit trail: format, number of records
@@ -408,7 +408,8 @@ func (s *Server) auditStatusHandler(w http.ResponseWriter, r *http.Request) {
 		"retention_days": s.auditRetentionDays(), "ip_logging": s.St.SettingBool("audit_log_ip"),
 		"checkpoint":     map[string]any{"seq": st.CheckpointSeq, "hash": st.CheckpointHash},
 		"write_failures": s.audit.fails.Load(),
-		"purge_refused":  refused}
+		"purge_refused":  refused,
+		"forwarding":     s.fwd.status(s)}
 	if refused {
 		out["purge_refused_since"] = since.Format(time.RFC3339)
 	}

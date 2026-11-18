@@ -411,7 +411,13 @@ func (w *downloadWriter) Write(p []byte) (int, error) {
 }
 
 func (s *Server) downloadResponse(w http.ResponseWriter, r *http.Request, sh *Share, fileID *int64, jobID int64) http.ResponseWriter {
-	shareID, ip := sh.ID, s.clientIP(r)
+	// downloads.ip is the recipient's address. It is personal data that nothing
+	// reads back (the owner's download history shows times and files only), so
+	// it is stored only while audit_log_ip is on and left empty otherwise.
+	shareID, ip := sh.ID, ""
+	if s.auditLogIP() {
+		ip = s.clientIP(r)
+	}
 	rangeHeader := r.Header.Get("Range")
 	recorded := &downloadWriter{ResponseWriter: w, started: func() error {
 		startedAt := time.Now().UTC()

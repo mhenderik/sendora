@@ -15,6 +15,7 @@ var boolSettings = map[string]bool{
 	"show_language_selector": true, "allow_reverse_shares": true, "allow_self_registration": true,
 	"require_email_verification": true, "auto_clean_files": true, "backups_enabled": true,
 	"ui_use_unsplash": true, "ui_default_background": true, "audit_log_ip": true,
+	"audit_forward_stdout": true, "audit_forward_syslog_tls": true,
 }
 
 // intSettings lists the allowed range of each numeric setting.
@@ -98,6 +99,18 @@ func (s *Server) validateGeneralSetting(key string, val *string) (owned bool, er
 			}
 		}
 		*val = v
+	case "audit_forward_syslog":
+		norm, err := validateForwardSyslog(v)
+		if err != nil {
+			return true, err
+		}
+		*val = norm
+	case "audit_forward_webhook_url":
+		norm, err := validateForwardWebhook(v)
+		if err != nil {
+			return true, err
+		}
+		*val = norm
 	case "ui_background":
 		if !plainText(v, 200) || strings.ContainsAny(v, "/\\") {
 			return true, fmt.Errorf("invalid background")

@@ -2,7 +2,13 @@
 
 package app
 
-import "syscall"
+import (
+	"errors"
+	"syscall"
+)
+
+// errNoDiskSpaceInfo is returned on platforms without statfs (never here).
+var errNoDiskSpaceInfo = errors.New("free disk space unavailable on this platform")
 
 // freeDiskSpace reports the bytes available to unprivileged writers on the
 // filesystem holding dir.

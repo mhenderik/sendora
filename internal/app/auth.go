@@ -436,6 +436,14 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 	var uid int64
 	var issued, started sql.NullTime
 	if err := tx.QueryRow(`DELETE FROM refresh_tokens WHERE hash=? AND expires_at>? RETURNING user_id,issued_at,session_started`, hashToken(c.Value), time.Now()).Scan(&uid, &issued, &started); err != nil {
+		// A token that is still stored but past its absolute expiry (maintenance
+		// removes those periodically): the session ended at its 30-day limit.
+		var expired int64
+		if tx.QueryRow(`DELETE FROM refresh_tokens WHERE hash=? RETURNING user_id`, hashToken(c.Value)).Scan(&expired) == nil {
+			end()
+			s.logEvent(expired, s.usernameOf(expired), "session_expired", "", "absolute session limit reached")
+			return
+		}
 		var victim int64
 		var spentAt time.Time
 		if tx.QueryRow(`SELECT user_id,spent_at FROM refresh_spent WHERE hash=? AND expires_at>?`, hashToken(c.Value), time.Now()).Scan(&victim, &spentAt) == nil {
@@ -468,6 +476,7 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	if now.Sub(start) >= sessionMaxAge {
 		end()
+		s.logEvent(uid, s.usernameOf(uid), "session_expired", "", "absolute session limit reached")
 		return
 	}
 	u, err := scanUser(tx.QueryRow(`SELECT `+userCols+` FROM users WHERE id=?`, uid))
@@ -494,6 +503,7 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 		}
 		if issued.Valid && idleExpired(idleMinutes, issued.Time, time.Now()) {
 			end() // abandoned session
+			s.logEvent(u.ID, u.Username, "session_expired_idle", "", "idle_logout_minutes="+strconv.Itoa(idleMinutes))
 			return
 		}
 	}
@@ -516,7 +526,12 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 	jout(w, 200, map[string]any{"access_token": s.accessTokenAt(u, authTime), "user": u})
 }
 
+// logout ends the session. It runs without the auth middleware (an expired
+// access token must still be able to sign out), so the user is identified from
+// the presented access token or refresh cookie for the audit record; invalid
+// credentials never make logout fail, they only leave the record anonymous.
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	var uid int64
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	claims := jwt.MapClaims{}
 	if tok != "" {
@@ -524,12 +539,22 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 			if exp, err := claims.GetExpirationTime(); err == nil && exp != nil {
 				s.St.DB.Exec(`INSERT OR IGNORE INTO revoked_access_tokens(hash,expires_at) VALUES(?,?)`, hashToken(tok), exp.Time)
 			}
+			uid, _ = strconv.ParseInt(fmt.Sprint(claims["sub"]), 10, 64)
 		}
 	}
 	if c, err := r.Cookie("refresh"); err == nil {
-		s.St.DB.Exec(`DELETE FROM refresh_tokens WHERE hash=?`, hashToken(c.Value))
+		var owner int64
+		if s.St.DB.QueryRow(`DELETE FROM refresh_tokens WHERE hash=? RETURNING user_id`, hashToken(c.Value)).Scan(&owner) == nil && uid == 0 {
+			uid = owner
+		}
 	}
 	http.SetCookie(w, &http.Cookie{Name: "refresh", Path: "/api/auth", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.secureCookies(r)})
+	if uid > 0 {
+		if u, err := s.userByID(uid); err == nil {
+			s.auditSetActor(r, u)
+			s.logEvent(u.ID, u.Username, "logout", "", "")
+		}
+	}
 	jout(w, 200, map[string]any{"ok": true})
 }
 

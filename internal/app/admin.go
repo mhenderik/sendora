@@ -153,7 +153,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 				jerr(w, 400, "invalid value for "+k)
 				return
 			}
-			if k == "audit_retention_days" || k == "audit_log_ip" {
+			if k == "audit_retention_days" || k == "audit_log_ip" || auditForwardKeys[k] {
 				jerr(w, 400, "invalid value for "+k)
 				return
 			}
@@ -704,6 +704,20 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
 	me := s.ctxUser(r)
 	s.logEvent(me.ID, me.Username, "backup_created", n, "")
 	jout(w, 201, map[string]any{"name": n})
+}
+
+// backupDownloadInfo names the backup and its size for the backup_downloaded
+// record, which is written before the file is served (critical middleware).
+func (s *Server) backupDownloadInfo(r *http.Request) (string, string, bool) {
+	n := chi.URLParam(r, "name")
+	if !backupRe.MatchString(n) {
+		return "", "", false
+	}
+	st, err := os.Stat(filepath.Join(s.St.DataDir, "backups", n))
+	if err != nil || !st.Mode().IsRegular() {
+		return "", "", false
+	}
+	return n, "size=" + strconv.FormatInt(st.Size(), 10) + " bytes", true
 }
 
 func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request) {
