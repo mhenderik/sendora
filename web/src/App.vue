@@ -9,6 +9,7 @@ import { onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { session as sess, refresh as refreshSession } from './api'
 import { createIdleMonitor } from './idle.mjs'
 import { isBusy } from './transfers.mjs'
+import { shouldPromptMFA, mfaPromptKey } from './mfa-prompt.mjs'
 
 const router = useRouter(), route = useRoute()
 const ready = true
@@ -23,10 +24,27 @@ watchEffect(() => {
 })
 
 // The running version is shown in the footer to signed-in users only; public pages never expose it.
+// The same call tells whether the account uses a local password, which decides if we
+// remind the user that two-step verification is not set up yet.
+const mfaPrompt = ref(false), mfaBtn = ref(null)
+function mfaDismissed(id) { try { return sessionStorage.getItem(mfaPromptKey(id)) === '1' } catch { return false } }
+function dismissMfa() {
+  const id = session.user?.id
+  mfaPrompt.value = false
+  if (id) { try { sessionStorage.setItem(mfaPromptKey(id), '1') } catch {} }
+}
+function setupMfa() { dismissMfa(); router.push('/profile') }
+watch(mfaPrompt, async open => { if (open) { await nextTick(); mfaBtn.value?.focus() } })
 watch(() => session.user?.id, async id => {
   app.version = ''
+  mfaPrompt.value = false
   if (!id) return
-  try { const v = (await api('/users/me')).version; if (session.user?.id === id) app.version = v || '' } catch {}
+  try {
+    const d = await api('/users/me')
+    if (session.user?.id !== id) return
+    app.version = d.version || ''
+    mfaPrompt.value = shouldPromptMFA({ user: d.user, hasPassword: d.has_password, boot: app.boot, dismissed: mfaDismissed(id) })
+  } catch {}
 }, { immediate: true })
 const versionLabel = computed(() => !session.user || !app.version ? '' : /^\d/.test(app.version) ? 'v' + app.version : app.version)
 
@@ -121,6 +139,16 @@ watch(() => app.boot?.idle_logout_minutes, () => { if (monitor) monitor.setLimit
         <h2 id="idle-title">{{ t('Still there?') }}</h2>
         <p id="idle-desc" aria-live="assertive">{{ t('You will be signed out in {n} seconds', { n: idle.seconds }) }}</p>
         <div class="actions"><button ref="stayBtn" type="button" @click="stay">{{ t('Stay signed in') }}</button></div>
+      </div>
+    </div>
+    <div v-if="mfaPrompt" class="idle-modal" role="alertdialog" aria-modal="true" aria-labelledby="mfa-title" aria-describedby="mfa-desc" @keydown.esc="dismissMfa">
+      <div class="idle-box card">
+        <h2 id="mfa-title">{{ t('Two-step verification is not set up yet') }}</h2>
+        <p id="mfa-desc">{{ t('Your account is protected by a password only. Set up an authenticator app or a passkey to protect it better.') }}</p>
+        <div class="actions">
+          <button ref="mfaBtn" type="button" @click="setupMfa">{{ t('Set up now') }}</button>
+          <button type="button" class="secondary" @click="dismissMfa">{{ t('Remind me later') }}</button>
+        </div>
       </div>
     </div>
     <main><p v-if="languageError" class="err" role="alert">{{ languageError }}</p><router-view :key="route.fullPath" /></main>

@@ -50,7 +50,7 @@ func TestMFAMigrationIsIdempotentAndCascades(t *testing.T) {
 	if left != 0 {
 		t.Fatal("factors must cascade with the user", left)
 	}
-	if st.Setting("mfa_policy") != "admins" || st.Setting("mfa_totp_enabled") != "true" || st.Setting("mfa_webauthn_enabled") != "true" {
+	if st.Setting("mfa_policy") != "off" || st.Setting("mfa_totp_enabled") != "true" || st.Setting("mfa_webauthn_enabled") != "true" {
 		t.Fatal("defaults seeded")
 	}
 }

@@ -366,14 +366,14 @@ func TestSecureDefaultsForFreshStoreKeepExistingValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"account_password_min_length": "12", "share_password_min_length": "10", "mfa_policy": "admins", "allow_preview": "true", "allow_self_registration": "false"}
+	want := map[string]string{"account_password_min_length": "8", "share_password_min_length": "8", "mfa_policy": "off", "allow_preview": "true", "allow_self_registration": "false"}
 	for k, v := range want {
 		if got := st.Setting(k); got != v {
 			t.Errorf("fresh default %s = %q, want %q", k, got, v)
 		}
 	}
 	// An existing installation keeps what it has stored.
-	for k, v := range map[string]string{"account_password_min_length": "8", "share_password_min_length": "8", "mfa_policy": "off"} {
+	for k, v := range map[string]string{"account_password_min_length": "12", "share_password_min_length": "10", "mfa_policy": "admins"} {
 		if err := st.SetSetting(k, v); err != nil {
 			t.Fatal(err)
 		}
@@ -384,12 +384,12 @@ func TestSecureDefaultsForFreshStoreKeepExistingValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer again.DB.Close()
-	if again.Setting("account_password_min_length") != "8" || again.Setting("share_password_min_length") != "8" || again.Setting("mfa_policy") != "off" {
+	if again.Setting("account_password_min_length") != "12" || again.Setting("share_password_min_length") != "10" || again.Setting("mfa_policy") != "admins" {
 		t.Fatal("upgrade must not change stored settings")
 	}
 }
 
-func TestFreshInstallFirstAdministratorIsNotLockedOut(t *testing.T) {
+func TestFreshInstallDoesNotForceMFA(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -400,15 +400,17 @@ func TestFreshInstallFirstAdministratorIsNotLockedOut(t *testing.T) {
 	defer ts.Close()
 	e := &env{t: t, s: s, ts: ts}
 	r := e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "admin", "password": "password123", "email": "a@x.io"})
-	e.want(r, 400, "11-character password refused by the new default")
-	r = e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "admin", "password": "a-long-passphrase", "email": "a@x.io"})
-	e.want(r, 200, "setup")
+	e.want(r, 200, "setup with an 11-character password (default minimum is 8)")
 	me := e.do("GET", "/api/users/me", r.S("access_token"), nil)
 	e.want(me, 200, "me")
-	if u, _ := me.J()["user"].(map[string]any); u["mfa_enroll_required"] != true {
-		t.Fatal("the administrator must be prompted to enrol", string(me.Body))
+	u, _ := me.J()["user"].(map[string]any)
+	if u["mfa_enroll_required"] == true || u["mfa_required"] == true {
+		t.Fatal("MFA must not be forced by default", string(me.Body))
 	}
-	// Enrolment remains reachable.
+	if u["mfa_enabled"] == true {
+		t.Fatal("a new account has no factor yet", string(me.Body))
+	}
+	// Enrolment stays available for anyone who wants it.
 	e.want(e.do("GET", "/api/users/me/mfa", r.S("access_token"), nil), 200, "mfa status reachable")
 }
 
@@ -493,9 +495,6 @@ func TestWarnSecurityConfig(t *testing.T) {
 		"self-registration is on without a domain allowlist",
 		"self-registration is on without email verification",
 		"self-registration is on but no SMTP host",
-		"multi-factor authentication is off",
-		"account_password_min_length is 8",
-		"share_password_min_length is 6",
 	} {
 		if !strings.Contains(out, frag) {
 			t.Errorf("missing warning %q in:\n%s", frag, out)

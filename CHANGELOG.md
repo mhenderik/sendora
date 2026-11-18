@@ -130,22 +130,21 @@
 - **Share metadata:** `GET /api/shares/{id}` no longer returns the share name before a
   password-protected share is unlocked, and the 410 response for an expired share
   has no name. The page shows a neutral title until unlocked.
-- **Secure defaults for new installations** (existing installations keep their
-  stored values; restore the old value in Admin -> Settings or with the variable):
-  - `account_password_min_length` 12 (was 8): `SENDORA_ACCOUNT_PASSWORD_MIN_LENGTH=8`
-  - `share_password_min_length` 10 (was 8): `SENDORA_SHARE_PASSWORD_MIN_LENGTH=8`
-  - `mfa_policy` `admins` (was `off`): administrators are taken to their profile at
-    first sign-in to set up an authenticator app or passkey; `SENDORA_MFA_POLICY=off`
-    restores the old behaviour.
-  - Unchanged: self-registration off, previews on (only the fixed list of image,
-    video and audio types is ever shown inline).
+- **Defaults stay as they were** (the review suggested stricter ones, but 12 characters and
+  mandatory MFA did not work well in practice): password minimum 8 for accounts and
+  shares, `mfa_policy` `off`, self-registration off, previews on (only the fixed list of
+  image, video and audio types is ever shown inline). All remain configurable.
+- **Two-step verification reminder:** a signed-in account that signs in with a local
+  password and has no second factor yet gets a dialog ("Two-step verification is not set
+  up yet") with *Set up now* and *Remind me later* (hidden for the rest of that browser
+  session). Accounts that use an identity provider, guests and auditors are not asked.
+  A required policy (`admins` or `all`) still applies only to local accounts.
 - **Startup:** Sendora refuses to start when `JWT_SECRET_FILE`, the SMTP password
   file or a provider client-secret file is writable by the group or accessible to
   others, or owned by another user (the rule of the database key file). It logs a
   warning, never the value, for a secret given as a plain environment variable, and
   warnings for a non-loopback `HOST` without an https application URL, risky
-  self-registration, MFA off while an administrator exists, a password minimum
-  below 10, and (once) `X-Forwarded-For` without `SENDORA_TRUSTED_PROXIES`.
+  self-registration and (once) `X-Forwarded-For` without `SENDORA_TRUSTED_PROXIES`.
   On Linux core dumps are disabled and the process is made non-dumpable.
 - **Key material:** the SQLCipher key literal is built in buffers that are wiped
   right after use, and the key read from the key file is wiped once the store has

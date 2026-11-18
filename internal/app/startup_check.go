@@ -123,16 +123,6 @@ func (s *Server) warnSecurityConfig() {
 			log.Printf("WARNING: self-registration is on but no SMTP host is configured: addresses cannot be verified")
 		}
 	}
-	var admins int
-	s.St.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE admin=1 AND is_guest=0`).Scan(&admins)
-	if admins > 0 && s.St.Setting("mfa_policy") == "off" {
-		log.Printf("WARNING: multi-factor authentication is off (mfa_policy=off) while administrator accounts exist; set mfa_policy to admins")
-	}
-	for _, key := range []string{"account_password_min_length", "share_password_min_length"} {
-		if n, ok := parseStrictInt(s.St.Setting(key), 1, maxSharePasswordBytes); ok && n < 10 {
-			log.Printf("WARNING: %s is %d; a minimum below 10 characters is weak", key, n)
-		}
-	}
 }
 
 var warnForwardedOnce sync.Once
