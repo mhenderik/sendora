@@ -8,6 +8,7 @@ import { gbToBytes, bytesToGB } from '../../quota.mjs'
 const s = ref(null), msg = ref(''), err = ref(''), quotaGB = ref(''), managed = ref([])
 // Settings from the server configuration (ConfigMap) are shown read-only.
 const m = k => managed.value.includes(k)
+const SECURITY_KEYS = ['mfa_policy', 'mfa_reminder_days', 'mfa_totp_enabled', 'mfa_webauthn_enabled', 'account_password_require_upper', 'account_password_require_lower', 'account_password_require_digit', 'account_password_require_symbol', 'account_password_min_length', 'audit_retention_days', 'audit_log_ip']
 async function load() {
   const settings = await api('/settings')
   quotaGB.value = bytesToGB(settings.default_storage_quota_bytes)
@@ -17,12 +18,12 @@ async function load() {
 onMounted(async () => { try { await load() } catch (e) { err.value = e.message } })
 const flags = [['allow_reverse_shares', tr('Allow reverse shares (guest invites)')], ['allow_self_registration', tr('Allow self registration')], ['show_language_selector', tr('Show language selector')], ['auto_clean_files', tr('Delete files of expired shares')], ['backups_enabled', tr('Daily database backups')], ['allow_preview', tr('Allow preview of images, video and audio')]]
 const nums = [['default_expiry_time', tr('Default expiry (days)')], ['max_expiry_time', tr('Max expiry (days, 0 = none)')], ['max_share_size', tr('Max share size (MB, 0 = none)')], ['clean_files_days', tr('Delete expired files after (days)')], ['expiry_warning_days', tr('Warn owners N days before expiry (0 = off)')], ['backup_keep', tr('Backups to keep')]]
-const accountFlags = [['account_password_require_upper', tr('Require an uppercase letter')], ['account_password_require_lower', tr('Require a lowercase letter')], ['account_password_require_digit', tr('Require a digit')], ['account_password_require_symbol', tr('Require a symbol')]]
 const policyFlags = [['require_share_password', tr('Require a password on every share')], ['share_password_require_upper', tr('Require an uppercase letter')], ['share_password_require_lower', tr('Require a lowercase letter')], ['share_password_require_digit', tr('Require a digit')], ['share_password_require_symbol', tr('Require a symbol')]]
 async function save() {
   msg.value = err.value = ''
   try {
     const body = { ...s.value, default_storage_quota_bytes: String(gbToBytes(quotaGB.value)) }
+    for (const k of SECURITY_KEYS) delete body[k] // saved on the Security tab
     await api('/settings', { method: 'PUT', body }); await loadBoot(); await load(); msg.value = t('Saved')
     return true
   } catch (e) { err.value = e.message; return false }
@@ -52,22 +53,7 @@ async function test() { try { if (!await save()) return; await api('/email-templ
     <label v-for="[k, l] in policyFlags" :key="k" class="check"><input :disabled="m(k)" type="checkbox" :checked="s[k] === 'true'" @change="s[k] = String($event.target.checked)" /> {{ t(l) }}</label>
     <label>{{ t('Minimum password length (1-72)') }}</label><input :disabled="m('share_password_min_length')" v-model="s.share_password_min_length" type="number" min="1" max="72" />
     <p class="muted">{{ t('Applies to passwords set on new shares. Existing shares keep their passwords.') }}</p>
-    <h2 style="margin-top:20px">{{ t('Account password policy') }}</h2>
-    <label v-for="[k, l] in accountFlags" :key="k" class="check"><input :disabled="m(k)" type="checkbox" :checked="s[k] === 'true'" @change="s[k] = String($event.target.checked)" /> {{ t(l) }}</label>
-    <label>{{ t('Minimum password length (1-72)') }}</label><input :disabled="m('account_password_min_length')" v-model="s.account_password_min_length" type="number" min="1" max="72" />
-    <p class="muted">{{ t('Applies to local accounts when a password is set or changed (setup, registration, reset, profile, administrators). Existing passwords keep working until they are next changed.') }}</p>
-    <h2 style="margin-top:20px">{{ t('Multi-factor authentication') }}</h2>
-    <label for="mfa-policy">{{ t('Two-step verification policy') }}</label>
-    <select :disabled="m('mfa_policy')" id="mfa-policy" v-model="s.mfa_policy"><option value="off">{{ t('Off') }}</option><option value="optional">{{ t('Optional (users choose)') }}</option><option value="admins">{{ t('Required for administrators') }}</option><option value="all">{{ t('Required for everyone') }}</option></select>
-    <label>{{ t('Remind users who skipped two-step setup again after (days, 0 = at every sign-in)') }}</label><input :disabled="m('mfa_reminder_days')" v-model="s.mfa_reminder_days" type="number" min="0" max="365" />
-    <p class="muted">{{ t('Accounts with a local password and no second factor see a reminder after signing in. Dismissing it hides it for this many days in that browser.') }}</p>
-    <label class="check"><input :disabled="m('mfa_totp_enabled')" type="checkbox" :checked="s.mfa_totp_enabled !== 'false'" @change="s.mfa_totp_enabled = String($event.target.checked)" /> {{ t('Allow authenticator apps (TOTP)') }}</label>
-    <label class="check"><input :disabled="m('mfa_webauthn_enabled')" type="checkbox" :checked="s.mfa_webauthn_enabled !== 'false'" @change="s.mfa_webauthn_enabled = String($event.target.checked)" /> {{ t('Allow passkeys and security keys') }}</label>
-    <p class="muted">{{ t('Applies to local accounts. Sign-ins through an external provider (Entra, OpenID Connect, Google, GitHub) use that provider\'s own multi-factor checks. Passkeys need https with a fixed application URL, or localhost. To require it for administrators or everyone, first set up two-step verification for your own account (Profile), then choose the policy. Users can be set to required or exempt individually under Users. Turning the policy off disables all two-step prompts.') }}</p>
-    <h2 style="margin-top:20px">{{ t('Logging') }}</h2>
-    <label>{{ t('Audit log retention (days, 90-365)') }}</label><input :disabled="m('audit_retention_days')" v-model="s.audit_retention_days" type="number" min="90" max="365" />
-    <label class="check"><input :disabled="m('audit_log_ip')" type="checkbox" :checked="s.audit_log_ip === 'true'" @change="s.audit_log_ip = String($event.target.checked)" /> {{ t('Store the IP address of each audit log entry') }}</label>
-    <p class="muted">{{ t('The audit log is always on and tamper-evident; it cannot be switched off or edited. Entries older than the retention period are deleted automatically. Every change to these settings is itself recorded.') }}</p>
+    <p class="muted">{{ t('Two-step verification, the account password policy and the audit log are under Security.') }}</p>
     <h2 style="margin-top:20px">{{ t('Automatic sign-out') }}</h2>
     <label>{{ t('Sign out after inactivity (minutes, 0 = never)') }}</label><input :disabled="m('idle_logout_minutes')" v-model="s.idle_logout_minutes" type="number" min="0" max="10080" />
     <p class="muted">{{ t('Users are signed out after this many minutes without activity, with a warning one minute before. Running uploads and downloads never count as inactive and are not interrupted. 0 turns this off.') }}</p>

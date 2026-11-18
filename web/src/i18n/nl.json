@@ -914,5 +914,7 @@
   "invalid category": "ongeldige categorie",
   "invalid outcome": "ongeldige uitkomst",
   "format must be csv or jsonl": "formaat moet csv of jsonl zijn",
-  "Audit log retention (days, 90-365)": "Bewaartermijn auditlogboek (dagen, 90-365)"
+  "Audit log retention (days, 90-365)": "Bewaartermijn auditlogboek (dagen, 90-365)",
+  "Security settings": "Beveiligingsinstellingen",
+  "Two-step verification, the account password policy and the audit log are under Security.": "Tweestapsverificatie, het wachtwoordbeleid voor accounts en het auditlogboek staan onder Beveiliging."
 }

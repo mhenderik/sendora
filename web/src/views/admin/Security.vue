@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { api, fmtDate } from '../../api'
 import { t } from '../../i18n'
+import SecuritySettings from './SecuritySettings.vue'
 const info = ref(null), enabled = ref(true), allowlist = ref(''), err = ref(''), msg = ref(''), busy = ref(false)
 async function load() {
   err.value = ''
@@ -27,6 +28,7 @@ async function unblock(ip) {
 onMounted(load)
 </script>
 <template>
+  <SecuritySettings />
   <div class="card">
     <div class="actions" style="margin:0 0 12px"><h1 style="margin:0">{{ t('Blocked addresses') }}</h1>
       <button class="small secondary" @click="load">{{ t('Refresh') }}</button></div>
