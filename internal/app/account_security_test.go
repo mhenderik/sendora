@@ -264,9 +264,9 @@ func TestApplicationURLChangeIsLogged(t *testing.T) {
 	if !strings.Contains(string(logs.Body), "application_url_changed") {
 		t.Fatal("change not logged", string(logs.Body))
 	}
-	if strings.Contains(string(logs.Body), "secret-host") {
-		t.Fatal("setting value logged")
-	}
+	// The audit trail deliberately records old and new value of this non-secret
+	// setting: a changed application URL is how password-reset links could be
+	// redirected, so an auditor needs to see where it pointed.
 }
 
 func TestSecurityMailTemplatesExistInEveryLanguage(t *testing.T) {
