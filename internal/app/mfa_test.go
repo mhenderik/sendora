@@ -250,8 +250,9 @@ func TestMFATokenBoundaries(t *testing.T) {
 	oid, _ := e.userRow("erin")
 	ou, _ := e.s.userByID(oid)
 	e.want(e.do("POST", "/api/auth/mfa/totp", "", map[string]any{"mfa_token": e.s.mfaToken(ou), "code": code}), 401, "other account has no authenticator")
-	// A password change after the first step invalidates the pending token.
-	e.want(e.do("PUT", "/api/users/"+idStr(id), admin, map[string]any{"name": "D", "email": "dave@x.io", "password": "Another-password-1"}), 200, "password change")
+	// A credential change after the first step (here: the email address, since an
+	// administrator can no longer set a password) invalidates the pending token.
+	e.want(e.do("PUT", "/api/users/"+idStr(id), admin, map[string]any{"name": "D", "email": "dave2@x.io"}), 200, "credential change")
 	e.want(e.do("POST", "/api/auth/mfa/totp", "", map[string]any{"mfa_token": mt, "code": code}), 401, "credential changed")
 	// Expiry is enforced by the 5 minute TTL.
 	if ttl := claimsOf(t, mt)["exp"].(float64) - float64(time.Now().Unix()); ttl > 301 || ttl < 290 {
@@ -498,7 +499,13 @@ func TestMFAAdminReset(t *testing.T) {
 	e.want(e.do("POST", "/api/users/"+idStr(iid)+"/mfa/reset", "", nil), 401, "anonymous cannot reset")
 	e.want(e.do("POST", "/api/users/999/mfa/reset", admin, nil), 404, "unknown user")
 	e.want(e.do("POST", "/api/users/abc/mfa/reset", admin, nil), 404, "bad id")
-	e.want(e.do("POST", "/api/users/"+idStr(iid)+"/mfa/reset", admin, nil), 200, "reset")
+	// The reset is a two-step flow now (details in account_security_test.go): the
+	// administrator's call only mails the user, whose confirmation removes the factors.
+	sink := newSMTP(t)
+	e.useSMTP(sink)
+	e.s.BaseURL = "https://files.example.com"
+	e.want(e.do("POST", "/api/users/"+idStr(iid)+"/mfa/reset", admin, nil), 200, "reset request")
+	e.want(e.do("POST", "/api/auth/mfa-reset/confirm", "", map[string]any{"token": linkToken(t, sink.wait(t, "/mfa-reset/"), "mfa-reset")}), 200, "user confirms")
 	var n int
 	e.s.St.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM user_totp)+(SELECT COUNT(*) FROM user_recovery_codes)+(SELECT COUNT(*) FROM user_webauthn)+(SELECT COUNT(*) FROM refresh_tokens WHERE user_id=?)`, iid).Scan(&n)
 	if n != 0 {
@@ -613,11 +620,17 @@ func TestMFANoSecretsInLogsOrResponses(t *testing.T) {
 	e.do("POST", "/api/auth/mfa/recovery", "", map[string]any{"mfa_token": e.login("lena", "password123").J()["mfa_token"].(string), "code": codes[0]})
 	e.do("POST", "/api/users/me/mfa/recovery/regenerate", tok, map[string]any{"password": "password123"})
 	lid, _ := e.userRow("lena")
-	e.do("POST", "/api/users/"+idStr(lid)+"/mfa/reset", admin, nil)
+	sink := newSMTP(t)
+	e.useSMTP(sink)
+	e.s.BaseURL = "https://files.example.com"
+	e.want(e.do("POST", "/api/users/"+idStr(lid)+"/mfa/reset", admin, nil), 200, "reset request")
+	resetToken := linkToken(t, sink.wait(t, "/mfa-reset/"), "mfa-reset")
+	e.want(e.do("POST", "/api/auth/mfa-reset/confirm", "", map[string]any{"token": resetToken}), 200, "user confirms")
+	e.s.flushEvents()
 	logs := e.do("GET", "/api/logs?limit=100", admin, nil)
 	e.want(logs, 200, "logs")
 	body := string(logs.Body)
-	sensitive := []string{secretB32, typed, "999999", mt}
+	sensitive := []string{secretB32, typed, "999999", mt, resetToken, hashToken(resetToken)}
 	for _, c := range codes {
 		sensitive = append(sensitive, c.(string))
 	}
@@ -626,7 +639,7 @@ func TestMFANoSecretsInLogsOrResponses(t *testing.T) {
 			t.Fatalf("event log leaks %q", s)
 		}
 	}
-	for _, want := range []string{"mfa_enrolled", "mfa_login_ok", "mfa_failed", "mfa_reset"} {
+	for _, want := range []string{"mfa_enrolled", "mfa_login_ok", "mfa_failed", "mfa_reset_requested", "mfa_reset_confirmed"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing audit event %s in %s", want, body)
 		}

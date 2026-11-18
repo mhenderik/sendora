@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.1.5
+## Unreleased
+
+## 0.1.5 (2026-11-18)
+
+### Security
 
 - **Security: share file format v2.** Every new encrypted file carries a random file ID
   (header 53 bytes) that is part of each chunk's authenticated data and is stored in the
@@ -21,9 +25,27 @@
   (`internal/filecrypt/testdata/vectors.json`), an independent Python check
   (`docs/tools/verify_vectors.py`), fuzz and property tests for the reader.
 
-## Unreleased
-
-## 0.1.5 (2026-11-18)
+- **Administrators can no longer take over another user's account silently** (that would
+  give them access to the user's shares):
+  - `PUT /api/users/{id}` refuses a password for another user (use "Send password reset
+    link"); the `admin`, `name` and `email` fields are optional, so a partial update can
+    no longer demote a user or blank an address.
+  - Changing another user's email address makes it unverified again, signs the user out
+    and notifies the previous address.
+  - "Force reset" now mails the user a one-time reset link (verified address only; the
+    administrator never sees it). Resending the welcome email needs a verified address.
+  - Resetting a user's MFA is a two-step flow: the administrator's request mails a
+    24-hour, single-use confirmation link to the user's verified address and the factors
+    are removed only when the user confirms (`POST /api/auth/mfa-reset/confirm`); the user
+    is notified afterwards. Without a verified address use `sendora-db mfa-reset`.
+  - With `APP_URL` set, the application URL setting is read-only; other changes to it are
+    logged (`application_url_changed`).
+  - Applying a database import requires the administrator's local password; an
+    administrator without one must set a password under their profile first.
+  - Updating, resetting or deleting guest accounts through the user endpoints returns 404.
+  - New email templates (English, Dutch, German, French, Spanish) and event-log actions:
+    `user_password_reset_sent`, `user_email_changed`, `mfa_reset_requested`,
+    `mfa_reset_confirmed`. The old `mfa_reset` action is no longer written.
 
 - **Security:** the administrator statistics no longer list the names and link IDs of
   the most downloaded shares. With a share's link ID an administrator could open it,

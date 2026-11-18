@@ -31,12 +31,15 @@ async function unlock(u) {
 async function save() {
   err.value = ''
   const u = edit.value
-  if (u.password || !u.id) {
+  if (!u.id) {
     const problems = passwordProblems(u.password, accountPolicy(app.boot))
     if (problems.length) { err.value = t('Needs:') + ' ' + problems.map(p => t(p.key, { n: p.n })).join(', '); return }
   }
   try {
-    const body = { username: u.username, name: u.name, email: u.email, password: u.password, admin: u.admin, must_change_password: u.must_change_password, ...quotaPayload(u.quota_inherits_default, u.quota_gb) }
+    // An administrator never sets another user's password: new users get one at creation
+    // (and choose their own through the welcome email); existing users use the reset link.
+    const body = { username: u.username, name: u.name, email: u.email, admin: u.admin, ...quotaPayload(u.quota_inherits_default, u.quota_gb) }
+    if (!u.id) { body.password = u.password; body.must_change_password = u.must_change_password }
     if (u.id && mfaOn()) body.mfa_policy = u.mfa_policy
     err.value = info.value = ''
     if (u.id) await api('/users/' + u.id, { method: 'PUT', body })
@@ -61,13 +64,21 @@ async function resendWelcome(u) {
   catch (e) { err.value = t(e.message) } finally { busy.value = false }
 }
 async function resetMfa(u) {
-  if (!confirm(t('Remove all two-step verification methods and sessions for {n}?', { n: u.username }))) return
+  if (!confirm(t('Ask {n} to confirm removing their two-step verification? They get an email with a confirmation link; nothing changes until they confirm.', { n: u.username }))) return
   err.value = info.value = ''
-  try { await api(`/users/${u.id}/mfa/reset`, { method: 'POST' }); info.value = t('Two-step verification reset for {n}.', { n: u.username }); await load() }
+  try { await api(`/users/${u.id}/mfa/reset`, { method: 'POST' }); info.value = t('Confirmation email sent to {n}. Two-step verification is only removed after they confirm by email.', { n: u.username }) }
   catch (e) { err.value = t(e.message) }
 }
 async function del(u) { if (confirm(t('Delete user {n} and all their shares?', { n: u.username }))) { try { await api('/users/' + u.id, { method: 'DELETE' }); await load() } catch (e) { err.value = t(e.message) } } }
-async function force(u) { await api(`/users/${u.id}/force-reset-password`, { method: 'POST' }); err.value = t('Password change required at next login.') }
+async function force(u) {
+  if (!confirm(t('Sign {n} out everywhere and send a password reset link to their verified email address?', { n: u.username }))) return
+  err.value = info.value = ''
+  try {
+    const r = await api(`/users/${u.id}/force-reset-password`, { method: 'POST' })
+    if (r.reset_email === 'sent') info.value = t('Password reset link sent to {e}.', { e: u.email })
+    else info.value = t('No reset link was sent: {note}', { note: t(r.reset_note || tr('unknown reason')) })
+  } catch (e) { err.value = t(e.message) }
+}
 </script>
 <template>
   <div class="card">
@@ -80,10 +91,10 @@ async function force(u) { await api(`/users/${u.id}/force-reset-password`, { met
         <div v-if="edit.id"><label>{{ t('Created') }}</label><input :value="fmtDate(edit.created_at)" disabled /></div>
         <div><label>{{ t('Name') }}</label><input v-model="edit.name" /></div>
         <div><label>{{ t('Email') }}</label><input v-model="edit.email" type="email" /></div>
-        <div><label>{{ t('Password') }}</label><input v-model="edit.password" type="password" autocomplete="new-password" :required="!edit.id" :placeholder="edit.id ? t('unchanged') : ''" />
-</div>
+        <div v-if="!edit.id"><label>{{ t('Password') }}</label><input v-model="edit.password" type="password" autocomplete="new-password" required /></div>
       </div>
-      <PasswordHints :password="edit.password" :optional="!!edit.id" />
+      <PasswordHints v-if="!edit.id" :password="edit.password" />
+      <p v-if="edit.id" class="muted">{{ t('Administrators cannot set another user\'s password: use "Send password reset link" in the user list. Changing the email address signs the user out, marks the new address as unverified and notifies the previous address.') }}</p>
       <label class="check"><input type="checkbox" v-model="edit.quota_inherits_default" @change="inheritanceChanged" /> {{ t('Use global storage default') }} ({{ defaultQuotaGB }} GB)</label>
       <label>{{ t('Storage quota (GB)') }}</label><input v-model="edit.quota_gb" :disabled="edit.quota_inherits_default" type="text" inputmode="decimal" pattern="[0-9]+([.,][0-9]{1,9})?" maxlength="64" required />
       <label class="check"><input type="checkbox" v-model="edit.admin" :disabled="edit.id === session.user.id" /> {{ t('Admin') }}</label>
@@ -107,8 +118,8 @@ async function force(u) { await api(`/users/${u.id}/force-reset-password`, { met
           <p v-if="u.login_locked_until * 1000 > Date.now()" class="err">{{ t('Local login locked until') }} {{ fmtDate(new Date(u.login_locked_until * 1000).toISOString()) }}</p></td>
         <td class="actions" style="margin:0"><button class="small secondary" @click="open(u)">{{ t('Edit') }}</button>
           <button v-if="u.login_locked_until * 1000 > Date.now()" class="small secondary" @click="unlock(u)">{{ t('Unlock local login') }}</button>
-          <button class="small secondary" @click="force(u)">{{ t('Force reset') }}</button>
-          <button v-if="mfaOn() && u.mfa_enabled" class="small secondary" @click="resetMfa(u)">{{ t('Reset MFA') }}</button>
+          <button class="small secondary" @click="force(u)">{{ t('Send password reset link') }}</button>
+          <button v-if="mfaOn() && u.mfa_enabled" class="small secondary" @click="resetMfa(u)">{{ t('Request MFA reset') }}</button>
           <button class="small danger" :disabled="u.id === session.user.id" @click="del(u)">{{ t('Delete') }}</button></td></tr>
     </table></div>
   </div>

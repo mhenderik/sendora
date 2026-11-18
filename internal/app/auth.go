@@ -1137,11 +1137,12 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	var b struct {
-		Name, Email, Password string
-		Admin                 bool    `json:"admin"`
-		QuotaBytes            *int64  `json:"quota_bytes"`
-		QuotaInheritsDefault  *bool   `json:"quota_inherits_default"`
-		MFAPolicy             *string `json:"mfa_policy"`
+		Name, Email          *string
+		Password             string
+		Admin                *bool   `json:"admin"` // omitted = unchanged
+		QuotaBytes           *int64  `json:"quota_bytes"`
+		QuotaInheritsDefault *bool   `json:"quota_inherits_default"`
+		MFAPolicy            *string `json:"mfa_policy"`
 	}
 	if decode(r, &b) != nil {
 		jerr(w, 400, "bad request")
@@ -1161,28 +1162,48 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, msgMFAEnforceSelf)
 		return
 	}
-	if id == me.ID && !b.Admin {
+	if id == me.ID && b.Admin != nil && !*b.Admin {
 		jerr(w, 400, "cannot remove your own admin rights")
+		return
+	}
+	if b.Password != "" && id != me.ID {
+		// An administrator who could set a password could sign in as the user and
+		// read their shares. The user chooses their own password through a link
+		// that only reaches their mailbox.
+		jerr(w, 400, msgAdminNoPassword)
 		return
 	}
 	if b.Password != "" && !s.requireAccountPassword(w, b.Password) {
 		return
 	}
-	email, err := canonicalEmail(b.Email)
-	if err != nil || !s.emailAvailable(email, id) {
-		jerr(w, 400, "invalid or already used email")
-		return
-	}
 	unlock := lockStripe(&s.loginLocks, strconv.FormatInt(id, 10))
 	defer unlock()
 	target, err := s.userByID(id)
-	if err != nil {
+	if err != nil || target.IsGuest {
 		jerr(w, 404, "not found")
 		return
 	}
-	if target.Admin && !b.Admin && s.refuseLastExternalAdmin(w, id, 0) {
+	name, email := target.Name, target.Email
+	if b.Name != nil {
+		name = *b.Name
+	}
+	if b.Email != nil {
+		var err error
+		if email, err = canonicalEmail(*b.Email); err != nil || !s.emailAvailable(email, id) {
+			jerr(w, 400, "invalid or already used email")
+			return
+		}
+	}
+	admin := target.Admin
+	if b.Admin != nil {
+		admin = *b.Admin
+	}
+	if target.Admin && !admin && s.refuseLastExternalAdmin(w, id, 0) {
 		return
 	}
+	// Another user's address changed by an administrator is unverified again, so
+	// the administrator cannot use it to take over the account.
+	emailChangedByAdmin := id != me.ID && !strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(target.Email))
 	hash := target.passwordHash
 	if b.Password != "" {
 		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcrypt.DefaultCost)
@@ -1198,7 +1219,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE users SET name=?,email=?,admin=?,password_hash=?,quota_bytes=COALESCE(?,quota_bytes),quota_inherits_default=COALESCE(?,quota_inherits_default),mfa_policy=COALESCE(?,mfa_policy),login_failures=CASE WHEN ? THEN 0 ELSE login_failures END,login_locked_until=CASE WHEN ? THEN 0 ELSE login_locked_until END WHERE id=? AND password_hash=? AND email=? AND must_change_password=?`, b.Name, email, b.Admin, hash, b.QuotaBytes, inheritance, b.MFAPolicy, b.Password != "", b.Password != "", id, target.passwordHash, target.Email, target.MustChangePassword)
+	res, err := tx.Exec(`UPDATE users SET name=?,email=?,admin=?,password_hash=?,quota_bytes=COALESCE(?,quota_bytes),quota_inherits_default=COALESCE(?,quota_inherits_default),mfa_policy=COALESCE(?,mfa_policy),login_failures=CASE WHEN ? THEN 0 ELSE login_failures END,login_locked_until=CASE WHEN ? THEN 0 ELSE login_locked_until END,email_verified=CASE WHEN ? THEN 0 ELSE email_verified END WHERE id=? AND is_guest=0 AND password_hash=? AND email=? AND must_change_password=?`, name, email, admin, hash, b.QuotaBytes, inheritance, b.MFAPolicy, b.Password != "", b.Password != "", emailChangedByAdmin, id, target.passwordHash, target.Email, target.MustChangePassword)
 	if err != nil {
 		jerr(w, 400, "user update failed")
 		return
@@ -1208,7 +1229,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if b.Password != "" || email != target.Email {
-		for _, table := range []string{"refresh_tokens", "password_resets", "email_verifications"} {
+		for _, table := range []string{"refresh_tokens", "password_resets", "email_verifications", "mfa_reset_requests"} {
 			if _, err := tx.Exec(`DELETE FROM `+table+` WHERE user_id=?`, id); err != nil {
 				jerr(w, 500, "user update failed")
 				return
@@ -1234,6 +1255,10 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		detail = "password changed"
 	}
 	s.logEvent(me2.ID, me2.Username, "user_updated", s.userTarget(id), detail)
+	if emailChangedByAdmin {
+		s.logEvent(me2.ID, me2.Username, "user_email_changed", s.userTarget(id), "email_verified reset")
+		s.notifyEmailChanged(target)
+	}
 	if b.MFAPolicy != nil && *b.MFAPolicy != target.MFAPolicy {
 		s.logEvent(me2.ID, me2.Username, "mfa_policy_changed", s.userTarget(id), "policy="+*b.MFAPolicy)
 	}
@@ -1262,7 +1287,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	// Take the database write lock before discovery, so admissions cannot slip in.
-	res, err := tx.Exec(`UPDATE users SET id=id WHERE id=?`, id)
+	res, err := tx.Exec(`UPDATE users SET id=id WHERE id=? AND is_guest=0`, id)
 	if err != nil {
 		jerr(w, 500, "user deletion failed")
 		return
@@ -1339,9 +1364,25 @@ func (s *Server) forceReset(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	unlock := lockStripe(&s.loginLocks, strconv.FormatInt(id, 10))
 	defer unlock()
-	s.St.DB.Exec(`UPDATE users SET must_change_password=1 WHERE id=?`, id)
+	res, err := s.St.DB.Exec(`UPDATE users SET must_change_password=1 WHERE id=? AND is_guest=0`, id)
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		jerr(w, 404, "not found")
+		return
+	}
 	s.St.DB.Exec(`DELETE FROM refresh_tokens WHERE user_id=?`, id)
 	me := s.ctxUser(r)
+	// The user chooses the new password through a link that only reaches their
+	// verified mailbox; the administrator never sees the link.
+	outcome, note := s.sendAdminPasswordReset(r, me, id)
 	s.logEvent(me.ID, me.Username, "user_force_reset", s.userTarget(id), "")
-	jout(w, 200, map[string]any{"ok": true})
+	s.logEvent(me.ID, me.Username, "user_password_reset_sent", s.userTarget(id), "reset_email="+outcome)
+	out := map[string]any{"ok": true, "reset_email": outcome}
+	if note != "" {
+		out["reset_note"] = note
+	}
+	jout(w, 200, out)
 }

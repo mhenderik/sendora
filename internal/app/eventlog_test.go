@@ -83,7 +83,7 @@ func TestEventLogRecordsEventsWithoutSecrets(t *testing.T) {
 	e.want(e.do("DELETE", "/api/shares/"+fmt.Sprint(int64(sh2.J()["id"].(float64))), bob, nil), 200, "delete share")
 	e.want(e.do("POST", "/api/users/2/force-reset-password", admin, nil), 200, "force reset")
 	e.want(e.do("POST", "/api/users/2/unlock-login", admin, nil), 200, "unlock")
-	e.want(e.do("PUT", "/api/users/2", admin, map[string]any{"name": "Bob", "email": "bob@x.io", "password": "ChangedPass123"}), 200, "update user")
+	e.want(e.do("PUT", "/api/users/2", admin, map[string]any{"name": "Bob", "email": "bob@x.io"}), 200, "update user")
 	inv := e.do("POST", "/api/reverse-shares/invite", admin, map[string]any{"name": "g", "open": true, "max_uploads": 2})
 	e.want(inv, 201, "invite")
 	e.want(e.do("POST", "/api/reverse-shares/invites/"+fmt.Sprint(int64(inv.J()["id"].(float64)))+"/revoke", admin, nil), 200, "revoke")

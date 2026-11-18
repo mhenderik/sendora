@@ -682,17 +682,31 @@ func TestImportApplyWithoutLocalPasswordAndBackupFailure(t *testing.T) {
 		t.Fatal("failed backup left maintenance on")
 	}
 	e.want(e.do("GET", "/api/users/me", admin, nil), 200, "service continues")
-	// Admin without a local password (external login) needs no password.
+	// An administrator without a local password (external login only) cannot
+	// apply an import: there is nothing to re-authenticate with.
+	var savedHash string
+	e.s.St.DB.QueryRow(`SELECT password_hash FROM users WHERE username='admin'`).Scan(&savedHash)
 	if _, err := e.s.St.DB.Exec(`UPDATE users SET password_hash='' WHERE username='admin'`); err != nil {
 		t.Fatal(err)
 	}
-	// Existing sessions are credential-bound; mint a fresh token for the same user.
 	u, _ := e.s.userByID(1)
+	r = e.apply(e.s.accessToken(u), map[string]any{"token": tok, "confirm": "IMPORT"})
+	e.want(r, 403, "SSO-only admin cannot apply an import")
+	if !strings.Contains(r.S("error"), "local password") {
+		t.Fatalf("unclear message: %q", r.S("error"))
+	}
+	if e.s.maintenance.Load() || e.s.importApplying.Load() {
+		t.Fatal("refused import left maintenance on")
+	}
+	if _, err := e.s.St.DB.Exec(`UPDATE users SET password_hash=? WHERE username='admin'`, savedHash); err != nil {
+		t.Fatal(err)
+	}
+	u, _ = e.s.userByID(1)
 	acc := e.s.accessToken(u)
 	e.s.importStop = func() {}
 	e.s.importExec = func() error { return nil }
-	r = e.apply(acc, map[string]any{"token": tok, "confirm": "IMPORT"})
-	e.want(r, 202, "apply without local password")
+	r = e.apply(acc, map[string]any{"token": tok, "confirm": "IMPORT", "password": "password123"})
+	e.want(r, 202, "apply with local password")
 	select {
 	case <-e.s.importDone:
 	case <-time.After(10 * time.Second):

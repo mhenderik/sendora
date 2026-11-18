@@ -162,23 +162,20 @@ func TestAccountPolicyAdminPaths(t *testing.T) {
 	body := func(pw string) map[string]any {
 		return map[string]any{"name": "Bob", "email": "bob@x.io", "admin": false, "password": pw}
 	}
+	// An administrator can no longer set another user's password at all (see
+	// account_security_test.go), so the policy never gets that far.
 	r := e.do("PUT", up, admin, body("weakweak12"))
 	e.want(r, 400, "weak update")
-	if e.errMsg(r) != "password must contain an uppercase letter" {
+	if e.errMsg(r) != msgAdminNoPassword {
 		t.Fatal(e.errMsg(r))
 	}
 	e.want(e.do("POST", "/api/auth/login", "", map[string]any{"username": "bob", "password": "password123"}), 200, "old pw still works")
 	e.want(e.do("PUT", up, admin, body("")), 200, "no password supplied")
-	e.want(e.do("PUT", up, admin, body("Aaaaaaaa1!")), 200, "strong update")
-	e.want(e.do("POST", "/api/auth/login", "", map[string]any{"username": "bob", "password": "Aaaaaaaa1!"}), 200, "new pw")
+	e.want(e.do("PUT", up, admin, body("Aaaaaaaa1!")), 400, "strong update is refused too")
 	// corrupt
 	e.s.St.DB.Exec(`UPDATE settings SET value='bogus' WHERE key='account_password_require_digit'`)
-	r = e.do("PUT", up, admin, body("Bbbbbbbb2@"))
-	e.want(r, 500, "corrupt update")
-	if e.errMsg(r) != "password policy unavailable" {
-		t.Fatal(e.errMsg(r))
-	}
-	e.want(e.do("POST", "/api/auth/login", "", map[string]any{"username": "bob", "password": "Aaaaaaaa1!"}), 200, "unchanged")
+	e.want(e.do("PUT", up, admin, body("Bbbbbbbb2@")), 400, "corrupt update")
+	e.want(e.do("POST", "/api/auth/login", "", map[string]any{"username": "bob", "password": "password123"}), 200, "unchanged")
 	e.want(e.do("PUT", up, admin, body("")), 200, "no password under corrupt policy")
 	before := e.userCount()
 	r = e.do("POST", "/api/users", admin, map[string]any{"username": "dave", "password": "Aaaaaaaa1!", "email": "dave@x.io"})

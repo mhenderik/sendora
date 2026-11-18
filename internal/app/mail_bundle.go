@@ -31,15 +31,19 @@ func validateMailBundle(b *mailBundle) string {
 	}
 	// Events added after the first export format (the welcome email) stay optional,
 	// so translation files exported by an older version keep importing.
-	_, hasWelcome := b.Templates["welcome"]
-	required := len(store.MailEvents) - 1
-	if len(b.Templates) != required && !(hasWelcome && len(b.Templates) == len(store.MailEvents)) {
+	known := 0
+	for _, event := range store.MailEvents {
+		if _, ok := b.Templates[event]; ok {
+			known++
+		}
+	}
+	if known != len(b.Templates) {
 		return "all required mail events must be present (and no unknown ones)"
 	}
 	for _, event := range store.MailEvents {
 		text, ok := b.Templates[event]
 		if !ok {
-			if event == "welcome" {
+			if store.IsOptionalMailEvent(event) {
 				continue
 			}
 			return "missing mail event: " + event

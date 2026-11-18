@@ -99,13 +99,22 @@ func readConfigValue(name string) (string, bool, error) {
 	return v, ok, nil
 }
 
-func (s *Server) isManagedSetting(key string) bool { return s.managedSettings[key] }
+// isManagedSetting: set by the deployment's configuration, so the screen cannot
+// change it. The APP_URL environment variable also locks application_url, which
+// it overrides everywhere (emailBaseURL, baseURL), so an administrator cannot
+// redirect emailed links by editing the setting.
+func (s *Server) isManagedSetting(key string) bool {
+	return s.managedSettings[key] || (key == "application_url" && s.BaseURL != "")
+}
 
 // managedSettingList is the sorted list for the admin screen.
 func (s *Server) managedSettingList() []string {
-	out := make([]string, 0, len(s.managedSettings))
+	out := make([]string, 0, len(s.managedSettings)+1)
 	for k := range s.managedSettings {
 		out = append(out, k)
+	}
+	if !s.managedSettings["application_url"] && s.isManagedSetting("application_url") {
+		out = append(out, "application_url")
 	}
 	sort.Strings(out)
 	return out
@@ -151,6 +160,14 @@ func (s *Server) applyConfig() error {
 			}
 			s.managedSettings[key] = true
 			break
+		}
+	}
+	if s.BaseURL != "" && !s.managedSettings["application_url"] {
+		// APP_URL wins over the stored setting; show it as the setting's value.
+		if norm, err := s.normalizeSetting("application_url", s.BaseURL); err == nil {
+			if _, err := s.St.DB.Exec(`UPDATE settings SET value=? WHERE key='application_url'`, norm); err != nil {
+				return err
+			}
 		}
 	}
 	if err := s.applyProviderConfig(); err != nil {

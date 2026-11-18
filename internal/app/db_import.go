@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	defaultImportMaxBytes = int64(4) << 30
-	defaultImportTTL      = 15 * time.Minute
-	importFilePrefix      = ".import-"
-	importConfirmWord     = "IMPORT"
+	defaultImportMaxBytes  = int64(4) << 30
+	defaultImportTTL       = 15 * time.Minute
+	importFilePrefix       = ".import-"
+	importConfirmWord      = "IMPORT"
+	msgImportNeedsPassword = "applying an import requires your current password; set a local password under your profile first"
 	// Slack for multipart framing and the small key parts around the file.
 	importBodySlack = int64(64) << 10
 )
@@ -394,6 +395,13 @@ func (s *Server) applyImport(w http.ResponseWriter, r *http.Request) {
 	if b.Confirm != importConfirmWord {
 		s.importMu.Unlock()
 		jerr(w, 400, `type "IMPORT" to confirm`)
+		return
+	}
+	if me.passwordHash == "" {
+		// Replacing the whole database needs fresh proof of identity, and an
+		// account that only signs in through an external provider has none to give.
+		s.importMu.Unlock()
+		jerr(w, 403, msgImportNeedsPassword)
 		return
 	}
 	if me.passwordHash != "" {
