@@ -19,7 +19,11 @@ async function go() {
   } catch (e) { err.value = e.message }
 }
 async function verify() {
-  try { setSession(await api('/auth/verify-email', { method: 'POST', body: { email: f.value.email, code: code.value } })); router.replace('/') }
+  try {
+    const d = await api('/auth/verify-email', { method: 'POST', body: { email: f.value.email, code: code.value } })
+    if (d.access_token) { setSession(d); router.replace('/') }
+    else router.replace('/login') // verified, but signing in takes the password (or a second step)
+  }
   catch (e) { err.value = e.message }
 }
 async function resend() {

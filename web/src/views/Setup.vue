@@ -23,7 +23,7 @@ async function go() {
     <h1>{{ t('Create admin account') }}</h1>
     <label>{{ t('Setup code') }}</label><input v-model="f.setup_code" required autofocus autocomplete="off" spellcheck="false" placeholder="ABCD-EFGH-JKLM" />
     <p class="muted">{{ t('The one-time setup code is printed in the server log when Sendora starts without accounts (for Docker: docker compose logs sendora).') }}</p>
-    <p class="muted">{{ t('Kubernetes: kubectl -n sendora logs deploy/sendora. Without containers: the service output or journal. You can also choose your own code with SENDORA_SETUP_CODE (at least 12 characters).') }}</p>
+    <p class="muted">{{ t('Kubernetes: kubectl -n sendora logs deploy/sendora. Without containers: the service output or journal. You can also choose your own code with SENDORA_SETUP_CODE (at least 16 characters).') }}</p>
     <label>{{ t('Username') }}</label><input v-model="f.username" required />
     <label>{{ t('Name') }}</label><input v-model="f.name" />
     <label>{{ t('Email') }}</label><input v-model="f.email" type="email" />

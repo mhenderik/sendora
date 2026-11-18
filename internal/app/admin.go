@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -609,7 +610,8 @@ func (s *Server) listBackups(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
 	n, err := s.makeBackup()
 	if err != nil {
-		jerr(w, 500, err.Error())
+		log.Printf("create backup failed: %v", err)
+		jerr(w, 500, "backup failed (details are in the server log)")
 		return
 	}
 	me := s.ctxUser(r)

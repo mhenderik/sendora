@@ -252,7 +252,7 @@ func (s *Server) mfaToken(u *User) string {
 		"credential": s.credentialVersion(u),
 		"exp":        time.Now().Add(mfaTokenTTL).Unix(),
 	})
-	str, _ := t.SignedString(s.Secret)
+	str, _ := t.SignedString(s.key(keyMFA))
 	return str
 }
 
@@ -260,7 +260,7 @@ func (s *Server) mfaToken(u *User) string {
 // compare the credential claim with the reloaded user.
 func (s *Server) parseMFAToken(tok string) (uid int64, jti, cred string, exp time.Time, ok bool) {
 	claims := jwt.MapClaims{}
-	if _, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) { return s.Secret, nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()); err != nil {
+	if _, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) { return s.key(keyMFA), nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()); err != nil {
 		return 0, "", "", time.Time{}, false
 	}
 	if claims["purpose"] != "mfa" {
@@ -479,12 +479,13 @@ func (s *Server) confirmMFAPassword(w http.ResponseWriter, u *User, password str
 		jerr(w, 400, "set a password before using multi-factor authentication")
 		return false
 	}
+	if s.stepUpLocked(w, u) {
+		return false
+	}
 	if bcrypt.CompareHashAndPassword([]byte(u.passwordHash), []byte(password)) == nil {
 		return true
 	}
-	if fresh, err := s.userByID(u.ID); err == nil {
-		s.noteAuthFailure(fresh)
-	}
+	s.stepUpFailed(w, u)
 	time.Sleep(300 * time.Millisecond)
 	jerr(w, 401, "incorrect password")
 	return false

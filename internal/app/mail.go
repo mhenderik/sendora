@@ -386,7 +386,8 @@ func (s *Server) previewTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	subject, body, language, err := s.renderMail(in.Key, in.Language, data)
 	if err != nil {
-		jerr(w, 400, err.Error())
+		log.Printf("email template preview failed (key %q): %v", in.Key, err)
+		jerr(w, 400, "this template could not be rendered")
 		return
 	}
 	if in.Send {
@@ -396,7 +397,8 @@ func (s *Server) previewTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.sendMail(u.Email, subject, body); err != nil {
-			jerr(w, 400, err.Error())
+			log.Printf("email template preview send failed: %v", err)
+			jerr(w, 400, smtpErrorCategory(err))
 			return
 		}
 	}

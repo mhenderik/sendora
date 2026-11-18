@@ -48,6 +48,10 @@ type ipBanState struct {
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+	// failed is set by a handler that rejected a credential check (see
+	// markAuthFailure); routes that also carry ordinary signed-in traffic count
+	// only these, not every 401/403.
+	failed bool
 }
 
 func (r *statusRecorder) WriteHeader(code int)        { r.status = code; r.ResponseWriter.WriteHeader(code) }

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.5
 
 - **Security:** the administrator statistics no longer list the names and link IDs of
   the most downloaded shares. With a share's link ID an administrator could open it,
@@ -9,6 +9,36 @@
 - Documentation corrections: the key also protects the encrypted share files, key
   rotation is not possible once files were uploaded since 0.1.2, only the owner (not
   an administrator) can edit a share, and the footer version is visible to signed-in users.
+
+### Security: authentication, sessions and tokens
+
+- **All users must sign in again after upgrading:** access, second-step and share-unlock
+  tokens are now signed with separate keys derived (HKDF-SHA256) from the stored secret
+  instead of the secret itself, so existing tokens stop working. Share unlock tokens
+  of password-protected shares are issued again on the next unlock.
+- Verifying an email address with the emailed code signs in only a new self-registration.
+  Any other account (for example after an address change) gets a plain confirmation and
+  signs in with its password. The code is compared in constant time and now has 8 digits.
+- A wrong current password on a profile change or on the two-step setup actions counts as a
+  failed sign-in (same counter and lockout as the login, address ban included) and is
+  refused while the account is locked.
+- First-run setup: failed attempts count towards the address ban and are limited across all
+  addresses (10 per minute). `SENDORA_SETUP_CODE` needs at least 16 characters and is
+  ignored (a generated code is used, with a log line) when it is one repeated character or
+  a sequential run.
+- New password hashes use bcrypt cost 12; older hashes are upgraded after a successful
+  login or share unlock.
+- `JWT_SECRET` with fewer than 8 distinct characters is refused at startup (32 characters
+  minimum as before).
+- Share unlock: at most 10 wrong passwords per share per 10 minutes, then a 10-minute
+  block for that share, in addition to the per-address limits.
+- Sign-in with an external provider has its own pool of concurrent requests, provider
+  discovery and token requests time out after 5 seconds, follow at most 3 redirects and
+  refuse loopback, link-local and cloud metadata addresses (private ranges stay allowed).
+  They no longer use `HTTP_PROXY`/`HTTPS_PROXY`.
+- The sign-in page ignores `next` values such as `//host` or `/\host`.
+- Failed backups, provider creation and email template previews return a fixed message;
+  the detail is only in the server log. Request headers are limited to 64 KiB.
 
 ## 0.1.4 (2026-11-18)
 

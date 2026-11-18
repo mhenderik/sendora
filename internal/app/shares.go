@@ -123,14 +123,14 @@ func (s *Server) shareFiles(shareID int64) []FileInfo {
 // share download tokens: short-lived JWT proving password was supplied.
 func (s *Server) shareToken(sh *Share) string {
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"purpose": "share", "share": sh.LongID, "pv": s.sharePasswordVersion(sh), "exp": time.Now().Add(2 * time.Hour).Unix()})
-	str, _ := t.SignedString(s.Secret)
+	str, _ := t.SignedString(s.key(keyShareUnlock))
 	return str
 }
 
 // sharePasswordVersion binds unlock tokens to the current password hash, so a
 // changed or removed password invalidates every earlier token.
 func (s *Server) sharePasswordVersion(sh *Share) string {
-	h := hmac.New(sha256.New, s.Secret)
+	h := hmac.New(sha256.New, s.key(keySharePasswordVersion))
 	fmt.Fprintf(h, "share-password:%s:%s", sh.LongID, sh.hash)
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -147,7 +147,7 @@ func (s *Server) shareUnlocked(r *http.Request, sh *Share) bool {
 		return false
 	}
 	claims := jwt.MapClaims{}
-	_, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) { return s.Secret, nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
+	_, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) { return s.key(keyShareUnlock), nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 	return err == nil && claims["purpose"] == "share" && claims["share"] == sh.LongID && s.validSharePV(claims["pv"], sh)
 }
 
@@ -181,14 +181,43 @@ func (s *Server) unlockShare(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 404, "share not found")
 		return
 	}
+	// A per-share budget on top of the per-address limits: many addresses
+	// guessing one share's password are throttled together.
+	throttleKey := strconv.FormatInt(sh.ID, 10)
+	if wait, blocked := s.shareThrottle.blocked(throttleKey); blocked {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		jerr(w, 429, "too many failed attempts for this share; try again later")
+		return
+	}
 	var b struct{ Password string }
 	decode(r, &b)
 	if bcrypt.CompareHashAndPassword([]byte(sh.hash), []byte(b.Password)) != nil {
+		s.shareThrottle.fail(throttleKey, shareUnlockLimit, shareUnlockWindow, shareUnlockBlock)
 		time.Sleep(300 * time.Millisecond)
 		jerr(w, 401, "wrong password")
 		return
 	}
+	s.shareThrottle.clear(throttleKey)
+	s.rehashShare(sh, b.Password)
 	jout(w, 200, map[string]any{"token": s.shareToken(sh)})
+}
+
+// rehashShare upgrades a share password hash made with a lower bcrypt cost.
+func (s *Server) rehashShare(sh *Share, password string) {
+	if !passwordHashIsWeak(sh.hash) {
+		return
+	}
+	h, err := hashPassword(password)
+	if err != nil {
+		return
+	}
+	res, err := s.St.DB.Exec(`UPDATE shares SET password_hash=? WHERE id=? AND password_hash=?`, string(h), sh.ID, sh.hash)
+	if err != nil {
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		sh.hash = string(h)
+	}
 }
 
 // reserveDownload snapshots the atomic count; Range requests keep their existing
@@ -947,7 +976,7 @@ func (s *Server) editShare(w http.ResponseWriter, r *http.Request) {
 				bad(err.Error())
 				return
 			}
-			h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+			h, err := bcrypt.GenerateFromPassword([]byte(pw), bcryptCost)
 			if err != nil {
 				bad("share password must not exceed 72 bytes")
 				return

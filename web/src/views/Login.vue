@@ -4,17 +4,18 @@ import { useRouter, useRoute } from 'vue-router'
 import { api, setSession, session } from '../api'
 import { app } from '../state'
 import { t, tr } from '../i18n'
+import { safeNext } from '../nav.mjs'
 import { normalizeTotp, normalizeRecovery, requestArgs, assertionJSON, webauthnErrorKey, webauthnSupported } from '../mfa.mjs'
 
 const router = useRouter(), route = useRoute()
 const f = ref({ username: '', password: '' }), err = ref(''), busy = ref(false), providers = ref([])
-const verify = ref(false), code = ref('')
+const verify = ref(false), code = ref(''), notice = ref('')
 const mfa = ref(null), mfaMode = ref('totp'), mfaCode = ref(''), mfaBusy = ref(false)
 const canPasskey = () => !!mfa.value?.methods?.includes('webauthn') && webauthnSupported()
 const mfaTabs = () => [['totp', tr('Authenticator app')], ['recovery', tr('Recovery code')], ...(canPasskey() ? [['webauthn', tr('Passkey or security key')]] : [])].filter(([m]) => m === 'webauthn' || mfa.value?.methods?.includes(m))
 const idleNotice = () => (route.query.idle ? t('You were signed out after {n} minutes of inactivity.', { n: String(route.query.idle).replace(/[^0-9]/g, '') }) : '')
 const local = () => app.boot?.local_login_enabled !== false && app.boot?.local_login_enabled !== 'false'
-const next = () => (route.query.next && String(route.query.next).startsWith('/') ? route.query.next : '/')
+const next = () => safeNext(route.query.next)
 
 onMounted(async () => {
   if (session.user) return router.replace(next())
@@ -75,7 +76,10 @@ async function submit() {
 async function doVerify() {
   try {
     verify.value = false
-    finish(await api('/auth/verify-email', { method: 'POST', body: { email: f.value.username, code: code.value } }))
+    const d = await api('/auth/verify-email', { method: 'POST', body: { email: f.value.username, code: code.value } })
+    // Only a new registration is signed in by the code; others sign in with their password.
+    if (d.access_token || d.mfa_required) finish(d)
+    else { code.value = ''; f.value.password = ''; notice.value = t('Email address verified. Sign in to continue.') }
   } catch (e) { verify.value = true; err.value = e.message }
 }
 </script>
@@ -108,6 +112,7 @@ async function doVerify() {
     <form v-else-if="!verify && local()" @submit.prevent="submit">
       <label>{{ t('Username') }}</label><input v-model="f.username" autocomplete="username" autofocus required />
       <label>{{ t('Password') }}</label><input v-model="f.password" type="password" autocomplete="current-password" required />
+      <p v-if="notice" class="muted" role="status">{{ notice }}</p>
       <p v-if="err" class="err">{{ err }}</p>
       <div class="actions"><button :disabled="busy">{{ t('Sign in') }}</button>
         <router-link to="/forgot-password">{{ t('Forgot password?') }}</router-link></div>

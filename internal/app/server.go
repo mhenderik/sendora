@@ -47,6 +47,9 @@ type Server struct {
 	identityLocks     [64]sync.Mutex
 	loginLocks        [64]sync.Mutex
 	securityMu        sync.Mutex
+	shareThrottle     failThrottle // failed share unlocks, keyed by share id
+	setupThrottle     failThrottle // failed setup attempts from all addresses
+	oidcSlots         chan struct{}
 	securityBuckets   map[string]requestBudget
 	ipBans            ipBanState
 	mailQueue         chan mailJob
@@ -126,7 +129,7 @@ func loopbackHost(host string) bool {
 }
 
 func New(st *store.Store, static fs.FS, version string) *Server {
-	s := &Server{St: st, Static: static, Version: version, Started: time.Now(), BaseURL: strings.TrimRight(os.Getenv("APP_URL"), "/"), mailSlots: make(chan struct{}, 8), mailQueue: make(chan mailJob, 256), authSlots: make(chan struct{}, 16), downloadMailWake: make(chan struct{}, 1), importExec: execSelf, importExit: os.Exit, importDone: make(chan struct{})}
+	s := &Server{St: st, Static: static, Version: version, Started: time.Now(), BaseURL: strings.TrimRight(os.Getenv("APP_URL"), "/"), mailSlots: make(chan struct{}, 8), mailQueue: make(chan mailJob, 256), authSlots: make(chan struct{}, 16), oidcSlots: make(chan struct{}, oidcSlotCount), downloadMailWake: make(chan struct{}, 1), importExec: execSelf, importExit: os.Exit, importDone: make(chan struct{})}
 	sec, _ := JWTSecretFromEnv() // validated in main
 	if sec == "" {
 		sec = st.Setting("jwt_secret")
@@ -152,7 +155,11 @@ func New(st *store.Store, static fs.FS, version string) *Server {
 	st.DB.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&users)
 	if users == 0 {
 		s.setupCode = strings.ToUpper(strings.TrimSpace(os.Getenv("SENDORA_SETUP_CODE")))
-		if len(s.setupCode) < 12 {
+		if s.setupCode != "" && !validSetupCode(s.setupCode) {
+			log.Printf("SENDORA_SETUP_CODE ignored: it must be at least 16 characters and not a repeated or sequential pattern; using a generated code")
+			s.setupCode = ""
+		}
+		if s.setupCode == "" {
 			s.setupCode = newSetupCode()
 		}
 		setupCodeLog("first-run setup code: %s (enter it on the setup page; it changes on every restart until setup is done)", s.setupCode)
