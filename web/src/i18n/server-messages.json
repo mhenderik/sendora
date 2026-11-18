@@ -341,7 +341,26 @@
     "invalid to time",
     "invalid category",
     "invalid outcome",
-    "format must be csv or jsonl"
+    "format must be csv or jsonl",
+    "this password is too common; choose a less predictable one",
+    "the password must not contain your username, email address or the application name",
+    "the password is too simple (repeated characters or a sequence such as 12345678)",
+    "this password appears in known data breaches; choose another one",
+    "re-authentication required",
+    "sign in again at your sign-in provider to confirm this action",
+    "the confirmation was not accepted",
+    "administration is not allowed from this network address",
+    "set the terms URL and the terms version before requiring acceptance",
+    "terms acceptance required",
+    "accepting terms is not required",
+    "the terms have changed; reload the page and read the current version",
+    "the last administrator cannot be erased; make another account administrator first",
+    "you cannot erase your own account here; use Profile -> Delete my account",
+    "sign in again to delete your account",
+    "this account was erased",
+    "erasure failed",
+    "account erased but file cleanup failed",
+    "terms version must be at most 40 characters without control characters"
   ],
   "dynamic": [
     "%d file(s) in %d share(s) are missing on disk and cannot be downloaded after the import.",
@@ -382,7 +401,10 @@
     "at most %d addresses or ranges",
     "%s must be a whole number from %d to %d",
     "%s is managed by the server configuration and cannot be changed here",
-    "total size exceeds the download limit of %d MB"
+    "total size exceeds the download limit of %d MB",
+    "account_password_min_length must be an integer from %d to %d",
+    "%s must be an https:// address",
+    "the list does not include your own address %s; add it, or set %s=true to override"
   ],
   "alreadyTranslated": [
     "file integrity check failed; download blocked",

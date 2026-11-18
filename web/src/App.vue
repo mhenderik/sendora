@@ -1,16 +1,19 @@
 <script setup>
 import { computed, ref, watch, watchEffect } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { session, logout, api } from './api'
+import { session, logout, api, termsState } from './api'
 import { app, pageTitle } from './state'
 import { bundledUrl } from './backgrounds'
 import { t, lang, languages, setLang } from './i18n'
 import { onMounted, onBeforeUnmount } from 'vue'
 import { session as sess, refresh as refreshSession } from './api'
-import { createIdleMonitor } from './idle.mjs'
+import { createIdleMonitor, effectiveIdleMinutes } from './idle.mjs'
 import { isBusy } from './transfers.mjs'
 import { shouldPromptMFA, mfaPromptKey, reminderSuppressed } from './mfa-prompt.mjs'
 import { vFocusTrap } from './focus-trap.mjs'
+import StepUpDialog from './components/StepUpDialog.vue'
+import TermsDialog from './components/TermsDialog.vue'
+import LegalLinks from './components/LegalLinks.vue'
 
 const router = useRouter(), route = useRoute()
 const ready = true
@@ -53,6 +56,7 @@ watch(() => [session.user?.id, !!session.user?.must_change_password], async ([id
     const d = await api('/users/me')
     if (session.user?.id !== id) return
     app.version = d.version || ''
+    termsState.pending = !!d.terms_pending
     mfaPrompt.value = shouldPromptMFA({ user: d.user, hasPassword: d.has_password, boot: app.boot, dismissed: mfaDismissed(id) })
   } catch {}
 }, { immediate: true })
@@ -81,10 +85,8 @@ const idle = ref({ warning: false, seconds: 0 })
 // The sign-out warning always wins: the MFA reminder waits while it is open.
 const showMfaPrompt = computed(() => mfaPrompt.value && !idle.value.warning)
 let monitor = null, timer = null
-const idleMs = () => {
-  const m = Number(app.boot?.idle_logout_minutes)
-  return Number.isFinite(m) && m > 0 ? m * 60 * 1000 : 0
-}
+// Administrators get the stricter window when admin_idle_logout_minutes is set.
+const idleMs = () => effectiveIdleMinutes(app.boot?.idle_logout_minutes, app.boot?.admin_idle_logout_minutes, !!sess.user?.admin) * 60 * 1000
 function idleApplies() { return !!sess.user && !sess.user.is_guest }
 async function idleTimedOut() {
   const minutes = Math.round(idleMs() / 60000)
@@ -119,7 +121,7 @@ const ACTIVITY_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'scro
 onMounted(() => { for (const e of ACTIVITY_EVENTS) window.addEventListener(e, activity, { passive: true, capture: true }); window.addEventListener('focus', activity) })
 onBeforeUnmount(() => { for (const e of ACTIVITY_EVENTS) window.removeEventListener(e, activity, { capture: true }); window.removeEventListener('focus', activity); stopIdle() })
 watch(() => [sess.user?.id, sess.user?.is_guest], startIdle, { immediate: true })
-watch(() => app.boot?.idle_logout_minutes, () => { if (monitor) monitor.setLimit(idleMs()); else startIdle() })
+watch(() => [app.boot?.idle_logout_minutes, app.boot?.admin_idle_logout_minutes], () => { if (monitor) monitor.setLimit(idleMs()); else startIdle() })
 </script>
 
 <template>
@@ -162,9 +164,12 @@ watch(() => app.boot?.idle_logout_minutes, () => { if (monitor) monitor.setLimit
         </div>
       </div>
     </div>
+    <StepUpDialog />
+    <TermsDialog v-if="session.user && !session.user.is_guest" />
     <main><p v-if="languageError" class="err" role="alert">{{ languageError }}</p><router-view :key="route.fullPath" /></main>
     <footer class="foot">
       <p>{{ t('© {year} Sendora contributors', { year: new Date().getFullYear() }) }} · {{ t('Open source') }} · MIT License<template v-if="versionLabel"> · {{ versionLabel }}</template></p>
+      <LegalLinks />
       <select v-if="app.boot?.show_language_selector && !session.user" :value="lang" @change="chooseLanguage($event.target.value)" :disabled="languageBusy" :aria-label="t('Language')">
         <option v-for="(n, k) in languages" :key="k" :value="k">{{ n }}</option>
       </select>

@@ -53,6 +53,8 @@ func newEnv(t *testing.T) *env {
 	// Failed sign-ins are deliberately slow; on a slow test machine 61 of them
 	// can take longer than a minute, so budgets must not reset mid-test.
 	s.rateWindow = time.Hour
+	// Fixtures use simple passwords; the screening has its own tests (password_check_test.go).
+	s.passwordScreenOff = true
 	ts := httptest.NewServer(s.Router())
 	t.Cleanup(ts.Close)
 	return &env{t: t, s: s, ts: ts}
@@ -156,6 +158,7 @@ func TestDownloadOutboxBackpressureAndRetry(t *testing.T) {
 	legacyTestDefaults(t, st)
 	defer st.DB.Close()
 	s := New(st, fstest.MapFS{"index.html": {Data: []byte("spa")}}, "test")
+	s.passwordScreenOff = true
 	ts := httptest.NewServer(s.Router())
 	defer ts.Close()
 	e := &env{t: t, s: s, ts: ts}

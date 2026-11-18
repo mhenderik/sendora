@@ -91,6 +91,9 @@ type Server struct {
 	// Settings set by the server configuration (see config.go).
 	managedSettings map[string]bool
 
+	// Step-up re-authentication and the password screening switch (stepup.go).
+	accountSecurityState
+
 	// rateWindow overrides the one-minute rate-limit window (tests only).
 	rateWindow time.Duration
 }
@@ -261,6 +264,8 @@ func (s *Server) Router() http.Handler {
 			r.Get("/email-languages", s.mailLanguages)
 			r.Get("/oidc/{uuid}/start", s.oidcStart)
 			r.Get("/oidc/{uuid}/callback", s.oidcCallback)
+			r.With(s.auth).Post("/step-up", s.stepUpConfirm)
+			r.With(s.auth).Post("/step-up/webauthn/begin", s.stepUpBegin)
 		})
 
 		// public
@@ -291,6 +296,9 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users/me/mfa/webauthn/finish", s.mfaWebAuthnRegisterFinish)
 			r.Put("/users/me/mfa/webauthn/{id}", s.mfaWebAuthnRename)
 			r.Post("/users/me/mfa/webauthn/{id}/remove", s.mfaWebAuthnRemove)
+			r.With(s.critical("personal_data_exported", "user")).Get("/users/me/export", s.exportMyData)
+			r.Post("/users/me/erase", s.eraseMe)
+			r.Post("/users/me/terms", s.acceptTerms)
 
 			r.Get("/shares", s.myShares)
 			r.Get("/shares/{id}/downloads", s.shareDownloads)
@@ -316,7 +324,7 @@ func (s *Server) Router() http.Handler {
 
 			// Auditors read the audit log and nothing else (see auditorAllowed).
 			r.Group(func(r chi.Router) {
-				r.Use(s.auditor)
+				r.Use(s.auditor, s.adminNetwork)
 				r.Get("/audit", s.auditList)
 				// An export is recorded BEFORE it is served; without a record there is no export.
 				r.With(s.critical("audit_exported", "audit_log")).Get("/audit/export", s.auditExport)
@@ -324,14 +332,15 @@ func (s *Server) Router() http.Handler {
 			})
 
 			r.Group(func(r chi.Router) {
-				r.Use(s.admin)
+				r.Use(s.admin, s.adminNetwork)
 				r.Get("/users", s.listUsers)
 				r.With(s.critical("user_created", "user")).Post("/users", s.createUser)
 				r.With(s.critical("user_updated", "user")).Put("/users/{id}", s.updateUser)
-				r.With(s.critical("user_deleted", "user")).Delete("/users/{id}", s.deleteUser)
+				r.With(s.stepUp, s.critical("user_deleted", "user")).Delete("/users/{id}", s.deleteUser)
+				r.With(s.stepUp, s.critical("user_erased", "user")).Post("/users/{id}/erase", s.eraseUser)
 				r.With(s.critical("user_force_reset", "user")).Post("/users/{id}/force-reset-password", s.forceReset)
 				r.Post("/users/{id}/unlock-login", s.unlockLogin)
-				r.With(s.critical("mfa_reset_requested", "user")).Post("/users/{id}/mfa/reset", s.mfaReset)
+				r.With(s.stepUp, s.critical("mfa_reset_requested", "user")).Post("/users/{id}/mfa/reset", s.mfaReset)
 				r.Post("/users/{id}/welcome", s.resendWelcome)
 
 				r.Get("/settings", s.getSettings)
@@ -354,9 +363,9 @@ func (s *Server) Router() http.Handler {
 				r.Post("/themes/{id}/activate", s.activateTheme)
 
 				r.Get("/auth-providers", s.adminProviders)
-				r.With(s.critical("provider_created", "provider")).Post("/auth-providers", s.createProvider)
-				r.With(s.critical("provider_updated", "provider")).Put("/auth-providers/{id}", s.updateProvider)
-				r.With(s.critical("provider_deleted", "provider")).Delete("/auth-providers/{id}", s.deleteProvider)
+				r.With(s.stepUp, s.critical("provider_created", "provider")).Post("/auth-providers", s.createProvider)
+				r.With(s.stepUp, s.critical("provider_updated", "provider")).Put("/auth-providers/{id}", s.updateProvider)
+				r.With(s.stepUp, s.critical("provider_deleted", "provider")).Delete("/auth-providers/{id}", s.deleteProvider)
 
 				r.Get("/ui-languages", s.listUILanguages)
 				r.Get("/ui-languages/{code}/export", s.exportUILanguage)
@@ -372,10 +381,10 @@ func (s *Server) Router() http.Handler {
 
 				r.Get("/backups", s.listBackups)
 				r.With(s.critical("backup_created", "backup")).Post("/backups", s.createBackup)
-				r.Get("/backups/{name}", s.downloadBackup)
-				r.With(s.critical("backup_deleted", "backup")).Delete("/backups/{name}", s.deleteBackup)
+				r.With(s.stepUp).Get("/backups/{name}", s.downloadBackup)
+				r.With(s.stepUp, s.critical("backup_deleted", "backup")).Delete("/backups/{name}", s.deleteBackup)
 				r.With(s.critical("db_import_prepared", "backup")).Post("/backups/import", s.prepareImport)
-				r.With(s.critical("db_import_applied", "backup")).Post("/backups/import/apply", s.applyImport)
+				r.With(s.stepUp, s.critical("db_import_applied", "backup")).Post("/backups/import/apply", s.applyImport)
 			})
 		})
 	})
@@ -530,5 +539,6 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	out["account_password_require_lower"] = acct.Lower
 	out["account_password_require_digit"] = acct.Digit
 	out["account_password_require_symbol"] = acct.Symbol
+	s.accountSecurityBootstrap(out)
 	jout(w, 200, out)
 }

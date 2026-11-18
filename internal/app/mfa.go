@@ -664,6 +664,7 @@ func (s *Server) mfaTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 		extra["recovery_codes"] = codes
 	}
 	s.logEvent(u.ID, u.Username, "mfa_enrolled", "", "totp")
+	s.notifySecurity(r, u, "mfa_factor_changed")
 	s.mfaFactorsChanged(w, r, u.ID, extra)
 }
 
@@ -698,6 +699,7 @@ func (s *Server) mfaTOTPRemove(w http.ResponseWriter, r *http.Request) {
 		s.St.DB.Exec(`DELETE FROM user_recovery_codes WHERE user_id=?`, u.ID)
 	}
 	s.logEvent(u.ID, u.Username, "mfa_removed", "", "totp")
+	s.notifySecurity(r, u, "mfa_factor_changed")
 	s.mfaFactorsChanged(w, r, u.ID, nil)
 }
 
@@ -724,6 +726,7 @@ func (s *Server) mfaRecoveryRegenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logEvent(u.ID, u.Username, "mfa_enrolled", "", "recovery codes regenerated")
+	s.notifySecurity(r, u, "recovery_codes_regenerated")
 	jout(w, 200, map[string]any{"ok": true, "recovery_codes": codes})
 }
 

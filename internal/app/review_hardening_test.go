@@ -399,8 +399,8 @@ func TestFreshInstallDoesNotForceMFA(t *testing.T) {
 	ts := httptest.NewServer(s.Router())
 	defer ts.Close()
 	e := &env{t: t, s: s, ts: ts}
-	r := e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "admin", "password": "password123", "email": "a@x.io"})
-	e.want(r, 200, "setup with an 11-character password (default minimum is 8)")
+	r := e.do("POST", "/api/setup", "", map[string]any{"setup_code": e.s.setupCode, "username": "admin", "password": "Quiet-Ferns9", "email": "a@x.io"})
+	e.want(r, 200, "setup with a 12-character password (default minimum is 8; common passwords are refused)")
 	me := e.do("GET", "/api/users/me", r.S("access_token"), nil)
 	e.want(me, 200, "me")
 	u, _ := me.J()["user"].(map[string]any)
@@ -416,12 +416,12 @@ func TestFreshInstallDoesNotForceMFA(t *testing.T) {
 		t.Fatalf("default mfa_policy = %q, want optional", st.Setting("mfa_policy"))
 	}
 	e.want(e.do("GET", "/api/users/me/mfa", r.S("access_token"), nil), 200, "mfa status reachable")
-	_, tok, codes := e.enrollTOTP(r.S("access_token"), "password123")
+	_, tok, codes := e.enrollTOTP(r.S("access_token"), "Quiet-Ferns9")
 	if len(codes) == 0 {
 		t.Fatal("no recovery codes after voluntary enrolment")
 	}
 	// From now on this account signs in with a second step.
-	login := e.do("POST", "/api/auth/login", "", map[string]any{"username": "admin", "password": "password123"})
+	login := e.do("POST", "/api/auth/login", "", map[string]any{"username": "admin", "password": "Quiet-Ferns9"})
 	e.want(login, 200, "login")
 	if login.J()["mfa_required"] != true {
 		t.Fatalf("an enrolled factor must be required at sign-in: %s", login.Body)

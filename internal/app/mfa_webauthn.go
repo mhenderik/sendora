@@ -485,6 +485,7 @@ func (s *Server) mfaWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Reques
 		extra["recovery_codes"] = codes
 	}
 	s.logEvent(u.ID, u.Username, "mfa_enrolled", "", "webauthn")
+	s.notifySecurity(r, u, "mfa_factor_changed")
 	s.mfaFactorsChanged(w, r, u.ID, extra)
 }
 
@@ -569,5 +570,6 @@ func (s *Server) mfaWebAuthnRemove(w http.ResponseWriter, r *http.Request) {
 		s.St.DB.Exec(`DELETE FROM user_recovery_codes WHERE user_id=?`, u.ID)
 	}
 	s.logEvent(u.ID, u.Username, "mfa_removed", "", "webauthn")
+	s.notifySecurity(r, u, "mfa_factor_changed")
 	s.mfaFactorsChanged(w, r, u.ID, nil)
 }

@@ -140,6 +140,11 @@ var routeTable = []routeSpec{
 	rs("POST /api/users/me/mfa/webauthn/finish", polSelf).withSoft("needs a begun ceremony", 400, 403),
 	rs("PUT /api/users/me/mfa/webauthn/{id}", polSelf).withSoft("{id} is a security key of the caller; the fixture has none", 404),
 	rs("POST /api/users/me/mfa/webauthn/{id}/remove", polSelf).withSoft("{id} is a security key of the caller; the fixture has none", 400, 403, 404),
+	rs("GET /api/users/me/export", polSelf),
+	rs("POST /api/users/me/erase", polSelf).withSoft("needs the current password in the body", 400),
+	rs("POST /api/users/me/terms", polSelf).withSoft("terms acceptance is off in the fixture", 400, 409),
+	rs("POST /api/auth/step-up", polAdmin).withSoft("needs the password or a code in the body", 400),
+	rs("POST /api/auth/step-up/webauthn/begin", polAdmin).withSoft("the fixture administrator has no security key", 409),
 
 	// ---- shares: owner only ----
 	rs("GET /api/shares", polUser), // lists the caller's own shares
@@ -176,6 +181,7 @@ var routeTable = []routeSpec{
 	rs("POST /api/users", polAdmin),
 	rs("PUT /api/users/{id}", polAdmin),
 	rs("DELETE /api/users/{id}", polAdmin),
+	rs("POST /api/users/{id}/erase", polAdmin),
 	rs("POST /api/users/{id}/force-reset-password", polAdmin),
 	rs("POST /api/users/{id}/unlock-login", polAdmin),
 	rs("POST /api/users/{id}/mfa/reset", polAdmin),
@@ -716,10 +722,11 @@ func TestRouteAccessAuditorAndAdminAreSeparated(t *testing.T) {
 			}
 		}
 	}
-	// Exactly the own-profile routes: GET/PUT /api/users/me and the nine
-	// self-service routes of the caller's own second factors.
-	if auditorOK != 11 {
-		t.Errorf("auditor is allowed on %d non-audit routes, want 11 (GET/PUT /api/users/me and /api/users/me/mfa*)", auditorOK)
+	// Exactly the own-profile routes: GET/PUT /api/users/me, the nine
+	// self-service routes of the caller's own second factors, and the own
+	// personal data export, erasure and terms acceptance.
+	if auditorOK != 14 {
+		t.Errorf("auditor is allowed on %d non-audit routes, want 14 (GET/PUT /api/users/me, /api/users/me/mfa*, export, erase, terms)", auditorOK)
 	}
 	if adminRoutes < 40 || auditRoutes != 3 {
 		t.Errorf("walked %d admin and %d audit routes", adminRoutes, auditRoutes)

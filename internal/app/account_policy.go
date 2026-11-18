@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+
+	"github.com/mhenderik/sendora/internal/store"
 )
 
 // accountPolicy is the password policy for local user accounts. A password is
@@ -28,8 +30,8 @@ func validateAccountSetting(key, val string) (owned bool, err error) {
 		}
 		return true, nil
 	case "account_password_min_length":
-		if _, ok := parseStrictInt(val, 1, maxSharePasswordBytes); !ok {
-			return true, fmt.Errorf("account_password_min_length must be an integer from 1 to %d", maxSharePasswordBytes)
+		if _, ok := parseStrictInt(val, store.AccountPasswordMinFloor, maxSharePasswordBytes); !ok {
+			return true, fmt.Errorf("account_password_min_length must be an integer from %d to %d", store.AccountPasswordMinFloor, maxSharePasswordBytes)
 		}
 		return true, nil
 	}
@@ -59,7 +61,9 @@ func (s *Server) loadAccountPolicy() (accountPolicy, error) {
 	if !ok {
 		return accountPolicy{}, errAccountPolicyConfig
 	}
-	p.MinLength = n
+	// A value below the floor (written before the floor existed and not yet
+	// migrated) never weakens the check.
+	p.MinLength = max(n, store.AccountPasswordMinFloor)
 	return p, nil
 }
 
@@ -85,15 +89,13 @@ func validateAccountPassword(p accountPolicy, pw string) error {
 }
 
 // requireAccountPassword writes the error response and returns false when pw
-// violates the policy (400) or the stored policy is corrupt (500).
-func (s *Server) requireAccountPassword(w http.ResponseWriter, pw string) bool {
-	p, err := s.loadAccountPolicy()
-	if err != nil {
-		jerr(w, 500, "password policy unavailable")
-		return false
-	}
-	if err := validateAccountPassword(p, pw); err != nil {
-		jerr(w, 400, err.Error())
+// violates the policy or the screening (400) or the stored policy is corrupt
+// (500). who is the account's username and email address (either may be
+// missing), so the password cannot simply repeat them (password_check.go).
+func (s *Server) requireAccountPassword(w http.ResponseWriter, r *http.Request, pw string, who ...string) bool {
+	who = append(who, "", "")
+	if code, err := s.checkAccountPassword(r.Context(), pw, who[0], who[1]); err != nil {
+		jerr(w, code, err.Error())
 		return false
 	}
 	return true

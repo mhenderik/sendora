@@ -538,7 +538,9 @@ func TestAuditorIsReadOnlyAndNeverAdmin(t *testing.T) {
 	auditor = login.S("access_token")
 
 	// Table-driven over every authenticated route: nothing outside the allowlist works.
-	allowed := map[string]bool{"GET /api/users/me": true, "PUT /api/users/me": true, "GET /api/audit": true, "GET /api/audit/export": true, "GET /api/audit/status": true}
+	allowed := map[string]bool{"GET /api/users/me": true, "PUT /api/users/me": true, "GET /api/audit": true, "GET /api/audit/export": true, "GET /api/audit/status": true,
+		// Personal data and terms are the auditor's own (gdpr.go, terms.go).
+		"GET /api/users/me/export": true, "POST /api/users/me/erase": true, "POST /api/users/me/terms": true}
 	public := func(p string) bool {
 		return !strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/api/auth/") || strings.HasPrefix(p, "/api/shares/{id}") && !strings.HasPrefix(p, "/api/shares/{id}/") ||
 			strings.HasPrefix(p, "/api/shares/{id}/unlock") || strings.HasPrefix(p, "/api/shares/{id}/download") || strings.HasPrefix(p, "/api/shares/{id}/preview") ||
@@ -753,7 +755,7 @@ func TestAuditCoversEveryMutatingRoute(t *testing.T) {
 func TestAuditCriticalRoutesAreGuarded(t *testing.T) {
 	e := newEnv(t)
 	want := map[string]bool{
-		"POST /api/users": false, "PUT /api/users/{id}": false, "DELETE /api/users/{id}": false,
+		"POST /api/users": false, "PUT /api/users/{id}": false, "DELETE /api/users/{id}": false, "POST /api/users/{id}/erase": false,
 		"POST /api/users/{id}/force-reset-password": false, "POST /api/users/{id}/mfa/reset": false, "PUT /api/settings": false,
 		"POST /api/auth-providers": false, "PUT /api/auth-providers/{id}": false, "DELETE /api/auth-providers/{id}": false,
 		"POST /api/backups": false, "DELETE /api/backups/{name}": false, "POST /api/backups/import": false, "POST /api/backups/import/apply": false,

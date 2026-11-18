@@ -201,6 +201,9 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			jerr(w, 403, "mfa enrollment required")
 			return
 		}
+		if s.termsBlocked(w, r, u) {
+			return
+		}
 		next.ServeHTTP(w, withUser(r, u))
 	})
 }
@@ -224,6 +227,7 @@ func (s *Server) sessionResponse(w http.ResponseWriter, r *http.Request, u *User
 		jerr(w, 401, "session changed; log in again")
 		return
 	}
+	s.noteSignIn(r, u)
 	s.fillMFA(u)
 	jout(w, 200, map[string]any{"access_token": s.accessToken(u), "user": u})
 }
@@ -269,7 +273,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 403, "invalid setup code: use the code printed in the server log")
 		return
 	}
-	if !s.requireAccountPassword(w, c.Password) {
+	if !s.requireAccountPassword(w, r, c.Password, c.Username, c.Email) {
 		return
 	}
 	email, err := canonicalEmail(c.Email)
@@ -421,6 +425,7 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idleMinutes := s.idleLogoutMinutes() // read before the transaction takes the only connection
+	adminIdle := s.adminIdleLogoutMinutes()
 	tx, err := s.St.DB.Begin()
 	if err != nil {
 		jerr(w, 500, "database error")
@@ -492,7 +497,7 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if issued.Valid && idleExpired(idleMinutes, issued.Time, time.Now()) {
+		if issued.Valid && idleExpired(effectiveIdleMinutes(idleMinutes, adminIdle, u.Admin), issued.Time, time.Now()) {
 			end() // abandoned session
 			return
 		}
@@ -583,7 +588,7 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "invalid request")
 		return
 	}
-	if !s.requireAccountPassword(w, b.Password) {
+	if !s.requireAccountPassword(w, r, b.Password, s.resetTokenIdentity(b.Token)...) {
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
@@ -633,6 +638,9 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 500, "password reset failed")
 		return
 	}
+	if kind != "welcome" { // a welcome link sets the first password; nothing changed
+		s.notifyUserID(r, uid, "password_changed")
+	}
 	jout(w, 200, map[string]any{"ok": true})
 }
 
@@ -655,7 +663,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, msgInvalidUsername)
 		return
 	}
-	if !s.requireAccountPassword(w, c.Password) {
+	if !s.requireAccountPassword(w, r, c.Password, c.Username, c.Email) {
 		return
 	}
 	email, err := canonicalEmail(c.Email)
@@ -860,7 +868,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	}
 	u.QuotaBytes, u.QuotaInheritsDefault = usage.QuotaBytes, usage.QuotaInheritsDefault
 	s.fillMFA(u)
-	jout(w, 200, map[string]any{"version": s.Version, "user": u, "providers": linked, "has_password": u.passwordHash != "", "quota_inherits_default": usage.QuotaInheritsDefault, "quota_bytes": usage.QuotaBytes, "storage_used_bytes": usage.StoredBytes, "storage_reserved_bytes": usage.ReservedBytes, "storage_available_bytes": usage.AvailableBytes})
+	jout(w, 200, map[string]any{"version": s.Version, "user": u, "providers": linked, "has_password": u.passwordHash != "", "terms_pending": s.termsPending(u), "quota_inherits_default": usage.QuotaInheritsDefault, "quota_bytes": usage.QuotaBytes, "storage_used_bytes": usage.StoredBytes, "storage_reserved_bytes": usage.ReservedBytes, "storage_available_bytes": usage.AvailableBytes})
 }
 
 func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
@@ -944,7 +952,7 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 	passwordHash := u.passwordHash
 	mustChange := u.MustChangePassword
 	if b.Password != "" {
-		if !s.requireAccountPassword(w, b.Password) {
+		if !s.requireAccountPassword(w, r, b.Password, u.Username, email) {
 			return
 		}
 		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcryptCost)
@@ -992,6 +1000,9 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 	}
 	if emailChanged && email != "" {
 		s.sendVerification(nu)
+	}
+	if b.Password != "" {
+		s.notifySecurity(r, u, "password_changed") // to the address the account had before
 	}
 	if emailChanged || b.Password != "" {
 		s.issueSessionSince(w, r, nu, s.sessionStartOf(r))
@@ -1111,7 +1122,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, msgAdminAuditorExclusive)
 		return
 	}
-	if !s.requireAccountPassword(w, b.Password) {
+	if !s.requireAccountPassword(w, r, b.Password, b.Username, b.Email) {
 		return
 	}
 	email, err := canonicalEmail(b.Email)
@@ -1219,7 +1230,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, msgAdminNoPassword)
 		return
 	}
-	if b.Password != "" && !s.requireAccountPassword(w, b.Password) {
+	if b.Password != "" && !s.requireAccountPassword(w, r, b.Password, me.Username, me.Email) {
 		return
 	}
 	unlock := lockStripe(&s.loginLocks, strconv.FormatInt(id, 10))
@@ -1256,6 +1267,12 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if admin && newAuditor {
 		jerr(w, 400, msgAdminAuditorExclusive)
+		return
+	}
+	if (admin != target.Admin || newAuditor != target.Auditor) && !s.requireStepUp(w, r) {
+		return
+	}
+	if s.refuseErased(w, id) {
 		return
 	}
 	hash := target.passwordHash
@@ -1322,6 +1339,9 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.MFAPolicy != nil && *b.MFAPolicy != target.MFAPolicy {
 		s.logEvent(me2.ID, me2.Username, "mfa_policy_changed", s.userTarget(id), "policy="+*b.MFAPolicy)
+	}
+	if b.Password != "" {
+		s.notifySecurity(r, target, "password_changed")
 	}
 	s.fillMFA(u)
 	jout(w, 200, u)

@@ -4,11 +4,13 @@ import "fmt"
 
 var MailLanguages = []string{"en", "nl", "de", "fr", "es"}
 var MailEvents = []string{"share_created", "share_downloaded", "share_expiring", "password_reset", "verify_email", "reverse_invite", "reverse_completed", "welcome",
-	"admin_password_reset", "account_email_changed_notice", "mfa_reset_requested", "mfa_reset_done"}
+	"admin_password_reset", "account_email_changed_notice", "mfa_reset_requested", "mfa_reset_done",
+	"password_changed", "mfa_factor_changed", "recovery_codes_regenerated", "new_signin"}
 
 // OptionalMailEvents were added after the first translation-file format; a file
 // without them still imports and keeps the current text of those events.
-var OptionalMailEvents = []string{"welcome", "admin_password_reset", "account_email_changed_notice", "mfa_reset_requested", "mfa_reset_done"}
+var OptionalMailEvents = []string{"welcome", "admin_password_reset", "account_email_changed_notice", "mfa_reset_requested", "mfa_reset_done",
+	"password_changed", "mfa_factor_changed", "recovery_codes_regenerated", "new_signin"}
 
 // IsOptionalMailEvent reports whether a translation file may omit the event.
 func IsOptionalMailEvent(event string) bool {
@@ -36,6 +38,9 @@ func MailDefaults(event, language string) (string, string) {
 		return welcomeMailDefaults(language)
 	}
 	if subject, body, ok := securityMailDefaults(event, language); ok {
+		return subject, body
+	}
+	if subject, body, ok := accountMailDefaults(event, language); ok {
 		return subject, body
 	}
 	if event != "share_downloaded" {

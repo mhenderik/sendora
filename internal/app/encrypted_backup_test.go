@@ -20,6 +20,7 @@ func TestEncryptedBackupAPIAndLegacyRetention(t *testing.T) {
 	legacyTestDefaults(t, st)
 	defer st.DB.Close()
 	s := New(st, fstest.MapFS{"index.html": {Data: []byte("test")}}, "test")
+	s.passwordScreenOff = true
 	ts := httptest.NewServer(s.Router())
 	defer ts.Close()
 	e := &env{t: t, s: s, ts: ts}

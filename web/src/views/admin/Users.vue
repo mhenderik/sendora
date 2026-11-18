@@ -80,6 +80,11 @@ async function del(u) {
   rowNote.value = null; rowBusy.value = u.id
   try { await api('/users/' + u.id, { method: 'DELETE' }); await load() } catch (e) { setRowNote(u, 'err', e.message) } finally { rowBusy.value = 0 }
 }
+async function erase(u) {
+  if (!confirm(t('Erase {n}? Their shares, files, invites, sessions and two-step verification are deleted and their name and email address removed. Audit log entries keep the former username until the retention period ends. This cannot be undone.', { n: u.username }))) return
+  rowNote.value = null; rowBusy.value = u.id
+  try { await api(`/users/${u.id}/erase`, { method: 'POST' }); await load() } catch (e) { setRowNote(u, 'err', e.message) } finally { rowBusy.value = 0 }
+}
 async function force(u) {
   if (!confirm(t('Sign {n} out everywhere and send a password reset link to their verified email address?', { n: u.username }))) return
   rowNote.value = null; rowBusy.value = u.id
@@ -132,6 +137,7 @@ async function force(u) {
           <button class="small secondary" :disabled="rowBusy === u.id || !!mailBlocked(u)" :title="mailBlocked(u)" @click="force(u)">{{ t('Send password reset link') }}</button>
           <button v-if="mfaOn() && u.mfa_enabled" class="small secondary" :disabled="rowBusy === u.id || !!mailBlocked(u)" :title="mailBlocked(u)" @click="resetMfa(u)">{{ t('Request MFA reset') }}</button>
           <button class="small danger" :disabled="u.id === session.user.id || rowBusy === u.id" @click="del(u)">{{ t('Delete') }}</button>
+          <button v-if="!/^erased-\d+$/.test(u.username)" class="small danger" :disabled="u.id === session.user.id || rowBusy === u.id" @click="erase(u)">{{ t('Erase personal data') }}</button>
           <p v-if="rowNote && rowNote.id === u.id" class="row-note" :class="rowNote.kind" :role="rowNote.kind === 'err' ? 'alert' : 'status'">{{ rowNote.text }}</p></td></tr>
     </table></div>
   </div>

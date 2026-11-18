@@ -327,6 +327,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		fail("session changed; log in again")
 		return
 	}
+	s.noteSignIn(r, u)
 	s.logEvent(u.ID, u.Username, "login_ok", "", "provider "+p.Name)
 	http.Redirect(w, r, "/?oidc=1", http.StatusFound)
 }

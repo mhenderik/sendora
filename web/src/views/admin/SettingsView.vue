@@ -8,7 +8,7 @@ import { gbToBytes, bytesToGB } from '../../quota.mjs'
 const s = ref(null), msg = ref(''), err = ref(''), quotaGB = ref(''), managed = ref([])
 // Settings from the server configuration (ConfigMap) are shown read-only.
 const m = k => managed.value.includes(k)
-const SECURITY_KEYS = ['mfa_policy', 'mfa_reminder_days', 'mfa_totp_enabled', 'mfa_webauthn_enabled', 'account_password_require_upper', 'account_password_require_lower', 'account_password_require_digit', 'account_password_require_symbol', 'account_password_min_length', 'audit_retention_days', 'audit_log_ip']
+const SECURITY_KEYS = ['mfa_policy', 'mfa_reminder_days', 'mfa_totp_enabled', 'mfa_webauthn_enabled', 'account_password_require_upper', 'account_password_require_lower', 'account_password_require_digit', 'account_password_require_symbol', 'account_password_min_length', 'audit_retention_days', 'audit_log_ip', 'notify_new_signin', 'password_breach_check_online', 'admin_stepup_minutes', 'admin_idle_logout_minutes', 'admin_ip_allowlist']
 async function load() {
   const settings = await api('/settings')
   quotaGB.value = bytesToGB(settings.default_storage_quota_bytes)
@@ -49,6 +49,14 @@ async function test() { try { if (!await save()) return; await api('/email-templ
     <label>{{ t('Allowed email domains for registration (one per line, empty = any)') }}</label>
     <textarea :disabled="m('registration_email_domains')" v-model="s.registration_email_domains" rows="3" placeholder="example.com" spellcheck="false" />
     <p class="muted">{{ t('Exact domains only; subdomains are not included. Applies to public registration, not to accounts created by administrators or external providers.') }}</p>
+    <h2 style="margin-top:20px">{{ t('Privacy and terms') }}</h2>
+    <div class="row">
+      <div><label>{{ t('Privacy statement URL') }}</label><input :disabled="m('privacy_url')" v-model="s.privacy_url" type="url" placeholder="https://example.com/privacy" /></div>
+      <div><label>{{ t('Terms of use URL') }}</label><input :disabled="m('terms_url')" v-model="s.terms_url" type="url" placeholder="https://example.com/terms" /></div>
+    </div>
+    <label class="check"><input :disabled="m('terms_acceptance_required')" type="checkbox" :checked="s.terms_acceptance_required === 'true'" @change="s.terms_acceptance_required = String($event.target.checked)" /> {{ t('Signed-in users must accept the terms of use') }}</label>
+    <label>{{ t('Terms version') }}</label><input :disabled="m('terms_version')" v-model="s.terms_version" maxlength="40" placeholder="2026-1" />
+    <p class="muted">{{ t('The links are shown in the footer, on the sign-in page and on shared pages. When acceptance is required, every user accepts the current version once; change the version to ask everyone again.') }}</p>
     <h2 style="margin-top:20px">{{ t('Share password policy') }}</h2>
     <label v-for="[k, l] in policyFlags" :key="k" class="check"><input :disabled="m(k)" type="checkbox" :checked="s[k] === 'true'" @change="s[k] = String($event.target.checked)" /> {{ t(l) }}</label>
     <label>{{ t('Minimum password length (1-72)') }}</label><input :disabled="m('share_password_min_length')" v-model="s.share_password_min_length" type="number" min="1" max="72" />

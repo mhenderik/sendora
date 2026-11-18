@@ -64,7 +64,7 @@ Mitigated for the database, for new share files and for backups. **Residual:** f
 Not defended. The key and plain data are in process memory; the key file is readable by the service account. Mitigations are operational: disable core dumps, restrict host access, keep the key apart from the data, forward the audit log off the host.
 
 ### 5.4 Account attacks
-Credential stuffing, password guessing, MFA bypass, session theft. Mitigated by bcrypt (cost 12), lockout, IP bans, TOTP and WebAuthn, rotating refresh tokens with reuse detection, short access tokens (15 min), absolute session limit (30 days). **Residual:** account lockout can be used to annoy a known username; OIDC logins rely on the identity provider's own MFA.
+Credential stuffing, password guessing, MFA bypass, session theft. Mitigated by bcrypt (cost 12), lockout, IP bans, TOTP and WebAuthn, rotating refresh tokens with reuse detection, short access tokens (15 min), absolute session limit (30 days), a minimum of 8 characters with screening of common, personal and trivial passwords (optionally the Have I Been Pwned range API, k-anonymity), email notifications about password, factor and recovery-code changes and sign-ins from new browsers or networks, and step-up re-authentication plus an optional network allowlist for critical administrator actions. A stolen administrator session therefore cannot delete users, change roles, providers or security settings, or download backups without the password or second factor. **Residual:** account lockout can be used to annoy a known username; OIDC logins rely on the identity provider's own MFA.
 
 ### 5.5 Share link attacks
 Link guessing (86 bits, 404/410 uniform), password guessing (bcrypt, per-IP and per-share throttle), download-slot exhaustion (bounded; see known limits), recipients forwarding links (inherent to link sharing; expiry, download limits and passwords are the controls).
@@ -74,6 +74,9 @@ XSS (no inline script, strict CSP, escaped rendering, validated theme/translatio
 
 ### 5.7 Supply chain
 SQLCipher 4.20.0 is built from a checksum-verified source tarball. Base images are referenced by tag (not yet by digest) and apt packages are not pinned: see the hardening notes. Go modules are pinned by `go.sum`.
+
+### 5.8 Personal data and erasure
+Users can export their own data and delete their account; administrators can erase an account. Erasure deletes shares, files, invites, sessions, second factors and linked sign-ins and pseudonymises the account row (`erased-<id>`, no name, email or password). **Legitimate-interest exception:** audit records written while the account existed keep their `actor_name` (the former username) and target labels. They are not rewritten because the audit log is a tamper-evident chain kept for the security of the service and the accountability of administrators (GDPR art. 6(1)(f); art. 17(3)(e) for legal claims). They are removed by the normal retention (`audit_retention_days`, 90 to 365 days). Backups made before the erasure still contain the account until they are rotated out (`backup_keep`).
 
 ## 6. Known limits (documented, not fixed)
 - The root key is used raw by SQLCipher and, as input, for the file-key derivation (no formal key separation; no known attack).

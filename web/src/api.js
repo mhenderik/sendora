@@ -1,6 +1,7 @@
 import { reactive } from 'vue'
 import { translateMessage } from './i18n/mark.mjs'
 import { filenameFromDisposition } from './content-disposition.mjs'
+import { isStepUpResponse } from './stepup.mjs'
 
 export const session = reactive({ token: null, user: null, ready: false })
 let refreshing = null
@@ -39,12 +40,26 @@ export class ApiError extends Error {
   }
 }
 
-// One request with a single refresh-and-retry when the access token has expired.
+// Critical administrator actions answer 401 {code: 'stepup_required'}. StepUpDialog
+// registers a handler that asks for the password or second factor; the request is
+// then retried once. termsState.pending is set when the current terms must be accepted.
+let stepUpHandler = null
+export const setStepUpHandler = fn => { stepUpHandler = typeof fn === 'function' ? fn : null }
+export const termsState = reactive({ pending: false })
+const peek = r => (r.headers.get('content-type') || '').includes('json') ? r.clone().json().catch(() => null) : Promise.resolve(null)
+
+// One request with a single refresh-and-retry when the access token has expired,
+// and a single retry after a step-up re-authentication.
 async function request(path, opts = {}) {
   let r = await raw(path, opts)
-  if (r.status === 401 && session.token && !opts.noRetry) {
+  if (r.status === 401 && session.token && !opts.noRetry && !isStepUpResponse(await peek(r))) {
     if (await refresh()) r = await raw(path, opts)
   }
+  if (r.status === 401 && stepUpHandler && !opts.noStepUp) {
+    const d = await peek(r)
+    if (isStepUpResponse(d) && await stepUpHandler(d)) r = await raw(path, opts)
+  }
+  if (r.status === 403 && (await peek(r))?.code === 'terms_required') termsState.pending = true
   return r
 }
 

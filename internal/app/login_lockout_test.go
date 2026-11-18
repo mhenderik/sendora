@@ -33,6 +33,7 @@ func lockoutServer(t *testing.T) (*Server, *User) {
 		t.Fatal(err)
 	}
 	s := &Server{St: st, Secret: []byte("lockout-test-secret")}
+	s.passwordScreenOff = true
 	hash, err := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.MinCost)
 	if err != nil {
 		t.Fatal(err)
@@ -54,6 +55,7 @@ func lockoutRequest(s *Server, handler http.HandlerFunc, path string, body any, 
 	r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(data))
 	r.Header.Set("Content-Type", "application/json")
 	if actor != nil {
+		r.Header.Set("Authorization", "Bearer "+s.accessToken(actor)) // a fresh sign-in (step-up)
 		r = withUser(r, actor)
 	}
 	rctx := chi.NewRouteContext()

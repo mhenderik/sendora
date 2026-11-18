@@ -8,7 +8,8 @@ import { t, tr } from '../../i18n'
 
 const KEYS = ['mfa_policy', 'mfa_reminder_days', 'mfa_totp_enabled', 'mfa_webauthn_enabled',
   'account_password_require_upper', 'account_password_require_lower', 'account_password_require_digit', 'account_password_require_symbol', 'account_password_min_length',
-  'audit_retention_days', 'audit_log_ip']
+  'audit_retention_days', 'audit_log_ip',
+  'notify_new_signin', 'password_breach_check_online', 'admin_stepup_minutes', 'admin_idle_logout_minutes', 'admin_ip_allowlist']
 const s = ref(null), managed = ref([]), msg = ref(''), err = ref(''), busy = ref(false)
 const m = k => managed.value.includes(k)
 const accountFlags = [['account_password_require_upper', tr('Require an uppercase letter')], ['account_password_require_lower', tr('Require a lowercase letter')], ['account_password_require_digit', tr('Require a digit')], ['account_password_require_symbol', tr('Require a symbol')]]
@@ -47,8 +48,23 @@ async function save() {
 
     <h2 style="margin-top:20px">{{ t('Account password policy') }}</h2>
     <label v-for="[k, l] in accountFlags" :key="k" class="check"><input :disabled="m(k)" type="checkbox" :checked="s[k] === 'true'" @change="s[k] = String($event.target.checked)" /> {{ t(l) }}</label>
-    <label for="acct-min">{{ t('Minimum password length (1-72)') }}</label><input id="acct-min" :disabled="m('account_password_min_length')" v-model="s.account_password_min_length" type="number" min="1" max="72" />
+    <label for="acct-min">{{ t('Minimum password length (8-72)') }}</label><input id="acct-min" :disabled="m('account_password_min_length')" v-model="s.account_password_min_length" type="number" min="8" max="72" />
     <p class="muted">{{ t('Applies to local accounts when a password is set or changed (setup, registration, reset, profile, administrators). Existing passwords keep working until they are next changed.') }}</p>
+    <p class="muted">{{ t('Common passwords, passwords containing the username, the email address or the application name, and simple repetitions or sequences are always refused.') }}</p>
+    <label class="check"><input :disabled="m('password_breach_check_online')" type="checkbox" :checked="s.password_breach_check_online === 'true'" @change="s.password_breach_check_online = String($event.target.checked)" /> {{ t('Also check new passwords against known data breaches (Have I Been Pwned)') }}</label>
+    <p class="muted">{{ t('Only the first 5 characters of the password\'s SHA-1 hash are sent (k-anonymity); the password itself never leaves the server. If the service cannot be reached, the password is accepted.') }}</p>
+
+    <h2 style="margin-top:20px">{{ t('Notifications') }}</h2>
+    <label class="check"><input :disabled="m('notify_new_signin')" type="checkbox" :checked="s.notify_new_signin !== 'false'" @change="s.notify_new_signin = String($event.target.checked)" /> {{ t('Email users about a sign-in from a new browser or network') }}</label>
+    <p class="muted">{{ t('Users with a verified email address are always told when their password, two-step verification or recovery codes change. The new sign-in check compares the browser family and the network with the sign-ins of the last 30 days; no IP addresses are stored for it.') }}</p>
+
+    <h2 style="margin-top:20px">{{ t('Administrators') }}</h2>
+    <label for="stepup-min">{{ t('Ask administrators to confirm critical actions again after (minutes, 1-60)') }}</label><input id="stepup-min" :disabled="m('admin_stepup_minutes')" v-model="s.admin_stepup_minutes" type="number" min="1" max="60" />
+    <p class="muted">{{ t('Deleting or erasing users, changing roles, sign-in providers, these security settings, backups and MFA resets need a password or second-factor confirmation that is at most this old.') }}</p>
+    <label for="admin-idle">{{ t('Sign administrators out after inactivity (minutes, 0 = same as everyone)') }}</label><input id="admin-idle" :disabled="m('admin_idle_logout_minutes')" v-model="s.admin_idle_logout_minutes" type="number" min="0" max="10080" />
+    <label for="admin-ips">{{ t('Allow administration only from these addresses (IP addresses or ranges, one per line; empty = anywhere)') }}</label>
+    <textarea id="admin-ips" :disabled="m('admin_ip_allowlist')" v-model="s.admin_ip_allowlist" rows="3" spellcheck="false" placeholder="203.0.113.0/24" />
+    <p class="muted">{{ t('Applies to the administration and audit log pages. The list must include your current address. If you lock yourself out, restart the server with SENDORA_DISABLE_ADMIN_IP_ALLOWLIST=true.') }}</p>
 
     <h2 style="margin-top:20px">{{ t('Logging') }}</h2>
     <label for="audit-retention">{{ t('Audit log retention (days, 90-365)') }}</label><input id="audit-retention" :disabled="m('audit_retention_days')" v-model="s.audit_retention_days" type="number" min="90" max="365" />
