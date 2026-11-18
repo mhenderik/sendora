@@ -55,6 +55,14 @@ The complete documentation is in the **[wiki](https://github.com/mhenderik/sendo
 | [Build from source](https://github.com/mhenderik/sendora/wiki/Installation-From-Source) | [Upgrades and backups](https://github.com/mhenderik/sendora/wiki/Upgrades-and-Backups) | [How to extend](https://github.com/mhenderik/sendora/wiki/How-To-Extend) |
 | [Settings table](docs/configuration.md) | [Troubleshooting](https://github.com/mhenderik/sendora/wiki/Troubleshooting) · [Security notes](https://github.com/mhenderik/sendora/wiki/Security-Notes) | [Translations](https://github.com/mhenderik/sendora/wiki/Translations) |
 
+## For auditors
+
+Sendora has **not** been independently audited or penetration tested. The documents below describe what the code does and what remains the operator's responsibility:
+
+- [Compliance and audit documentation](docs/compliance/README.md): [security whitepaper](docs/compliance/SECURITY-WHITEPAPER.md), [shared responsibility matrix](docs/compliance/SHARED-RESPONSIBILITY.md) (ISO/IEC 27001, SOC 2), [data flows](docs/compliance/DATA-FLOW.md), [personal data](docs/compliance/PERSONAL-DATA.md), [audit events](docs/compliance/AUDIT-EVENTS.md), [vulnerability and dependency management](docs/compliance/VULNERABILITY-AND-DEPENDENCY-MANAGEMENT.md)
+- [Threat model](docs/THREAT-MODEL.md) and [file format specification](docs/FILE-FORMAT.md)
+- [Security policy](SECURITY.md), including how to verify release images
+
 ## Bundled background photos
 
 The five background photographs in `web/src/assets/backgrounds/` come from Wikimedia Commons, where their uploaders declare them CC0 (public-domain dedication); sources, authors, licence labels and the provenance checks (including the Unsplash 2017-06-05 licence cut-off) are listed in `web/src/assets/backgrounds/CREDITS.md`. They were resized and recompressed and metadata was removed. Verify the licence information yourself before redistributing. The administrator chooses one of them, the original illustration, or no background under Admin → Branding; uploaded images always take precedence. The default is "Misty lake".
