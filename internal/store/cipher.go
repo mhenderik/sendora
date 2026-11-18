@@ -65,7 +65,18 @@ func openCipherDB(p string, key []byte, readonly bool) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	var version string
-	if err := db.QueryRow(`PRAGMA cipher_version`).Scan(&version); err != nil || !strings.HasPrefix(version, "4.20.0 ") {
+	err = db.QueryRow(`PRAGMA cipher_version`).Scan(&version)
+	if err != nil {
+		db.Close()
+		// A wrong or missing key makes SQLite report "file is not a database" while
+		// the connection is prepared; that is a key problem, not a missing engine.
+		var se sqlite3.Error
+		if errors.As(err, &se) && se.Code == sqlite3.ErrNotADB {
+			return nil, errCannotRead
+		}
+		return nil, errEngineUnavailable
+	}
+	if !strings.HasPrefix(version, "4.20.0 ") {
 		db.Close()
 		return nil, errEngineUnavailable
 	}

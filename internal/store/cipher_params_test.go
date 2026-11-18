@@ -73,3 +73,26 @@ func TestDatabaseCipherParametersMatchDocumentation(t *testing.T) {
 		t.Error("two databases share the same salt")
 	}
 }
+
+// A wrong key must be reported as a key problem. It used to be reported as a
+// missing SQLCipher engine, which sent operators looking in the wrong place.
+func TestWrongOrMissingKeyIsReportedAsKeyProblem(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenEncrypted(dir, bytes.Repeat([]byte{1}, 32), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	for name, key := range map[string][]byte{"wrong key": bytes.Repeat([]byte{2}, 32), "no key": nil} {
+		_, err := OpenEncrypted(dir, key, false)
+		if err == nil {
+			t.Fatalf("%s: database opened", name)
+		}
+		if err == errEngineUnavailable {
+			t.Fatalf("%s: reported as a missing engine: %v", name, err)
+		}
+	}
+	if _, err := OpenEncrypted(dir, bytes.Repeat([]byte{2}, 32), false); err != errCannotRead {
+		t.Fatalf("wrong key error = %v, want %v", err, errCannotRead)
+	}
+}
