@@ -387,7 +387,7 @@ func stripForeignObjects(db *sql.DB) error {
 // reset and verification codes, revocation lists and the stored signing secret
 // (a fresh one is generated at startup unless JWT_SECRET is set).
 func clearImportedSecrets(db *sql.DB) error {
-	for _, table := range []string{"refresh_tokens", "password_resets", "email_verifications", "revoked_access_tokens", "verification_attempts", "ip_bans", "refresh_spent"} {
+	for _, table := range []string{"refresh_tokens", "password_resets", "email_verifications", "revoked_access_tokens", "verification_attempts", "ip_bans", "refresh_spent", "mfa_reset_requests"} {
 		var present int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&present); err != nil {
 			return err

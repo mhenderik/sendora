@@ -31,6 +31,8 @@
 
 ### Security
 
+- A database import now also clears pending MFA-reset confirmation links from the imported
+  file, so a link that was valid in the old database cannot remove a second factor afterwards.
 - **Security: share file format v2.** Every new encrypted file carries a random file ID
   (header 53 bytes) that is part of each chunk's authenticated data and is stored in the
   new `files.enc_id` column. A file whose header ID differs from its database row is
