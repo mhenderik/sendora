@@ -635,7 +635,6 @@ func TestMFANoSecretsInLogsOrResponses(t *testing.T) {
 	e.want(e.do("POST", "/api/users/"+idStr(lid)+"/mfa/reset", admin, nil), 200, "reset request")
 	resetToken := linkToken(t, sink.wait(t, "/mfa-reset/"), "mfa-reset")
 	e.want(e.do("POST", "/api/auth/mfa-reset/confirm", "", map[string]any{"token": resetToken}), 200, "user confirms")
-	e.s.flushEvents()
 	logs := e.do("GET", "/api/logs?limit=100", admin, nil)
 	e.want(logs, 200, "logs")
 	body := string(logs.Body)

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/mhenderik/sendora/internal/store"
 )
 
 var boolSettings = map[string]bool{
@@ -25,7 +27,7 @@ var intSettings = map[string][2]int{
 	"backup_keep":          {1, 365},
 	"ui_slideshow_seconds": {5, 3600},
 	"smtp_port":            {1, 65535},
-	"audit_retention_days": {1, 365},
+	"audit_retention_days": {store.AuditRetentionMinDays, 365}, // never shorter: lowering it must not remove evidence
 }
 
 func plainText(v string, max int) bool {
@@ -53,6 +55,8 @@ func (s *Server) validateGeneralSetting(key string, val *string) (owned bool, er
 	}
 	if r, ok := intSettings[key]; ok {
 		if _, ok := parseStrictInt(v, r[0], r[1]); !ok {
+			// The generic text is translated in the UI; for audit_retention_days it
+			// reads "from 90 to 365".
 			return true, fmt.Errorf("%s must be a whole number from %d to %d", key, r[0], r[1])
 		}
 		return true, nil

@@ -21,13 +21,18 @@ type Store struct {
 	cipherKey   []byte
 	fileKey     []byte
 	settingsGen atomic.Uint64
-	auditMu     sync.Mutex
+	auditMu     ctxMutex // serialises appends, purges and carrying the log
 	auditOnce   sync.Once
 	auditMacFn  func([]byte) []byte
+	auditVer    auditVerifyState // incremental verification (audit.go)
 }
 
 // SettingsGen changes whenever SetSetting writes; caches use it to refresh.
 func (s *Store) SettingsGen() uint64 { return s.settingsGen.Load() }
+
+// SettingsChanged tells caches that settings were written directly (for example
+// by the settings screen's transaction), so SettingsGen moves on.
+func (s *Store) SettingsChanged() { s.settingsGen.Add(1) }
 
 // The legacy driver name is confined to plaintext migration fixtures/tools.
 func init() { sql.Register("sqlite", &sqlite3.SQLiteDriver{}) }

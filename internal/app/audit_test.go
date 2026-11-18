@@ -68,7 +68,6 @@ func hasAction(list []string, a string) bool {
 
 func chainStatus(e *env) store.AuditStatus {
 	e.t.Helper()
-	e.s.audit.statusAt = time.Time{} // do not reuse a cached result
 	st, err := e.s.St.AuditVerify()
 	if err != nil {
 		e.t.Fatal(err)
@@ -374,7 +373,6 @@ func TestAuditTamperDetectedByAPIStatus(t *testing.T) {
 			if _, err := e.s.St.DB.Exec(stmt); err != nil {
 				t.Fatal(err)
 			}
-			e.s.audit.statusAt = time.Time{}
 			r := e.do("GET", "/api/audit/status", auditor, nil)
 			j := r.J()
 			if j["verified"] != false || j["first_broken_seq"] == nil || j["first_broken_seq"].(float64) < 1 {
@@ -399,7 +397,7 @@ func TestAuditRetentionPurgeKeepsChainAndUpdatesCheckpoint(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"audit_retention_days": 30}), 200, "retention 30")
+	// The default (and minimum) retention of 90 days removes the 100-day-old records.
 	before := len(auditRowsWhere(e, "1=1"))
 	e.s.purgeAudit()
 	if n := len(auditRowsWhere(e, "action='ancient'")); n != 0 {
@@ -412,10 +410,12 @@ func TestAuditRetentionPurgeKeepsChainAndUpdatesCheckpoint(t *testing.T) {
 	if !hasAction(auditActions(e, "1=1"), "audit_purged") {
 		t.Fatal("the purge itself must be recorded")
 	}
-	// Shortening to the minimum is allowed and every change is audited with old and new value.
-	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"audit_retention_days": 1}), 200, "retention 1")
+	// Changing it (back to the minimum is allowed) is audited with old and new value.
+	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"audit_retention_days": 120}), 200, "retention 120")
+	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"audit_retention_days": 90}), 200, "retention 90")
+	e.want(e.do("PUT", "/api/settings", admin, map[string]any{"audit_retention_days": 30}), 400, "below the minimum")
 	rows := auditRowsWhere(e, "action='audit_retention_changed'")
-	if len(rows) != 2 || !strings.Contains(rows[1].Detail, "'30' -> '1'") || !strings.Contains(rows[0].Detail, "'90' -> '30'") {
+	if len(rows) != 2 || !strings.Contains(rows[1].Detail, "'120' -> '90'") || !strings.Contains(rows[0].Detail, "'90' -> '120'") {
 		t.Fatalf("%+v", rows)
 	}
 	e.s.purgeAudit()
@@ -461,9 +461,12 @@ func TestAuditSettingsDefaultsAndValidation(t *testing.T) {
 	if _, ok := s.J()["logging_enabled"]; ok {
 		t.Fatal("retired logging switch still listed")
 	}
-	for _, bad := range []any{0, 366, -1, 1.5, "x", "", nil, true, []int{1}} {
+	for _, bad := range []any{0, 1, 30, 89, "89", 366, -1, 1.5, 90.5, "x", "", nil, true, []int{1}} {
 		r := e.do("PUT", "/api/settings", admin, map[string]any{"application_name": "ShouldRollBack", "audit_retention_days": bad})
 		e.want(r, 400, fmt.Sprintf("retention %v", bad))
+		if num, ok := bad.(int); ok && num != 366 && num >= 0 && !strings.Contains(r.S("error"), "from 90 to 365") {
+			t.Fatalf("message must name the range 90 to 365: %s", r.Body)
+		}
 		if e.s.St.Setting("application_name") == "ShouldRollBack" {
 			t.Fatalf("batch not atomic for %v", bad)
 		}
@@ -471,7 +474,7 @@ func TestAuditSettingsDefaultsAndValidation(t *testing.T) {
 	for _, bad := range []any{"yes", 1, "", nil} {
 		e.want(e.do("PUT", "/api/settings", admin, map[string]any{"audit_log_ip": bad}), 400, fmt.Sprintf("ip flag %v", bad))
 	}
-	for _, good := range []any{1, 365, "30"} {
+	for _, good := range []any{90, 365, "120"} {
 		e.want(e.do("PUT", "/api/settings", admin, map[string]any{"audit_retention_days": good}), 200, fmt.Sprintf("retention %v", good))
 	}
 	// The retired switches are accepted silently and never touch the log.
@@ -546,7 +549,8 @@ func TestAuditorIsReadOnlyAndNeverAdmin(t *testing.T) {
 	h := e.s.Router().(chi.Routes)
 	err := chi.Walk(h, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		key := method + " " + route
-		if allowed[key] || public(route) || route == "/*" {
+		// The caller's own second factors are self-service for auditors too.
+		if allowed[key] || public(route) || route == "/*" || mfaSelfServicePath(route) {
 			return nil
 		}
 		// GET/POST on /api/backgrounds is public for GET only.
@@ -605,13 +609,17 @@ func TestAuditAccessDeniedAndGenericMutation(t *testing.T) {
 	}
 	// 403 on an authenticated route.
 	e.want(e.do("GET", "/api/users", eve, nil), 403, "non-admin")
+	if rows := auditRowsWhere(e, "action='access_denied' AND category='security'"); len(rows) != 1 || rows[0].ActorNm != "eve" {
+		t.Fatalf("%+v", rows)
+	}
+	// A token that does not verify names nobody: not recorded (no flood from the internet).
 	e.want(e.do("GET", "/api/users", "garbage", nil), 401, "bad token")
-	if rows := auditRowsWhere(e, "action='access_denied' AND category='security'"); len(rows) != 2 {
+	if rows := auditRowsWhere(e, "action='access_denied' AND category='security'"); len(rows) != 1 {
 		t.Fatalf("%+v", rows)
 	}
 	// Anonymous 401 without credentials is not noise.
 	e.want(e.do("GET", "/api/users", "", nil), 401, "anonymous")
-	if rows := auditRowsWhere(e, "action='access_denied' AND category='security'"); len(rows) != 2 {
+	if rows := auditRowsWhere(e, "action='access_denied' AND category='security'"); len(rows) != 1 {
 		t.Fatalf("anonymous probe logged: %+v", rows)
 	}
 	// Generic entry for a mutating request the handler did not record itself.

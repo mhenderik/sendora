@@ -131,15 +131,15 @@ var routeTable = []routeSpec{
 	rs("GET /api/users/me", polGuestAllowed),
 	rs("PUT /api/users/me", polSelf),
 	rs("DELETE /api/users/me/providers/{id}", polUser).withSoft("{id} is a linked sign-in of the caller; the fixture has none", 404),
-	rs("GET /api/users/me/mfa", polUser),
-	rs("POST /api/users/me/mfa/totp/begin", polUser).withSoft("needs the current password in the body", 400, 403),
-	rs("POST /api/users/me/mfa/totp/confirm", polUser).withSoft("needs a started enrolment", 400, 403),
-	rs("POST /api/users/me/mfa/totp/remove", polUser).withSoft("needs the password / a code", 400, 403),
-	rs("POST /api/users/me/mfa/recovery/regenerate", polUser).withSoft("needs the password / a code", 400, 403),
-	rs("POST /api/users/me/mfa/webauthn/begin", polUser).withSoft("needs the password", 400, 403),
-	rs("POST /api/users/me/mfa/webauthn/finish", polUser).withSoft("needs a begun ceremony", 400, 403),
-	rs("PUT /api/users/me/mfa/webauthn/{id}", polUser).withSoft("{id} is a security key of the caller; the fixture has none", 404),
-	rs("POST /api/users/me/mfa/webauthn/{id}/remove", polUser).withSoft("{id} is a security key of the caller; the fixture has none", 400, 403, 404),
+	rs("GET /api/users/me/mfa", polSelf),
+	rs("POST /api/users/me/mfa/totp/begin", polSelf).withSoft("needs the current password in the body", 400, 403),
+	rs("POST /api/users/me/mfa/totp/confirm", polSelf).withSoft("needs a started enrolment", 400, 403),
+	rs("POST /api/users/me/mfa/totp/remove", polSelf).withSoft("needs the password / a code", 400, 403),
+	rs("POST /api/users/me/mfa/recovery/regenerate", polSelf).withSoft("needs the password / a code", 400, 403),
+	rs("POST /api/users/me/mfa/webauthn/begin", polSelf).withSoft("needs the password", 400, 403),
+	rs("POST /api/users/me/mfa/webauthn/finish", polSelf).withSoft("needs a begun ceremony", 400, 403),
+	rs("PUT /api/users/me/mfa/webauthn/{id}", polSelf).withSoft("{id} is a security key of the caller; the fixture has none", 404),
+	rs("POST /api/users/me/mfa/webauthn/{id}/remove", polSelf).withSoft("{id} is a security key of the caller; the fixture has none", 400, 403, 404),
 
 	// ---- shares: owner only ----
 	rs("GET /api/shares", polUser), // lists the caller's own shares
@@ -656,7 +656,7 @@ func TestRouteAccessOtherUsersSharesAreInvisible(t *testing.T) {
 }
 
 // Neither the administrator pages nor the plain log expose share names, link
-// ids or file names. Share events are for auditors.
+// ids or file names. Share events appear for administrators and auditors alike, by number only.
 func TestRouteAccessAdminSeesNoShareIdentifiers(t *testing.T) {
 	a := newAccessEnv(t)
 	r := a.share(a.token(pOwnerA), map[string]string{"secret-report-final.pdf": "x"}, map[string]any{"name": "Quarterly Takeover Plan", "description": "hush-hush"})
@@ -716,9 +716,10 @@ func TestRouteAccessAuditorAndAdminAreSeparated(t *testing.T) {
 			}
 		}
 	}
-	// Exactly the own-profile routes: GET/PUT /api/users/me.
-	if auditorOK != 2 {
-		t.Errorf("auditor is allowed on %d non-audit routes, want 2 (GET/PUT /api/users/me)", auditorOK)
+	// Exactly the own-profile routes: GET/PUT /api/users/me and the nine
+	// self-service routes of the caller's own second factors.
+	if auditorOK != 11 {
+		t.Errorf("auditor is allowed on %d non-audit routes, want 11 (GET/PUT /api/users/me and /api/users/me/mfa*)", auditorOK)
 	}
 	if adminRoutes < 40 || auditRoutes != 3 {
 		t.Errorf("walked %d admin and %d audit routes", adminRoutes, auditRoutes)

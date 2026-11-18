@@ -181,7 +181,6 @@ func TestUILanguageEventLogHasCountsOnly(t *testing.T) {
 	e, admin := uiEnv(t)
 	e.want(e.do("POST", "/api/ui-languages", admin, map[string]any{"code": "pt-br", "name": "Português", "translations": map[string]string{"Save": "Salvar-geheim"}}), 200, "import")
 	e.want(e.do("DELETE", "/api/ui-languages/pt-br", admin, nil), 200, "delete")
-	e.s.flushEvents()
 	var detail, target string
 	e.s.St.DB.QueryRow(`SELECT target,detail FROM audit_log WHERE action='ui_language_imported'`).Scan(&target, &detail)
 	var deleted int
