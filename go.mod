@@ -12,6 +12,6 @@ require (
 	golang.org/x/oauth2 v0.38.0
 )
 
-require github.com/go-jose/go-jose/v4 v4.1.4 // indirect
+require github.com/go-jose/go-jose/v4 v4.1.6 // indirect
 
 replace github.com/mattn/go-sqlite3 => ./third_party/go-sqlite3
