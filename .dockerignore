@@ -1,5 +1,7 @@
 # Never send local data, secrets or build output into the image build.
 **/data
+# ...except embedded source data (the common-password list).
+!internal/app/data
 **/sendora-data
 **/*.db
 **/*.db-wal
