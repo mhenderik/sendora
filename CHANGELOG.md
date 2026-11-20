@@ -4,6 +4,8 @@
 
 ## 0.2.0 (2026-11-21)
 
+- Security: go-jose updated to 4.1.6 (DoS when parsing JWKs with RSA keys; panics in JSON and CBC-HMAC processing), used by the OpenID Connect sign-in.
+
 0.2.0 adds pluggable object storage and optional multi-tenancy, and ships as a single
 binary. **The defaults stay the local data directory and single-tenant mode: existing
 installations keep working unchanged** (same data layout, no migration, no new required
