@@ -180,7 +180,7 @@ func (s *Server) mtConvStatus(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 404, "not found")
 		return
 	}
-	out := map[string]any{"suggested_custom_domain": s.suggestedCustomDomain(), "supervisor": supervisorLikely(),
+	out := map[string]any{"suggested_custom_domain": s.suggestedCustomDomain(), "supervisor": supervisorLikely(), "password_min_length": consoleMinPassword,
 		"jwt_secret_set": os.Getenv("JWT_SECRET") != "" || os.Getenv("JWT_SECRET_FILE") != ""}
 	if c, err := readConversion(s.St.DataDir); err == nil {
 		c.AdminPasswordHash = ""

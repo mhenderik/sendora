@@ -116,6 +116,15 @@ func run(args []string) error {
 		root = key
 		if *legacyRoot {
 			root = master
+			// A tenant copied from another installation (tenant-import -from)
+			// keeps that installation's key as its root: pass it as -source-key-file.
+			if *sourceKeyFile != "" {
+				old, err := store.ReadDatabaseKey(*sourceKeyFile)
+				if err != nil {
+					return fmt.Errorf("source key: %w", err)
+				}
+				root = old
+			}
 		}
 	}
 	switch args[0] {

@@ -4,12 +4,16 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import QrCode from '../components/QrCode.vue'
 import StorageForm from '../components/StorageForm.vue'
+import PasswordHints from '../components/PasswordHints.vue'
+import { platformPolicy } from '../password-check.mjs'
 import { t, tr, lang, setLang, builtinLanguages } from '../i18n'
 import { gbToBytes, bytesToGB } from '../quota.mjs'
 import { pconsole, slugProblem, fmtSize, quotaPercent, reauthBody, storageKindLabel } from '../platform-console.mjs'
 
 const boot = ref(null), stage = ref('loading'), me = ref(null), err = ref(''), notice = ref(''), busy = ref(false)
 const mfaRequired = ref(true), mustChange = ref(false)
+// The platform administrators' password rule, from the server.
+const pwRule = computed(() => platformPolicy(boot.value || {}))
 const pw = reactive({ current: '', next: '' })
 // Destructive actions are confirmed with the authenticator code, or with the
 // password by an administrator without one while the platform does not require it.
@@ -211,7 +215,8 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
         <label for="p-user">{{ t('Username') }}</label><input id="p-user" v-model="f.username" autocomplete="username" required />
         <label for="p-mail">{{ t('Email') }}</label><input id="p-mail" v-model="f.email" type="email" />
         <label for="p-pass">{{ t('Password') }}</label><input id="p-pass" v-model="f.password" type="password" autocomplete="new-password" minlength="12" required />
-        <p class="muted">{{ t('At least 12 characters; an authenticator app is required next.') }}</p>
+        <PasswordHints :password="f.password" :policy="pwRule" />
+        <p class="muted">{{ t('An authenticator app is set up next.') }}</p>
         <p v-if="err" class="err" role="alert">{{ err }}</p>
         <div class="actions"><button :disabled="busy">{{ t('Create administrator') }}</button></div>
       </form>
@@ -229,7 +234,7 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
         <p class="muted">{{ t('You signed in with a temporary password. Choose a new password to continue.') }}</p>
         <label for="pw-cur">{{ t('Temporary password') }}</label><input id="pw-cur" v-model="pw.current" type="password" autocomplete="current-password" required />
         <label for="pw-new">{{ t('New password') }}</label><input id="pw-new" v-model="pw.next" type="password" autocomplete="new-password" minlength="12" required />
-        <p class="muted">{{ t('At least 12 characters.') }}</p>
+        <PasswordHints :password="pw.next" :policy="pwRule" />
         <p v-if="err" class="err" role="alert">{{ err }}</p>
         <div class="actions"><button :disabled="busy">{{ t('Save') }}</button><button type="button" class="secondary" @click="logout">{{ t('Sign out') }}</button></div>
       </form>
@@ -307,7 +312,7 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
           <div class="card">
             <form class="row" @submit.prevent="search">
               <div><label for="q">{{ t('Search') }}</label><input id="q" v-model="q" :placeholder="t('Subdomain, name or domain')" /></div>
-              <div style="flex:0 0 auto"><button class="secondary">{{ t('Search') }}</button></div>
+              <div class="row-end"><button class="secondary">{{ t('Search') }}</button></div>
             </form>
             <div class="table-wrap">
               <table>
@@ -368,7 +373,7 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
             </table></div>
             <form class="row" @submit.prevent="addDomain">
               <div><label for="d-new">{{ t('Custom domain') }}</label><input id="d-new" v-model="domainInput" placeholder="files.example.com" /></div>
-              <div style="flex:0 0 auto"><button class="secondary">{{ t('Add') }}</button></div>
+              <div class="row-end"><button class="secondary">{{ t('Add') }}</button></div>
             </form>
             <p class="muted">{{ t('A custom domain needs a DNS record pointing to this platform and a TLS certificate. Other addresses of the tenant redirect to its primary domain.') }}</p>
           </div>
@@ -484,7 +489,7 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
           <form @submit.prevent="changePassword">
             <div class="row">
               <div><label for="ma-cur">{{ t('Current password') }}</label><input id="ma-cur" v-model="pw.current" type="password" autocomplete="current-password" required /></div>
-              <div><label for="ma-new">{{ t('New password') }}</label><input id="ma-new" v-model="pw.next" type="password" autocomplete="new-password" minlength="12" required /></div>
+              <div><label for="ma-new">{{ t('New password') }}</label><input id="ma-new" v-model="pw.next" type="password" autocomplete="new-password" minlength="12" required /><PasswordHints :password="pw.next" optional :policy="pwRule" /></div>
             </div>
             <div class="actions"><button :disabled="busy">{{ t('Change password') }}</button></div>
           </form>
@@ -515,7 +520,7 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
               <div><label for="na-e">{{ t('Email') }}</label><input id="na-e" v-model="na.email" type="email" /></div>
             </div>
             <div class="row">
-              <div><label for="na-p">{{ t('Password') }}</label><input id="na-p" v-model="na.password" type="password" autocomplete="new-password" minlength="12" required /></div>
+              <div><label for="na-p">{{ t('Password') }}</label><input id="na-p" v-model="na.password" type="password" autocomplete="new-password" minlength="12" required /><PasswordHints :password="na.password" optional :policy="pwRule" /></div>
               <div><label for="na-c">{{ reauthLabel }}</label><input id="na-c" v-model="na.code" :type="byPassword ? 'password' : 'text'" autocomplete="off" required /></div>
             </div>
             <div class="actions"><button :disabled="busy">{{ t('Create administrator') }}</button></div>

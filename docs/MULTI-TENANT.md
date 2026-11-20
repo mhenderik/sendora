@@ -320,7 +320,7 @@ running until DNS is switched.
    to the new host. The imported tenant keeps local storage
    (*Local disk on the server*); change it in the console if needed.
 4. Start the multi-tenant server, check the tenant (`sendora-db verify-files` and
-   `audit-verify` with `-tenant <id> -legacy-root`), then switch DNS for the old
+   `audit-verify` with `-tenant <id> -legacy-root -source-key-file <old key>`), then switch DNS for the old
    host name (and `<slug>.<base domain>`) to the new environment.
 5. Remove the copied source and its key from the new host when you are done.
 

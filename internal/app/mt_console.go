@@ -386,10 +386,11 @@ func (c *platformConsole) record(r *http.Request, action, target, outcome, detai
 
 func (c *platformConsole) bootstrap(w http.ResponseWriter, r *http.Request) {
 	jout(w, 200, map[string]any{
-		"setup_needed": c.h.P.AdminCount() == 0,
-		"base_domain":  c.h.baseHost + c.h.basePort,
-		"console_url":  c.h.ConsoleURL(),
-		"version":      c.h.cfg.Version,
+		"setup_needed":        c.h.P.AdminCount() == 0,
+		"password_min_length": consoleMinPassword,
+		"base_domain":         c.h.baseHost + c.h.basePort,
+		"console_url":         c.h.ConsoleURL(),
+		"version":             c.h.cfg.Version,
 	})
 }
 

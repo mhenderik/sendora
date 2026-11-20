@@ -5,6 +5,8 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { api } from '../../api'
 import { t } from '../../i18n'
+import PasswordHints from '../../components/PasswordHints.vue'
+import { platformPolicy, passwordChecklist } from '../../password-check.mjs'
 
 const st = ref(null), err = ref(''), msg = ref(''), busy = ref(false), confirmed = ref(false)
 const f = reactive({ base_domain: '', slug: '', name: '', admin_username: '', admin_email: '', admin_password: '', mfa_required: true, use_custom_domain: true, custom_domain: '' })
@@ -15,7 +17,8 @@ async function load() {
 }
 onMounted(async () => { try { await load() } catch (e) { err.value = e.message } })
 const slugOK = computed(() => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(f.slug) && !f.slug.includes('--'))
-const ready = computed(() => f.base_domain && slugOK.value && f.admin_username && f.admin_email && f.admin_password.length >= 12 && confirmed.value)
+const pwPolicy = computed(() => platformPolicy(st.value || {}))
+const ready = computed(() => f.base_domain && slugOK.value && f.admin_username && f.admin_email && passwordChecklist(f.admin_password, pwPolicy.value).ok && confirmed.value)
 
 async function schedule() {
   err.value = msg.value = ''; busy.value = true
@@ -84,7 +87,7 @@ async function restart() {
         <div><label for="mt-mail">{{ t('Email') }}</label><input id="mt-mail" v-model="f.admin_email" type="email" required /></div>
       </div>
       <label for="mt-pass">{{ t('Password') }}</label><input id="mt-pass" v-model="f.admin_password" type="password" autocomplete="new-password" minlength="12" required />
-      <p class="muted">{{ t('At least 12 characters.') }}</p>
+      <PasswordHints :password="f.admin_password" :policy="pwPolicy" />
       <label class="check"><input type="checkbox" v-model="f.mfa_required" /> {{ t('Platform administrators must use an authenticator app') }}</label>
       <label class="check"><input type="checkbox" v-model="confirmed" /> {{ t('I have read the requirements; schedule the conversion for the next start') }}</label>
       <div class="actions"><button :disabled="busy || !ready">{{ t('Schedule the conversion') }}</button></div>

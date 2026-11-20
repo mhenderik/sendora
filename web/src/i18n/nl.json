@@ -1331,5 +1331,12 @@
   "The platform provides no storage to this tenant, so there is no platform storage limit.": "Het platform biedt deze tenant geen opslag, dus er geldt geen opslaglimiet van het platform.",
   "The tenant uses storage of its own, which it pays for and manages itself: no platform storage limit applies.": "De tenant gebruikt eigen opslag, die hij zelf beheert en betaalt: er geldt geen opslaglimiet van het platform.",
   "Used": "In gebruik",
-  "the storage limit of this organisation is reached: delete old shares or ask the platform administrator for more space": "de opslaglimiet van deze organisatie is bereikt: verwijder oude gedeelde bestanden of vraag de platformbeheerder om meer ruimte"
+  "the storage limit of this organisation is reached: delete old shares or ask the platform administrator for more space": "de opslaglimiet van deze organisatie is bereikt: verwijder oude gedeelde bestanden of vraag de platformbeheerder om meer ruimte",
+  "{n} / {min} characters": "{n} / {min} tekens",
+  "An authenticator app is set up next.": "Daarna wordt een authenticator-app ingesteld.",
+  "met": "voldaan",
+  "not met yet": "nog niet voldaan",
+  "The passwords do not match": "De wachtwoorden komen niet overeen",
+  "The passwords match": "De wachtwoorden komen overeen",
+  "The server also refuses common passwords, passwords containing your name and, where enabled, passwords known from data breaches.": "De server weigert ook veelgebruikte wachtwoorden, wachtwoorden met je naam en, indien ingeschakeld, wachtwoorden die bekend zijn uit datalekken."
 }
