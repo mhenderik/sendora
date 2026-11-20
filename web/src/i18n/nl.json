@@ -1272,5 +1272,6 @@
   "When allowed, the tenant's administrators can choose a bucket of their own in their storage settings (explicit credentials only; internal addresses are refused unless private targets are allowed below). Otherwise they see this storage read-only.": "Als dit is toegestaan, kunnen de beheerders van de tenant in hun opslaginstellingen een eigen bucket kiezen (alleen expliciete inloggegevens; interne adressen worden geweigerd tenzij privénetwerkadressen hieronder zijn toegestaan). Anders zien ze deze opslag alleen-lezen.",
   "Where files are stored": "Waar bestanden worden opgeslagen",
   "You signed in with a temporary password. Choose a new password to continue.": "Je bent ingelogd met een tijdelijk wachtwoord. Kies een nieuw wachtwoord om verder te gaan.",
-  "Your password (required for changes)": "Je wachtwoord (vereist voor wijzigingen)"
+  "Your password (required for changes)": "Je wachtwoord (vereist voor wijzigingen)",
+  "Remote storage can make uploads slower: after the transfer, each file is encrypted and copied to the object store before the share is ready, so large files or a distant region take longer. Downloads are read back from the object store and can be slower as well.": "Externe opslag kan uploads trager maken: na de overdracht wordt elk bestand versleuteld en naar de objectopslag gekopieerd voordat de deellink klaar is, dus grote bestanden of een verre regio duren langer. Downloads worden ook uit de objectopslag gelezen en kunnen eveneens trager zijn."
 }

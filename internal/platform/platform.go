@@ -67,7 +67,8 @@ var schema = []string{
 		mode TEXT NOT NULL DEFAULT 'platform' CHECK (mode IN ('platform','own')),
 		prefix TEXT NOT NULL DEFAULT '',
 		config TEXT NOT NULL DEFAULT '{}',
-		tenant_managed INTEGER NOT NULL DEFAULT 0,
+		tenant_managed INTEGER NOT NULL DEFAULT 1,
+		tenant_managed_explicit INTEGER NOT NULL DEFAULT 0,
 		updated_at TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE IF NOT EXISTS platform_admins (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,13 +127,20 @@ func Open(dataDir string, master []byte, initialize bool) (*Platform, error) {
 	// Columns added after the first 0.2.0 development builds.
 	for _, c := range []struct{ table, name, decl string }{
 		{"tenants", "allow_private_targets", "INTEGER NOT NULL DEFAULT 0"},
-		{"tenant_storage", "tenant_managed", "INTEGER NOT NULL DEFAULT 0"},
+		{"tenant_storage", "tenant_managed", "INTEGER NOT NULL DEFAULT 1"},
+		{"tenant_storage", "tenant_managed_explicit", "INTEGER NOT NULL DEFAULT 0"},
 		{"platform_admins", "must_change_password", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := addColumn(st.DB, c.table, c.name, c.decl); err != nil {
 			st.Close()
 			return nil, err
 		}
+	}
+	// Tenants may configure their own storage unless a platform administrator
+	// switched it off for them (an explicit choice); older rows had no choice.
+	if _, err := st.DB.Exec(`UPDATE tenant_storage SET tenant_managed=1 WHERE tenant_managed_explicit=0 AND tenant_managed=0`); err != nil {
+		st.Close()
+		return nil, err
 	}
 	p := &Platform{St: st, DataDir: dataDir, master: append([]byte(nil), master...)}
 	for _, d := range settingDefaults {
@@ -330,7 +338,7 @@ func (p *Platform) insertTenant(t *Tenant, legacyRoot []byte) error {
 		t.ID, t.Slug, t.Name, t.Status, t.CreatedAt, t.MaxUsers, t.MaxStorageBytes, t.KeyMode, root); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO tenant_storage(tenant_id,mode,prefix,updated_at) VALUES(?, 'platform', ?, ?)`, t.ID, "tenants/"+t.ID+"/", now()); err != nil {
+	if _, err := tx.Exec(`INSERT INTO tenant_storage(tenant_id,mode,prefix,tenant_managed,updated_at) VALUES(?, 'platform', ?, 1, ?)`, t.ID, "tenants/"+t.ID+"/", now()); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

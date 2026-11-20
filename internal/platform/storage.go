@@ -24,8 +24,9 @@ import (
 //	own       a bucket or container of the tenant, configured by a platform
 //	          administrator in the console (storage_* fields in Config).
 //
-// TenantManaged additionally lets the tenant's administrators configure a
-// bucket of their own in the tenant's Admin -> Storage. Those configurations
+// TenantManaged (default on; a platform administrator can switch it off per
+// tenant) additionally lets the tenant's administrators configure a bucket
+// of their own in the tenant's Admin -> Storage. Those configurations
 // are marked storage.Config.TenantManaged: explicit credentials only and the
 // SSRF guard on every connection. Without it the tenant sees its storage
 // read-only.
@@ -79,7 +80,7 @@ func defaultStorageSettings() map[string]string {
 // Storage returns a tenant's storage choice (the default, platform mode, when
 // nothing is stored).
 func (p *Platform) Storage(tenantID string) (*StorageConfig, error) {
-	c := &StorageConfig{Mode: StorageModePlatform, Config: defaultStorageSettings()}
+	c := &StorageConfig{Mode: StorageModePlatform, Config: defaultStorageSettings(), TenantManaged: true}
 	var cfg string
 	var managed int
 	err := p.St.DB.QueryRow(`SELECT mode,config,tenant_managed,updated_at FROM tenant_storage WHERE tenant_id=?`, tenantID).Scan(&c.Mode, &cfg, &managed, &c.UpdatedAt)
@@ -213,8 +214,8 @@ func (p *Platform) SetStorage(tenantID, mode string, settings map[string]string,
 	if tenantManaged {
 		managed = 1
 	}
-	res, err := p.St.DB.Exec(`INSERT INTO tenant_storage(tenant_id,mode,prefix,config,tenant_managed,updated_at) SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM tenants WHERE id=?)
-		ON CONFLICT(tenant_id) DO UPDATE SET mode=excluded.mode,prefix=excluded.prefix,config=excluded.config,tenant_managed=excluded.tenant_managed,updated_at=excluded.updated_at`,
+	res, err := p.St.DB.Exec(`INSERT INTO tenant_storage(tenant_id,mode,prefix,config,tenant_managed,tenant_managed_explicit,updated_at) SELECT ?,?,?,?,?,1,? WHERE EXISTS (SELECT 1 FROM tenants WHERE id=?)
+		ON CONFLICT(tenant_id) DO UPDATE SET mode=excluded.mode,prefix=excluded.prefix,config=excluded.config,tenant_managed=excluded.tenant_managed,tenant_managed_explicit=1,updated_at=excluded.updated_at`,
 		tenantID, mode, TenantPrefix(tenantID), string(b), managed, now(), tenantID)
 	if err != nil {
 		return err

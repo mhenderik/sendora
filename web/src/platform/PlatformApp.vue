@@ -359,9 +359,10 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
               <option value="platform">{{ t('Platform default with the tenant\'s own prefix ({where})', { where: storage.view?.platform_default || '' }) }}</option>
               <option value="own">{{ t('Tenant\'s own bucket') }}</option>
             </select>
+            <p v-if="storage.mode === 'own' || (storage.view && storage.view.platform_backend !== 'local')" class="notice" role="note">{{ t('Remote storage can make uploads slower: after the transfer, each file is encrypted and copied to the object store before the share is ready, so large files or a distant region take longer. Downloads are read back from the object store and can be slower as well.') }}</p>
             <p v-if="storage.mode === 'platform' && storage.view?.platform_backend === 'local'" class="muted">{{ t('The platform default is the local data directory: the tenant\'s files stay in its directory. Configure object storage under Platform settings.') }}</p>
             <template v-if="storage.mode === 'own'">
-              <StorageForm :model-value="storage.settings" :is-set="storage.set" id-prefix="ts" local-label="" />
+              <StorageForm :model-value="storage.settings" :is-set="storage.set" id-prefix="ts" local-label="" :show-notice="false" />
               <p v-if="storage.test && storage.test.ok" class="ok" role="status">{{ t('Connection works: a test object was written, read and deleted in {ms} ms ({where}).', { ms: storage.test.ms, where: storage.test.description }) }}</p>
               <p v-if="storage.test && !storage.test.ok" class="err" role="alert">{{ t('Connection test failed: {error}', { error: storage.test.error }) }}</p>
             </template>

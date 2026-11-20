@@ -262,16 +262,24 @@ or the local disk, decided by the platform per tenant:
 | **Platform default** (default) | The platform default backend (*Platform settings → Default storage* or `SENDORA_PLATFORM_STORAGE_*`) under the tenant's fixed prefix `<platform prefix>tenants/<tenant id>/` (`storage.Config.WithPrefix`). While the platform default is the local data directory, the tenant's directory `tenants/<id>/shares/`. |
 | **Tenant's own bucket** | A bucket/container entered by a platform administrator (same fields, validation and *Test connection* as Admin → Storage). It must not overlap the platform default's `tenants/` area or another tenant's own bucket. |
 
-**Tenant may configure its own storage** (per tenant, off by default): the
+**Tenant may configure its own storage** (per tenant, **on by default**, also for
+tenants created before this setting existed; a platform administrator can switch
+it off per tenant, recorded as `tenant_storage_changed` in both audit logs): the
 tenant's administrators then edit the same storage form in their Admin →
 Storage. *Platform default* there means the console's choice above. A tenant's
 own configuration must use explicit credentials (access key, account key or
 SAS token, service account key — never the server's ambient IAM role,
 managed/workload identity or application default credentials, which belong to
 the platform), its endpoint must pass the SSRF guard (§8a) when saved, and its
-connections, including token requests, go through the guard. Without the switch
-the tenant sees its storage read-only, with an explanation; changes are refused
-(403).
+connections, including token requests, go through the guard. With the switch
+off the tenant sees its storage read-only, with an explanation; changes are
+refused (403).
+
+Remote storage can make transfers slower: after an upload, each file is
+encrypted and copied to the object store before the share is ready (longer for
+large files or a distant region), and downloads are read back from it. Admin →
+Storage and the console's tenant page show this notice whenever a remote backend
+is selected or active.
 
 - Encryption is unchanged: files are encrypted with the tenant's own file key
   before they leave the server, so even a shared bucket only holds ciphertext,

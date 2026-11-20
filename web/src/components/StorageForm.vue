@@ -16,6 +16,9 @@ const props = defineProps({
   // Only explicit credentials (a tenant's own storage in multi-tenant mode).
   explicitOnly: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
+  // Show the notice about slower transfers when a remote backend is selected
+  // (off where the page already shows it for the active backend).
+  showNotice: { type: Boolean, default: true },
 })
 const s = computed(() => props.modelValue)
 const m = k => props.disabled || props.managed.includes(k)
@@ -89,6 +92,7 @@ const setFlag = (k, e) => { s.value[k] = String(e.target.checked) }
       <textarea :id="id('gcs-json')" :disabled="m('storage_gcs_credentials_json')" v-model="s.storage_gcs_credentials_json" rows="4" spellcheck="false" autocomplete="off" :placeholder="ph('storage_gcs_credentials_json')" /></template>
   </template>
 
+  <p v-if="showNotice && s.storage_backend && s.storage_backend !== 'local'" class="notice" role="note">{{ t('Remote storage can make uploads slower: after the transfer, each file is encrypted and copied to the object store before the share is ready, so large files or a distant region take longer. Downloads are read back from the object store and can be slower as well.') }}</p>
   <p v-if="s.storage_backend !== 'local'" class="muted">{{ explicitOnly
     ? t('Endpoints must use https and be reachable on the internet: private, loopback and link-local addresses are refused. Only explicit credentials can be used. Secrets are never shown again; leave them empty to keep the stored value. A changed configuration is tested before it is saved.')
     : t('Endpoints must use https; http is only accepted for localhost and private networks (for example MinIO next to Sendora). Secrets are never shown again; leave them empty to keep the stored value. A changed configuration is tested before it is saved.') }}</p>

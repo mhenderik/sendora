@@ -185,8 +185,8 @@ where each tenant's files go; `SENDORA_STORAGE_*` is ignored there.
 - **Tenant's own bucket**: entered per tenant in the console (same fields and
   validation). It may not overlap the platform's `tenants/` area or another
   tenant's own bucket.
-- **Tenant-managed**: when the platform allows it per tenant, the tenant's
-  administrators use Admin → Storage themselves. Only explicit credentials are
+- **Tenant-managed** (on by default; the platform can switch it off per tenant,
+  audited): the tenant's administrators use Admin → Storage themselves. Only explicit credentials are
   accepted (no AWS default chain/IRSA, Azure managed or workload identity, or
   Google application default credentials: those are the platform's), and the
   endpoint must not resolve to loopback, private, link-local, CGNAT or metadata

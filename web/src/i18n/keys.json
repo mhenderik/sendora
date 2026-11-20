@@ -554,6 +554,7 @@
  "Remind me later",
  "Remind me tomorrow",
  "Remind users who skipped two-step setup again after (days, 0 = at every sign-in)",
+ "Remote storage can make uploads slower: after the transfer, each file is encrypted and copied to the object store before the share is ready, so large files or a distant region take longer. Downloads are read back from the object store and can be slower as well.",
  "Remove",
  "Remove {n}?",
  "Remove authenticator app",

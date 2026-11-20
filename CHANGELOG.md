@@ -131,10 +131,14 @@ unchanged** (same layout, no migration needed).
   `<prefix>tenants/<tenant id>/`, or the **tenant's own bucket** configured in the
   console (same validation and connection test as Admin → Storage; overlaps with the
   platform's `tenants/` area or another tenant's bucket are refused). While the default
-  is the local data directory, tenants keep using their directory. A per-tenant switch
-  *Tenant may configure its own storage* lets the tenant's administrators use Admin →
-  Storage themselves (explicit credentials only, never the server's IAM role or
-  workload identity); otherwise they see their storage read-only with an explanation.
+  is the local data directory, tenants keep using their directory. The per-tenant switch
+  *Tenant may configure its own storage* (**on by default**, also for existing tenants;
+  the platform can switch it off per tenant, audited) lets the tenant's administrators
+  use Admin → Storage themselves (explicit credentials only, never the server's IAM role
+  or workload identity); when it is off they see their storage read-only with an
+  explanation. Admin → Storage and the console show a notice whenever a remote backend
+  is selected or active: uploads are encrypted and copied to the object store before the
+  share is ready, so large files or a distant region take longer, and downloads too.
   Tenants share a bucket but never a key space, every object is encrypted with the
   tenant's own key, and the migration job, remote backup copies and
   `sendora-db storage-migrate -tenant` work per tenant. Deleting a tenant removes its

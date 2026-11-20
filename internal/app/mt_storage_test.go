@@ -247,7 +247,13 @@ func TestMTObjectStoragePerTenantOnSharedBucket(t *testing.T) {
 		t.Fatal("tenant B opened an object outside its prefix")
 	}
 
-	// Tenant admins see the storage read-only while the platform manages it.
+	// Tenants may configure their own storage by default; the platform can
+	// switch that off (audited), and then tenant admins see it read-only.
+	if st := a.do("GET", "/api/storage", tokA, nil); !strings.Contains(string(st.Body), `"editable":true`) {
+		t.Fatalf("own storage not allowed by default: %s", st.Body)
+	}
+	c.want(c.do("PUT", "/api/platform/tenants/"+ta.ID+"/storage", "", map[string]any{"mode": "platform", "tenant_managed": false}, "Cookie", cookie), 200, "switch tenant storage off")
+	m.h.evict(ta.ID, 0)
 	st := a.do("GET", "/api/storage", tokA, nil)
 	a.want(st, 200, "tenant storage status")
 	tn, _ := st.J()["tenant"].(map[string]any)
@@ -332,7 +338,9 @@ func TestMTTenantManagedStorageAndGuard(t *testing.T) {
 	tm, _ := m.p.TenantBySlug("klantm")
 	mine := map[string]any{"storage_backend": "s3", "storage_s3_endpoint": "https://s3.tenant.example.com", "storage_s3_region": "eu-west-1", "storage_s3_bucket": "klantm-own",
 		"storage_s3_prefix": "sendora/", "storage_s3_auth": "static", "storage_s3_access_key": "AKM", "storage_s3_secret_key": "tenant-secret"}
-	a.want(a.do("PUT", "/api/settings", tok, mine), 403, "own storage not allowed yet")
+	c.want(c.do("PUT", "/api/platform/tenants/"+tm.ID+"/storage", "", map[string]any{"mode": "platform", "tenant_managed": false}, "Cookie", cookie), 200, "switch tenant storage off")
+	m.h.evict(tm.ID, 0)
+	a.want(a.do("PUT", "/api/settings", tok, mine), 403, "own storage switched off")
 	c.want(c.do("PUT", "/api/platform/tenants/"+tm.ID+"/storage", "", map[string]any{"mode": "platform", "tenant_managed": true}, "Cookie", cookie), 200, "allow tenant storage")
 	m.h.evict(tm.ID, 0)
 	st := a.do("GET", "/api/storage", tok, nil)

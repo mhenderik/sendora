@@ -127,3 +127,35 @@ func TestPlatformMFASettingAndTemporaryPassword(t *testing.T) {
 		t.Fatal("clamp", n)
 	}
 }
+
+// Tenants may configure their own storage by default, also tenants stored
+// before the switch existed; an explicit "off" from the console is kept.
+func TestTenantManagedDefaultOn(t *testing.T) {
+	dir, master := t.TempDir(), key32(t)
+	p, err := Open(dir, master, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := p.CreateTenant("klanta", "A", 0, 0)
+	b, _ := p.CreateTenant("klantb", "B", 0, 0)
+	if sc, _ := p.Storage(a.ID); !sc.TenantManaged {
+		t.Fatal("new tenant: own storage not allowed by default")
+	}
+	if err := p.SetStorage(b.ID, StorageModePlatform, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	// A row from an earlier build: off without an explicit choice.
+	p.St.DB.Exec(`UPDATE tenant_storage SET tenant_managed=0, tenant_managed_explicit=0 WHERE tenant_id=?`, a.ID)
+	p.Close()
+	p, err = Open(dir, master, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if sc, _ := p.Storage(a.ID); !sc.TenantManaged {
+		t.Fatal("existing tenant without a choice not switched on")
+	}
+	if sc, _ := p.Storage(b.ID); sc.TenantManaged {
+		t.Fatal("explicit off was overridden")
+	}
+}

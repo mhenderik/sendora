@@ -75,6 +75,7 @@ const statusLabel = st => ({ running: t('running'), finished: t('finished'), fai
     <h1>{{ t('Storage') }}</h1>
     <p>{{ t('New files are stored in: {where}', { where: status.description }) }}</p>
     <p v-if="status.error" class="err" role="alert">{{ t('The storage backend is not usable: {error}', { error: status.error }) }}</p>
+    <p v-if="status.backend && status.backend !== 'local'" class="notice" role="note">{{ t('Remote storage can make uploads slower: after the transfer, each file is encrypted and copied to the object store before the share is ready, so large files or a distant region take longer. Downloads are read back from the object store and can be slower as well.') }}</p>
     <p class="muted">{{ t('Files are encrypted before they leave the server: an object store only ever receives encrypted data under random names that reveal neither share links nor file names.') }}</p>
     <h2 style="margin-top:20px">{{ t('Where files live') }}</h2>
     <div class="table-wrap"><table>
@@ -107,7 +108,7 @@ const statusLabel = st => ({ running: t('running'), finished: t('finished'), fai
       <p v-else class="muted" role="note">{{ t('The platform lets this organisation use storage of its own. Choose the platform default to use the storage the platform provides ({where}).', { where: tenant.platform_choice }) }}</p>
     </template>
     <p v-if="KEYS.some(m)" class="muted">{{ t('Settings set in the server configuration (environment or Kubernetes ConfigMap) are read-only here: {n}.', { n: KEYS.filter(m).join(', ') }) }}</p>
-    <StorageForm v-if="editable" :model-value="s" :managed="managed" :is-set="isSet" id-prefix="st"
+    <StorageForm v-if="editable" :model-value="s" :managed="managed" :is-set="isSet" id-prefix="st" :show-notice="!status || status.backend === 'local'"
       :local-label="tenant ? t('Platform default ({where})', { where: tenant.platform_choice }) : null" :explicit-only="!!tenant" />
     <label class="check"><input :disabled="m('backup_remote_enabled')" type="checkbox" :checked="flag('backup_remote_enabled')" @change="setFlag('backup_remote_enabled', $event)" /> {{ t('Also copy the daily database backups to the object store') }}</label>
     <p class="muted">{{ t('Backups are already encrypted (SQLCipher) and are stored under backups/ next to the files; the number of backups to keep also applies to the remote copies.') }}</p>
