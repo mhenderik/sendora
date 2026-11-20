@@ -44,11 +44,53 @@ type storageState struct {
 	mig   *migrationJob
 }
 
-// storageFromSettings is the configuration the settings select.
+// storageFromSettings is the configuration the settings select. A tenant in
+// multi-tenant mode uses what the platform assigned (DefaultStorage), or, when
+// the platform lets its administrators configure their own storage and they
+// chose a remote backend, that configuration (marked tenant-managed).
 func (s *Server) storageFromSettings() storage.Config {
-	c := storage.FromSettings(s.St.Setting)
+	return s.storageFrom(s.St.Setting)
+}
+
+func (s *Server) storageFrom(get func(string) string) storage.Config {
+	c := storage.FromSettings(get)
+	if s.tenant != nil {
+		if s.tenantStorageEditable() && c.Backend != storage.KindLocal {
+			c.TenantManaged = true
+		} else {
+			c = s.tenant.opts.DefaultStorage
+		}
+	}
 	c.LocalRoot = s.St.DataDir
 	return c
+}
+
+// validateTenantStorage adds the multi-tenant rules to a configuration a
+// tenant's administrator entered: explicit credentials only and endpoints
+// that pass the SSRF guard (also checked on every connection).
+func (s *Server) validateTenantStorage(ctx context.Context, c storage.Config) error {
+	if !c.TenantManaged {
+		return nil
+	}
+	if err := c.ValidateTenantManaged(); err != nil {
+		return err
+	}
+	return s.checkTarget(ctx, c.Endpoint())
+}
+
+// storageLocked reports, for a tenant whose storage the platform manages,
+// whether updates would change a storage setting other than the remote backup
+// switch.
+func (s *Server) storageLocked(updates map[string]string) bool {
+	if s.tenantStorageEditable() {
+		return false
+	}
+	for k, v := range updates {
+		if storage.IsSetting(k) && k != "backup_remote_enabled" && v != s.St.Setting(k) && !(storage.SettingSecret(k) && v == "") {
+			return true
+		}
+	}
+	return false
 }
 
 // initStorage validates the configured backend at start-up (an invalid
@@ -221,6 +263,10 @@ func (s *Server) validateStorageUpdate(w http.ResponseWriter, r *http.Request, u
 	if !touched {
 		return true
 	}
+	if s.storageLocked(updates) {
+		jerr(w, 403, "storage is managed by the platform for this organisation")
+		return false
+	}
 	changed := func(k string) bool { v, ok := updates[k]; return ok && v != s.St.Setting(k) }
 	if secret := storage.SecretRetypeNeeded(changed, func(k string) bool { _, ok := updates[k]; return ok }, func(k string) bool { return s.St.Setting(k) != "" }); secret != "" {
 		jerr(w, 400, "enter the storage secret again when changing the endpoint, account or access key ("+secret+")")
@@ -232,9 +278,12 @@ func (s *Server) validateStorageUpdate(w http.ResponseWriter, r *http.Request, u
 		}
 		return s.St.Setting(k)
 	}
-	next := storage.FromSettings(get)
-	next.LocalRoot = s.St.DataDir
+	next := s.storageFrom(get)
 	if err := next.Validate(); err != nil {
+		jerr(w, 400, err.Error())
+		return false
+	}
+	if err := s.validateTenantStorage(r.Context(), next); err != nil {
 		jerr(w, 400, err.Error())
 		return false
 	}
@@ -248,7 +297,7 @@ func (s *Server) validateStorageUpdate(w http.ResponseWriter, r *http.Request, u
 	if next.Backend != storage.KindLocal && nextJS != curJS {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		b, err := s.St.Backends().OpenFn(ctx, next)
+		b, err := s.St.Backends().Open(ctx, next)
 		if err == nil {
 			err = storage.Probe(ctx, b)
 		}
@@ -276,6 +325,20 @@ func (s *Server) storageStatus(w http.ResponseWriter, r *http.Request) {
 		"remaining":       store.MigrateRemaining(s.St.DB, id),
 		"backup_remote":   s.St.SettingBool("backup_remote_enabled"),
 	}
+	if s.tenant != nil {
+		// Multi-tenant mode: who decides where this organisation's files go.
+		managedBy := "platform"
+		if cfg.TenantManaged {
+			managedBy = "tenant"
+		}
+		out["tenant"] = map[string]any{
+			"editable":         s.tenantStorageEditable(),
+			"managed_by":       managedBy,
+			"platform_choice":  s.tenant.opts.DefaultStorage.Describe(),
+			"platform_default": s.tenant.opts.PlatformStorage,
+			"guarded":          s.guardTargets(),
+		}
+	}
 	if err != nil {
 		out["error"] = clip(err.Error(), 300)
 	}
@@ -295,6 +358,10 @@ func (s *Server) storageTest(w http.ResponseWriter, r *http.Request) {
 	var in map[string]any
 	if err := decode(r, &in); err != nil && !errors.Is(err, io.EOF) {
 		jerr(w, 400, "bad request")
+		return
+	}
+	if !s.tenantStorageEditable() {
+		jerr(w, 403, "storage is managed by the platform for this organisation")
 		return
 	}
 	vals := map[string]string{}
@@ -318,21 +385,23 @@ func (s *Server) storageTest(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "enter the storage secret again when changing the endpoint, account or access key ("+secret+")")
 		return
 	}
-	cfg := storage.FromSettings(func(k string) string {
+	cfg := s.storageFrom(func(k string) string {
 		if v, ok := vals[k]; ok {
 			return v
 		}
 		return s.St.Setting(k)
 	})
-	cfg.LocalRoot = s.St.DataDir
 	me := s.ctxUser(r)
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	err := cfg.Validate()
+	if err == nil {
+		err = s.validateTenantStorage(ctx, cfg)
+	}
 	var b storage.Backend
 	if err == nil {
-		b, err = s.St.Backends().OpenFn(ctx, cfg)
+		b, err = s.St.Backends().Open(ctx, cfg)
 	}
 	if err == nil {
 		err = storage.Probe(ctx, b)

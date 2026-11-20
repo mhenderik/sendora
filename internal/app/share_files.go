@@ -326,7 +326,10 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	committed = true
-	os.RemoveAll(s.uploadDir(id))
+	// Only generated hex session ids ever name a staging directory.
+	if uploadIDRe.MatchString(id) {
+		os.RemoveAll(s.uploadDir(id))
+	}
 	s.logEvent(u.ID, u.Username, "share_files_added", "share#"+strconv.FormatInt(shareID, 10), fmt.Sprintf("%d files", len(added)))
 	jout(w, 201, map[string]any{"ok": true, "added": added})
 }

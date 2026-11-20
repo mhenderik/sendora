@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { slugProblem, pconsole, ConsoleError, fmtSize, quotaPercent, parseStorageConfig } from './platform-console.mjs'
+import { slugProblem, pconsole, ConsoleError, fmtSize, quotaPercent, storageBody, reauthBody } from './platform-console.mjs'
 
 test('slugProblem mirrors the server rules', () => {
   for (const ok of ['klant1', 'ab', 'acme-corp', 'x9']) assert.equal(slugProblem(ok), '', ok)
@@ -31,9 +31,10 @@ test('sizes and quota percentages', () => {
   assert.equal(quotaPercent(500, 200), 100)
 })
 
-test('storage configuration must be a JSON object', () => {
-  assert.deepEqual(parseStorageConfig(''), {})
-  assert.deepEqual(parseStorageConfig('{"type":"s3"}'), { type: 's3' })
-  assert.throws(() => parseStorageConfig('[1]'), /object/)
-  assert.throws(() => parseStorageConfig('{bad'), /valid JSON/)
+test('tenant storage form body', () => {
+  assert.deepEqual(storageBody({ mode: 'platform', tenant_managed: true, settings: { storage_backend: 's3' } }), { mode: 'platform', tenant_managed: true })
+  assert.deepEqual(storageBody({ mode: 'own', settings: { storage_backend: 's3', storage_s3_secret_key: '', storage_s3_bucket: 'b' } }),
+    { mode: 'own', tenant_managed: false, settings: { storage_backend: 's3', storage_s3_bucket: 'b' } })
+  assert.deepEqual(reauthBody('123456'), { code: '123456' })
+  assert.deepEqual(reauthBody(undefined), { code: '' })
 })

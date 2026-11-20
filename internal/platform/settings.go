@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mhenderik/sendora/internal/storage"
 )
 
 // Platform settings: stored in platform.db, editable in the console, and set
@@ -30,10 +32,34 @@ var settingDefaults = []settingDef{
 	{"platform_smtp_pass", "email", ""},
 	{"platform_smtp_from", "email", ""},
 	{"platform_smtp_tls", "email", "starttls"},
+	// Platform administrators must use an authenticator app (owner decision;
+	// false lets them sign in with a password only, enrolment stays possible).
+	{"platform_mfa_required", "security", "true"},
+}
+
+func init() {
+	// The platform default object storage: the storage_* settings of a
+	// single-tenant installation with a platform_ prefix (internal/storage).
+	for _, st := range storage.Settings {
+		if st.Key == "backup_remote_enabled" {
+			continue
+		}
+		settingDefaults = append(settingDefaults, settingDef{"platform_" + st.Key, "storage", st.Default})
+		if st.Secret {
+			SecretSettings["platform_"+st.Key] = true
+		}
+	}
 }
 
 // SecretSettings are never returned to the console.
 var SecretSettings = map[string]bool{"platform_smtp_pass": true}
+
+// IsStorageSetting reports whether key is a platform default storage setting
+// (platform_storage_*); they are changed through the console's storage form.
+func IsStorageSetting(key string) bool {
+	k, ok := strings.CutPrefix(key, "platform_")
+	return ok && storage.IsSetting(k) && k != "backup_remote_enabled"
+}
 
 var settingAliases = map[string][]string{"platform_smtp_pass": {"SENDORA_PLATFORM_SMTP_PASSWORD"}}
 
@@ -63,7 +89,19 @@ func NormalizeSetting(key, v string) (string, error) {
 		}
 		return strconv.FormatInt(n, 10), nil
 	}
+	if IsStorageSetting(key) {
+		norm, _, err := storage.NormalizeSetting(strings.TrimPrefix(key, "platform_"), v)
+		return norm, err
+	}
 	switch key {
+	case "platform_mfa_required":
+		switch strings.ToLower(v) {
+		case "true", "1", "yes":
+			return "true", nil
+		case "false", "0", "no":
+			return "false", nil
+		}
+		return "", fmt.Errorf("must be true or false")
 	case "tenant_idle_minutes":
 		return intRange(1, 1440)
 	case "max_open_tenants":
@@ -121,10 +159,30 @@ func (p *Platform) SettingInt(key string, def int64) int64 {
 	return n
 }
 
+// SettingIntRange is SettingInt clamped to [lo, hi] (values go into int and
+// time.Duration conversions).
+func (p *Platform) SettingIntRange(key string, def, lo, hi int64) int64 {
+	n := p.SettingInt(key, def)
+	if n < lo {
+		return lo
+	}
+	if n > hi {
+		return hi
+	}
+	return n
+}
+
+// MFARequired reports whether platform administrators must use an
+// authenticator app (platform_mfa_required, default true).
+func (p *Platform) MFARequired() bool { return p.Setting("platform_mfa_required") != "false" }
+
 // Settings returns all editable settings; secrets only say whether they are set.
 func (p *Platform) Settings() map[string]any {
 	out := map[string]any{}
 	for _, d := range settingDefaults {
+		if IsStorageSetting(d.Key) {
+			continue // GET /api/platform/storage
+		}
 		v := p.Setting(d.Key)
 		if SecretSettings[d.Key] {
 			out[d.Key+"_set"] = v != ""
@@ -143,7 +201,7 @@ func (p *Platform) PutSettings(in map[string]string, managed map[string]bool) ([
 	}
 	norm := map[string]string{}
 	for k, v := range in {
-		if !known[k] {
+		if !known[k] || IsStorageSetting(k) {
 			return nil, fmt.Errorf("%s: unknown setting", k)
 		}
 		if managed[k] {
@@ -171,6 +229,39 @@ func (p *Platform) PutSettings(in map[string]string, managed map[string]bool) ([
 		changed = append(changed, k)
 	}
 	sort.Strings(changed)
+	return changed, tx.Commit()
+}
+
+// StorageSettings returns the platform default storage settings under their
+// storage_* names (the form of internal/storage), secrets included.
+func (p *Platform) StorageSettings() map[string]string {
+	out := map[string]string{}
+	for _, k := range storageKeys() {
+		out[k] = p.Setting("platform_" + k)
+	}
+	return out
+}
+
+// PutStorageSettings stores the complete platform default storage settings
+// (storage_* names, validated by MergeStorageSettings); managed ones are kept.
+func (p *Platform) PutStorageSettings(next map[string]string, managed map[string]bool) ([]string, error) {
+	cur := p.StorageSettings() // before the transaction: the database has one connection
+	tx, err := p.St.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var changed []string
+	for _, k := range storageKeys() {
+		v, ok := next[k]
+		if !ok || managed["platform_"+k] || v == cur[k] {
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE settings SET value=? WHERE key=?`, v, "platform_"+k); err != nil {
+			return nil, err
+		}
+		changed = append(changed, "platform_"+k)
+	}
 	return changed, tx.Commit()
 }
 

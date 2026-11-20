@@ -236,6 +236,22 @@ Other administrator mutations (branding, backgrounds, themes, email templates an
 | `audit_exported` | After the `attempted` record and the size check, before the export is streamed | caller (administrator or auditor) | `audit_log` | `<csv or jsonl> <n> records` plus the filters used (`q=`, `category=`, `action=`, `actor=`, `outcome=`, `from=`, `to=`; values max. 40 characters) |
 | `access_review_exported` | Before the access-review report is served | caller | `access_review` | `<csv or jsonl> <n> accounts` |
 
+### 4.7 Platform audit log (multi-tenant mode)
+
+The platform console writes to its own tamper-evident log (`platform.db`, same
+record format and verification). Actions that affect a tenant are also written
+to that tenant's log with the role `platform_admin` (marked *both* below).
+
+| Action | When | Actor | Target | Detail |
+|---|---|---|---|---|
+| `platform_mfa_requirement_changed` | `platform_mfa_required` switched (after a fresh confirmation) | platform administrator | `settings` | `platform_mfa_required <old> -> <new>` and the consequence |
+| `platform_admin_offline_reset` | `sendora-db platform-admin-reset` | system (`sendora-db`) | `admin <name>` | `authenticator removed` and/or `temporary password set`; sessions ended |
+| `password_changed`, `password_change_failed` | A platform administrator changed their password (also after a temporary password) | platform administrator | `admin <name>` | `temporary password replaced` when applicable |
+| `platform_storage_changed`, `platform_storage_tested`, `platform_storage_test_failed` | Platform default storage saved or tested | platform administrator | `storage` | `<old> -> <new>; keys=...` or the location and error |
+| `tenant_storage_changed` (both), `tenant_storage_tested`, `tenant_storage_test_failed` | A tenant's storage choice saved or tested | platform administrator | `tenant <slug> (<id>)` | `mode=... location=... tenant_managed=...` |
+| `tenant_network_policy_changed` (both) | Private network targets allowed or refused for a tenant (after a fresh confirmation) | platform administrator | `tenant <slug> (<id>)` | `allow_private_targets <old> -> <new>` |
+| `tenant_deleted` | Tenant deleted | platform administrator | `tenant <slug> (<id>)` | number of objects removed from object storage; with *force*, the locations whose objects were **not** removed |
+
 ## 5. Rate-limited and sampled events
 
 | Event | Rule | Where |

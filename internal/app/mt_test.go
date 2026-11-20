@@ -347,13 +347,16 @@ func TestMTConsoleLifecycle(t *testing.T) {
 	if res.StatusCode != 308 || res.Header.Get("Location") != "https://klant1."+mtBase+"/x?y=1" {
 		t.Fatalf("redirect: %d %s", res.StatusCode, res.Header.Get("Location"))
 	}
-	c.want(c.do("PUT", "/api/platform/tenants/"+id+"/storage", "", map[string]any{"mode": "own", "config": map[string]any{"type": "s3", "bucket": "b", "secret_access_key": "SUPERSECRET"}}, "Cookie", cookie), 200, "storage hook")
+	m.memoryStorage()
+	own := map[string]any{"storage_backend": "s3", "storage_s3_endpoint": "https://s3.example.com", "storage_s3_region": "eu-west-1", "storage_s3_bucket": "klant1-files",
+		"storage_s3_prefix": "", "storage_s3_auth": "static", "storage_s3_access_key": "AKID", "storage_s3_secret_key": "SUPERSECRET"}
+	c.want(c.do("PUT", "/api/platform/tenants/"+id+"/storage", "", map[string]any{"mode": "own", "settings": own}, "Cookie", cookie), 200, "own storage")
 	r = c.do("GET", "/api/platform/tenants/"+id+"/storage", "", nil, "Cookie", cookie)
-	if strings.Contains(string(r.Body), "SUPERSECRET") || !strings.Contains(string(r.Body), platform.StorageSecretMask) {
+	if strings.Contains(string(r.Body), "SUPERSECRET") || !strings.Contains(string(r.Body), `"storage_s3_secret_key":true`) {
 		t.Fatalf("storage secret shown: %s", r.Body)
 	}
 	sc, _ := m.p.Storage(id)
-	if !strings.Contains(string(sc.Config), "SUPERSECRET") {
+	if sc.Config["storage_s3_secret_key"] != "SUPERSECRET" || sc.Mode != "own" {
 		t.Fatal("storage secret not stored")
 	}
 	// Delete needs the confirmation and a fresh TOTP code.

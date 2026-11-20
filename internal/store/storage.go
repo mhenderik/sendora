@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -168,6 +169,19 @@ type Backends struct {
 	open    map[int64]cachedBackend
 	// OpenFn opens a backend (tests replace it).
 	OpenFn func(context.Context, storage.Config) (storage.Backend, error)
+	// Guard, when set, is the dialer of every configuration a tenant
+	// administrator entered (storage.Config.TenantManaged): the multi-tenant
+	// SSRF guard (internal/netguard). Platform-configured locations do not use it.
+	Guard func(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+// Open opens a backend for cfg (not cached), through the guard when cfg is
+// tenant-managed.
+func (b *Backends) Open(ctx context.Context, cfg storage.Config) (storage.Backend, error) {
+	if cfg.TenantManaged && b.Guard != nil {
+		cfg.DialContext = b.Guard
+	}
+	return b.OpenFn(ctx, cfg)
 }
 
 type cachedBackend struct {
@@ -198,7 +212,7 @@ func (b *Backends) Get(ctx context.Context, id int64) (storage.Backend, error) {
 	if ok && c.config == js {
 		return c.b, nil
 	}
-	be, err := b.OpenFn(ctx, cfg)
+	be, err := b.Open(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

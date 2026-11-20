@@ -3,11 +3,19 @@
 // Platform administrators manage tenants, never tenant content.
 import { ref, reactive, computed, onMounted } from 'vue'
 import QrCode from '../components/QrCode.vue'
+import StorageForm from '../components/StorageForm.vue'
 import { t, tr, lang, setLang, builtinLanguages } from '../i18n'
 import { gbToBytes, bytesToGB } from '../quota.mjs'
-import { pconsole, slugProblem, fmtSize, quotaPercent, parseStorageConfig } from '../platform-console.mjs'
+import { pconsole, slugProblem, fmtSize, quotaPercent, storageBody, reauthBody } from '../platform-console.mjs'
 
 const boot = ref(null), stage = ref('loading'), me = ref(null), err = ref(''), notice = ref(''), busy = ref(false)
+const mfaRequired = ref(true), mustChange = ref(false)
+const pw = reactive({ current: '', next: '' })
+// Destructive actions are confirmed with the authenticator code, or with the
+// password by an administrator without one while the platform does not require it.
+const byPassword = computed(() => !!me.value && !me.value.totp_enabled && !mfaRequired.value)
+const reauthLabel = computed(() => byPassword.value ? t('Your password (required for changes)') : t('Your authenticator code (required for changes)'))
+const reauth = v => reauthBody(v)
 const tab = ref('tenants')
 const f = reactive({ setup_code: '', username: '', email: '', password: '', code: '' })
 const enroll = ref(null)
@@ -18,8 +26,9 @@ async function load() {
   if (boot.value?.setup_needed) { stage.value = 'setup'; return }
   try {
     const d = await pconsole('/me')
-    me.value = d.admin; stage.value = d.stage
-    if (d.stage === 'full') await loadTenants()
+    me.value = d.admin; mfaRequired.value = d.mfa_required !== false; mustChange.value = !!d.must_change_password
+    stage.value = mustChange.value ? 'password' : d.stage
+    if (stage.value === 'full') await loadTenants()
   } catch { stage.value = 'login' }
 }
 onMounted(load)
@@ -34,7 +43,11 @@ const doSetup = () => run(async () => {
 })
 const doLogin = () => run(async () => {
   const d = await pconsole('/login', { method: 'POST', body: { username: f.username, password: f.password } })
-  f.password = ''; stage.value = d.stage
+  f.password = ''; await load()
+})
+const changePassword = () => run(async () => {
+  await pconsole('/password', { method: 'POST', body: { current: pw.current, password: pw.next } })
+  pw.current = ''; pw.next = ''; notice.value = t('Password changed.'); await load()
 })
 const doTotp = () => run(async () => {
   await pconsole('/login/totp', { method: 'POST', body: { code: f.code } })
@@ -44,6 +57,7 @@ const beginEnroll = () => run(async () => { enroll.value = await pconsole('/mfa/
 const confirmEnroll = () => run(async () => {
   await pconsole('/mfa/confirm', { method: 'POST', body: { code: f.code } })
   f.code = ''; enroll.value = null; await load()
+  if (stage.value === 'full') notice.value = t('Authenticator set up.')
 })
 const logout = () => run(async () => { await pconsole('/logout', { method: 'POST' }); me.value = null; stage.value = 'login' })
 
@@ -62,18 +76,27 @@ const createTenant = () => run(async () => {
   await loadTenants()
 })
 const quota = reactive({ max_users: '0', max_storage_gb: '0' })
-const storage = reactive({ mode: 'platform', prefix: '', config: '{}' })
-const domainInput = ref(''), del = reactive({ confirm: '', code: '' })
+const storage = reactive({ mode: 'platform', tenant_managed: false, settings: {}, set: {}, view: null, test: null, testing: false })
+const net = reactive({ allow: false, code: '' })
+const domainInput = ref(''), del = reactive({ confirm: '', code: '', force: false })
+function applyStorage(v) {
+  storage.view = v || null
+  storage.mode = v?.choice?.mode || 'platform'
+  storage.tenant_managed = !!v?.choice?.tenant_managed
+  storage.settings = { ...(v?.choice?.settings || {}) }
+  if (!storage.settings.storage_backend || storage.settings.storage_backend === 'local') storage.settings.storage_backend = 's3'
+  storage.set = v?.choice?.set || {}
+  storage.test = null
+}
 async function openTenant(id) {
   await run(async () => {
     const d = await pconsole('/tenants/' + id)
     sel.value = d
     quota.max_users = String(d.tenant.max_users)
     quota.max_storage_gb = bytesToGB(d.tenant.max_storage_bytes)
-    storage.mode = d.storage?.mode || 'platform'
-    storage.prefix = d.storage?.prefix || ''
-    storage.config = JSON.stringify(d.storage?.config || {}, null, 2)
-    del.confirm = ''; del.code = ''; created.value = null
+    applyStorage(d.storage)
+    net.allow = !!d.tenant.allow_private_targets; net.code = ''
+    del.confirm = ''; del.code = ''; del.force = false; created.value = null
   })
 }
 const refreshSel = () => openTenant(sel.value.tenant.id)
@@ -88,12 +111,20 @@ const verifyDomain = d => run(async () => { await pconsole(`/tenants/${tid()}/do
 const removeDomain = d => run(async () => { await pconsole(`/tenants/${tid()}/domains/${encodeURIComponent(d)}`, { method: 'DELETE' }); await refreshSel() })
 const makePrimary = d => run(async () => { await pconsole(`/tenants/${tid()}/primary-domain`, { method: 'PUT', body: { domain: d } }); await refreshSel() })
 const saveStorage = () => run(async () => {
-  await pconsole(`/tenants/${tid()}/storage`, { method: 'PUT', body: { mode: storage.mode, prefix: storage.prefix, config: parseStorageConfig(storage.config) } })
+  applyStorage(await pconsole(`/tenants/${tid()}/storage`, { method: 'PUT', body: storageBody(storage) }))
   notice.value = t('Saved')
 })
+const testStorage = async () => {
+  err.value = ''; storage.test = null; storage.testing = true
+  try { storage.test = await pconsole(`/tenants/${tid()}/storage/test`, { method: 'POST', body: storageBody(storage) }) } catch (e) { err.value = e.message } finally { storage.testing = false }
+}
+const saveNetwork = () => run(async () => {
+  await pconsole(`/tenants/${tid()}/network`, { method: 'PUT', body: { allow_private_targets: net.allow, ...reauth(net.code) } })
+  net.code = ''; notice.value = t('Saved'); await refreshSel()
+})
 const deleteTenant = () => run(async () => {
-  await pconsole(`/tenants/${tid()}/delete`, { method: 'POST', body: { confirm: del.confirm, code: del.code } })
-  sel.value = null; notice.value = t('Tenant deleted.'); await loadTenants()
+  const d = await pconsole(`/tenants/${tid()}/delete`, { method: 'POST', body: { confirm: del.confirm, ...reauth(del.code), force: del.force } })
+  sel.value = null; notice.value = t('Tenant deleted.') + (d.objects_removed ? ' ' + t('{n} object(s) removed from object storage.', { n: d.objects_removed }) : ''); await loadTenants()
 })
 
 // ---------- settings, audit, administrators ----------
@@ -104,7 +135,27 @@ const settingKeys = [
   ['default_max_storage_bytes', tr('Default storage limit for new tenants in bytes (0 = unlimited)')], ['platform_audit_retention_days', tr('Platform audit log retention (days)')],
   ['platform_smtp_host', tr('Default SMTP server')], ['platform_smtp_port', tr('SMTP port')], ['platform_smtp_user', tr('SMTP username')],
   ['platform_smtp_from', tr('Sender address')], ['platform_smtp_tls', tr('SMTP security (none, tls, starttls)')]]
-async function loadSettings() { const d = await pconsole('/settings'); settings.value = d.settings; managed.value = d.managed }
+const mfa = reactive({ required: true, code: '' })
+const pstore = reactive({ settings: null, set: {}, managed: [], description: '', test: null, testing: false })
+async function loadSettings() {
+  const d = await pconsole('/settings'); settings.value = d.settings; managed.value = d.managed
+  mfa.required = d.settings.platform_mfa_required !== 'false'; mfa.code = ''
+  const ps = await pconsole('/storage')
+  Object.assign(pstore, { settings: { ...ps.settings }, set: ps.set || {}, managed: ps.managed || [], description: ps.description, test: null })
+}
+const saveMfa = () => run(async () => {
+  if (!mfa.required && !confirm(t('Platform administrators will be able to sign in with only a password. Anyone who learns a password gets full control over all tenants. Continue?'))) return
+  await pconsole('/settings', { method: 'PUT', body: { platform_mfa_required: mfa.required, ...reauth(mfa.code) } })
+  notice.value = t('Saved'); await load(); if (stage.value === 'full') { tab.value = 'settings'; await loadSettings() }
+})
+const savePlatformStorage = () => run(async () => {
+  const d = await pconsole('/storage', { method: 'PUT', body: { settings: pstore.settings } })
+  notice.value = t('Saved') + ': ' + d.description; await loadSettings()
+})
+const testPlatformStorage = async () => {
+  err.value = ''; pstore.test = null; pstore.testing = true
+  try { pstore.test = await pconsole('/storage/test', { method: 'POST', body: { settings: pstore.settings } }) } catch (e) { err.value = e.message } finally { pstore.testing = false }
+}
 const saveSettings = () => run(async () => {
   const body = {}
   for (const [k] of settingKeys) if (!managed.value.includes(k)) body[k] = String(settings.value[k] ?? '')
@@ -115,14 +166,15 @@ const audit = ref([]), auditStatus = ref(null)
 async function loadAudit() { audit.value = (await pconsole('/audit')).records; auditStatus.value = await pconsole('/audit/status') }
 const admins = ref([]), na = reactive({ username: '', email: '', password: '', code: '' }), adminCode = ref('')
 async function loadAdmins() { admins.value = (await pconsole('/admins')).admins }
-const createAdmin = () => run(async () => { await pconsole('/admins', { method: 'POST', body: { ...na } }); Object.assign(na, { username: '', email: '', password: '', code: '' }); await loadAdmins() })
-const deleteAdmin = a => run(async () => { await pconsole(`/admins/${a.id}/delete`, { method: 'POST', body: { code: adminCode.value } }); adminCode.value = ''; await loadAdmins() })
-const resetAdminMfa = a => run(async () => { await pconsole(`/admins/${a.id}/mfa-reset`, { method: 'POST', body: { code: adminCode.value } }); adminCode.value = ''; notice.value = t('Authenticator removed; they set up a new one at their next sign-in.') })
+const createAdmin = () => run(async () => { await pconsole('/admins', { method: 'POST', body: { username: na.username, email: na.email, password: na.password, ...reauth(na.code) } }); Object.assign(na, { username: '', email: '', password: '', code: '' }); await loadAdmins() })
+const deleteAdmin = a => run(async () => { await pconsole(`/admins/${a.id}/delete`, { method: 'POST', body: reauth(adminCode.value) }); adminCode.value = ''; await loadAdmins() })
+const resetAdminMfa = a => run(async () => { await pconsole(`/admins/${a.id}/mfa-reset`, { method: 'POST', body: reauth(adminCode.value) }); adminCode.value = ''; notice.value = t('Authenticator removed; they set up a new one at their next sign-in.') })
 function show(name) {
   tab.value = name; sel.value = null; err.value = ''; notice.value = ''
   run(name === 'tenants' ? loadTenants : name === 'settings' ? loadSettings : name === 'audit' ? loadAudit : loadAdmins)
 }
 const statusLabel = s => (s === 'active' ? t('Active') : s === 'suspended' ? t('Suspended') : s)
+const showPassword = () => { tab.value = 'account'; sel.value = null; err.value = ''; notice.value = '' }
 const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
 </script>
 
@@ -160,6 +212,16 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
         <div class="actions"><button :disabled="busy">{{ t('Sign in') }}</button></div>
       </form>
 
+      <form v-else-if="stage === 'password'" class="card narrow" @submit.prevent="changePassword">
+        <h1>{{ t('Choose a new password') }}</h1>
+        <p class="muted">{{ t('You signed in with a temporary password. Choose a new password to continue.') }}</p>
+        <label for="pw-cur">{{ t('Temporary password') }}</label><input id="pw-cur" v-model="pw.current" type="password" autocomplete="current-password" required />
+        <label for="pw-new">{{ t('New password') }}</label><input id="pw-new" v-model="pw.next" type="password" autocomplete="new-password" minlength="12" required />
+        <p class="muted">{{ t('At least 12 characters.') }}</p>
+        <p v-if="err" class="err" role="alert">{{ err }}</p>
+        <div class="actions"><button :disabled="busy">{{ t('Save') }}</button><button type="button" class="secondary" @click="logout">{{ t('Sign out') }}</button></div>
+      </form>
+
       <form v-else-if="stage === 'mfa'" class="card narrow" @submit.prevent="doTotp">
         <h1>{{ t('Two-step verification') }}</h1>
         <label for="t-code">{{ t('Authenticator code') }}</label>
@@ -186,7 +248,9 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
         <div class="tabs" role="tablist">
           <a v-for="[k, label] in [['tenants', tr('Tenants')], ['settings', tr('Platform settings')], ['audit', tr('Platform audit log')], ['admins', tr('Administrators')]]" :key="k"
             href="#" role="tab" :aria-selected="tab === k" :class="{ 'router-link-active': tab === k }" @click.prevent="show(k)">{{ t(label) }}</a>
+          <a href="#" role="tab" :aria-selected="tab === 'account'" :class="{ 'router-link-active': tab === 'account' }" @click.prevent="showPassword">{{ t('My account') }}</a>
         </div>
+        <p v-if="!mfaRequired" class="err" role="note">{{ t('Platform administrators can sign in without an authenticator app (platform setting).') }}</p>
         <p v-if="err" class="err" role="alert">{{ err }}</p>
         <p v-if="notice" class="ok" role="status">{{ notice }}</p>
 
@@ -288,24 +352,41 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
           </div>
           <form class="card" @submit.prevent="saveStorage">
             <h3>{{ t('Storage') }}</h3>
-            <p class="muted">{{ t('Where this tenant\'s files are stored once object storage is available. Until then files stay in the tenant\'s directory.') }}</p>
-            <div class="row">
-              <div><label for="s-mode">{{ t('Storage') }}</label>
-                <select id="s-mode" v-model="storage.mode"><option value="platform">{{ t('Platform default (own prefix)') }}</option><option value="own">{{ t('Tenant\'s own bucket') }}</option></select></div>
-              <div><label for="s-prefix">{{ t('Prefix') }}</label><input id="s-prefix" v-model="storage.prefix" /></div>
-            </div>
-            <label for="s-config">{{ t('Configuration (JSON)') }}</label>
-            <textarea id="s-config" v-model="storage.config" rows="6" spellcheck="false" style="font-family:monospace"></textarea>
-            <p class="muted">{{ t('Secret values are shown as ******** and kept when saved unchanged.') }}</p>
-            <div class="actions"><button :disabled="busy">{{ t('Save') }}</button></div>
+            <p v-if="storage.view">{{ t('New files of this tenant are stored in: {where}', { where: storage.view.effective }) }}
+              <template v-if="storage.view.effective_prefix"><br />{{ t('Prefix in the platform bucket') }}: <code>{{ storage.view.effective_prefix }}</code></template></p>
+            <label for="s-mode">{{ t('Where files are stored') }}</label>
+            <select id="s-mode" v-model="storage.mode">
+              <option value="platform">{{ t('Platform default with the tenant\'s own prefix ({where})', { where: storage.view?.platform_default || '' }) }}</option>
+              <option value="own">{{ t('Tenant\'s own bucket') }}</option>
+            </select>
+            <p v-if="storage.mode === 'platform' && storage.view?.platform_backend === 'local'" class="muted">{{ t('The platform default is the local data directory: the tenant\'s files stay in its directory. Configure object storage under Platform settings.') }}</p>
+            <template v-if="storage.mode === 'own'">
+              <StorageForm :model-value="storage.settings" :is-set="storage.set" id-prefix="ts" local-label="" />
+              <p v-if="storage.test && storage.test.ok" class="ok" role="status">{{ t('Connection works: a test object was written, read and deleted in {ms} ms ({where}).', { ms: storage.test.ms, where: storage.test.description }) }}</p>
+              <p v-if="storage.test && !storage.test.ok" class="err" role="alert">{{ t('Connection test failed: {error}', { error: storage.test.error }) }}</p>
+            </template>
+            <label class="check"><input type="checkbox" v-model="storage.tenant_managed" /> {{ t('Tenant may configure its own storage') }}</label>
+            <p class="muted">{{ t('When allowed, the tenant\'s administrators can choose a bucket of their own in their storage settings (explicit credentials only; internal addresses are refused unless private targets are allowed below). Otherwise they see this storage read-only.') }}</p>
+            <p class="muted">{{ t('Files keep the location they were written to; the tenant\'s administrators can move earlier files to the current location (Admin → Storage).') }}</p>
+            <div class="actions"><button :disabled="busy">{{ t('Save') }}</button>
+              <button v-if="storage.mode === 'own'" type="button" class="secondary" :disabled="storage.testing" @click="testStorage">{{ storage.testing ? t('Testing…') : t('Test connection') }}</button></div>
+          </form>
+          <form class="card" @submit.prevent="saveNetwork">
+            <h3>{{ t('Network targets') }}</h3>
+            <p class="muted">{{ t('By default the tenant\'s SMTP server, sign-in providers, audit log forwarding and own storage must not resolve to loopback, private, link-local, carrier-grade NAT or cloud metadata addresses (checked when saved and on every connection).') }}</p>
+            <label class="check"><input type="checkbox" v-model="net.allow" /> {{ t('Allow private network targets for this tenant') }}</label>
+            <label for="n-code">{{ reauthLabel }}</label>
+            <input id="n-code" v-model="net.code" :type="byPassword ? 'password' : 'text'" :inputmode="byPassword ? undefined : 'numeric'" autocomplete="off" />
+            <div class="actions"><button :disabled="busy || net.allow === !!sel.tenant.allow_private_targets">{{ t('Save') }}</button></div>
           </form>
           <form class="card" @submit.prevent="deleteTenant">
             <h3>{{ t('Delete tenant') }}</h3>
             <p class="err">{{ t('This permanently removes the tenant\'s database, files and backups. It cannot be undone.') }}</p>
             <div class="row">
               <div><label for="x-c">{{ t('Type the subdomain to confirm') }}</label><input id="x-c" v-model="del.confirm" autocomplete="off" /></div>
-              <div><label for="x-t">{{ t('Authenticator code') }}</label><input id="x-t" v-model="del.code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" /></div>
+              <div><label for="x-t">{{ reauthLabel }}</label><input id="x-t" v-model="del.code" :type="byPassword ? 'password' : 'text'" autocomplete="off" /></div>
             </div>
+            <label class="check"><input type="checkbox" v-model="del.force" /> {{ t('Delete even if objects in object storage cannot be removed') }}</label>
             <div class="actions"><button class="danger" :disabled="busy || del.confirm !== sel.tenant.slug">{{ t('Delete tenant') }}</button></div>
           </form>
         </template>
@@ -324,6 +405,52 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
           <div class="actions"><button :disabled="busy">{{ t('Save') }}</button></div>
         </form>
 
+        <form v-if="tab === 'settings' && settings" class="card" @submit.prevent="saveMfa">
+          <h2>{{ t('Sign-in of platform administrators') }}</h2>
+          <label class="check"><input type="checkbox" v-model="mfa.required" :disabled="managed.includes('platform_mfa_required')" /> {{ t('Platform administrators must use an authenticator app') }}</label>
+          <p v-if="managed.includes('platform_mfa_required')" class="muted">{{ t('Set by the server configuration.') }}</p>
+          <p v-if="!mfa.required" class="err" role="alert">{{ t('Warning: without an authenticator app, a stolen or guessed password gives full control over all tenants. Only switch this off when the console is otherwise protected (for example only reachable on a private network).') }}</p>
+          <p class="muted">{{ t('Administrators can always set up an authenticator app under My account. The change is recorded in the platform audit log.') }}</p>
+          <label for="m-code">{{ reauthLabel }}</label>
+          <input id="m-code" v-model="mfa.code" :type="byPassword ? 'password' : 'text'" autocomplete="off" />
+          <div class="actions"><button :disabled="busy || managed.includes('platform_mfa_required') || mfa.required === (settings.platform_mfa_required !== 'false')">{{ t('Save') }}</button></div>
+        </form>
+
+        <form v-if="tab === 'settings' && pstore.settings" class="card" @submit.prevent="savePlatformStorage">
+          <h2>{{ t('Default storage') }}</h2>
+          <p>{{ t('Current default: {where}', { where: pstore.description }) }}</p>
+          <p class="muted">{{ t('Tenants on the platform default store their files under their own prefix tenants/<tenant id>/ inside this location. Changing it only affects new files; earlier files stay readable where they are.') }}</p>
+          <p v-if="pstore.managed.length" class="muted">{{ t('Settings set in the server configuration (environment or Kubernetes ConfigMap) are read-only here: {n}.', { n: pstore.managed.join(', ') }) }}</p>
+          <StorageForm :model-value="pstore.settings" :managed="pstore.managed" :is-set="pstore.set" id-prefix="ps" />
+          <p v-if="pstore.test && pstore.test.ok" class="ok" role="status">{{ t('Connection works: a test object was written, read and deleted in {ms} ms ({where}).', { ms: pstore.test.ms, where: pstore.test.description }) }}</p>
+          <p v-if="pstore.test && !pstore.test.ok" class="err" role="alert">{{ t('Connection test failed: {error}', { error: pstore.test.error }) }}</p>
+          <div class="actions"><button :disabled="busy">{{ t('Save') }}</button>
+            <button v-if="pstore.settings.storage_backend !== 'local'" type="button" class="secondary" :disabled="pstore.testing" @click="testPlatformStorage">{{ pstore.testing ? t('Testing…') : t('Test connection') }}</button></div>
+        </form>
+
+        <div v-if="tab === 'account'" class="card">
+          <h2>{{ t('My account') }}</h2>
+          <p>{{ me?.username }} · {{ t('Authenticator') }}: {{ me?.totp_enabled ? t('Active') : t('Not set up') }}</p>
+          <template v-if="!me?.totp_enabled">
+            <div v-if="!enroll" class="actions"><button :disabled="busy" @click="beginEnroll">{{ t('Set up an authenticator app') }}</button></div>
+            <form v-else @submit.prevent="confirmEnroll">
+              <QrCode :value="enroll.uri" :label="t('QR code for your authenticator app')" filename="sendora-platform-totp.svg" />
+              <p class="muted">{{ t('Or enter this key manually:') }} <code>{{ enroll.secret }}</code></p>
+              <label for="me-code">{{ t('Authenticator code') }}</label>
+              <input id="me-code" v-model="f.code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required />
+              <div class="actions"><button :disabled="busy">{{ t('Confirm') }}</button></div>
+            </form>
+          </template>
+          <h3>{{ t('Change password') }}</h3>
+          <form @submit.prevent="changePassword">
+            <div class="row">
+              <div><label for="ma-cur">{{ t('Current password') }}</label><input id="ma-cur" v-model="pw.current" type="password" autocomplete="current-password" required /></div>
+              <div><label for="ma-new">{{ t('New password') }}</label><input id="ma-new" v-model="pw.next" type="password" autocomplete="new-password" minlength="12" required /></div>
+            </div>
+            <div class="actions"><button :disabled="busy">{{ t('Change password') }}</button></div>
+          </form>
+        </div>
+
         <div v-if="tab === 'audit'" class="card">
           <h2>{{ t('Platform audit log') }}</h2>
           <p v-if="auditStatus" :class="auditStatus.ok ? 'ok' : 'err'">{{ auditStatus.ok ? t('The audit log is intact.') : t('The audit log does not verify.') }}</p>
@@ -335,8 +462,8 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
 
         <div v-if="tab === 'admins'" class="card">
           <h2>{{ t('Administrators') }}</h2>
-          <label for="a-code">{{ t('Your authenticator code (required for changes)') }}</label>
-          <input id="a-code" v-model="adminCode" inputmode="numeric" autocomplete="one-time-code" maxlength="12" />
+          <label for="a-code">{{ reauthLabel }}</label>
+          <input id="a-code" v-model="adminCode" :type="byPassword ? 'password' : 'text'" autocomplete="off" />
           <div class="table-wrap"><table>
             <thead><tr><th>{{ t('Username') }}</th><th>{{ t('Email') }}</th><th>{{ t('Authenticator') }}</th><th></th></tr></thead>
             <tbody><tr v-for="a in admins" :key="a.id"><td>{{ a.username }}</td><td>{{ a.email }}</td><td>{{ a.totp_enabled ? t('Active') : t('Not set up') }}</td>
@@ -350,7 +477,7 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
             </div>
             <div class="row">
               <div><label for="na-p">{{ t('Password') }}</label><input id="na-p" v-model="na.password" type="password" autocomplete="new-password" minlength="12" required /></div>
-              <div><label for="na-c">{{ t('Your authenticator code') }}</label><input id="na-c" v-model="na.code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required /></div>
+              <div><label for="na-c">{{ reauthLabel }}</label><input id="na-c" v-model="na.code" :type="byPassword ? 'password' : 'text'" autocomplete="off" required /></div>
             </div>
             <div class="actions"><button :disabled="busy">{{ t('Create administrator') }}</button></div>
           </form>

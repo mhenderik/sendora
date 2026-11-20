@@ -48,7 +48,7 @@ func newS3(ctx context.Context, c Config) (*s3Backend, error) {
 			Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(c.S3AccessKey, c.S3SecretKey, "")),
 		}
 	}
-	cfg.HTTPClient = &http.Client{Timeout: 0, Transport: httpTransport()}
+	cfg.HTTPClient = &http.Client{Timeout: 0, Transport: httpTransport(c)}
 	cfg.RetryMaxAttempts = 4
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = c.S3PathStyle
@@ -223,9 +223,16 @@ func (b *s3Backend) List(ctx context.Context, prefix string, fn func(Info) error
 
 // httpTransport is the shared transport of the remote backends: bounded
 // connection setup and header waits, while bodies may stream for long.
-func httpTransport() *http.Transport {
+// A configuration with DialContext (a tenant's own storage in multi-tenant
+// mode, see internal/netguard) connects only through it and never through a
+// proxy, so the guard sees the real destination.
+func httpTransport(c Config) *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.ResponseHeaderTimeout = 60 * time.Second
 	t.MaxIdleConnsPerHost = 16
+	if c.DialContext != nil {
+		t.DialContext = c.DialContext
+		t.Proxy = nil
+	}
 	return t
 }

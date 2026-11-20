@@ -22,8 +22,8 @@ installation and nothing in this document applies.
 
 - **Platform database** `DATA_DIR/platform.db` (SQLCipher): tenants (random ID,
   subdomain, name, status, quotas, cached counts), custom domains with their DNS
-  verification token, the per-tenant storage configuration (hook, see §8), the
-  platform administrators (bcrypt, TOTP required) and the platform audit log
+  verification token, the per-tenant storage configuration (see §8), the
+  platform administrators (bcrypt, TOTP required by default) and the platform audit log
   (the same tamper-evident HMAC chain as a tenant's audit log).
 - **Tenant data** `DATA_DIR/tenants/<tenant id>/`: the tenant's own SQLCipher
   database `sendora.db` and `shares/`, `uploads/`, `backups/`, `branding/`,
@@ -116,6 +116,8 @@ The request host decides everything:
 | `SENDORA_PLATFORM_SETUP_CODE` | Optional fixed one-time code for creating the first platform administrator (otherwise generated and printed in the log). |
 | `SENDORA_TENANT_IDLE_MINUTES`, `SENDORA_MAX_OPEN_TENANTS`, `SENDORA_TENANT_MAINTENANCE_HOURS`, `SENDORA_DEFAULT_MAX_USERS`, `SENDORA_DEFAULT_MAX_STORAGE_BYTES`, `SENDORA_PLATFORM_AUDIT_RETENTION_DAYS` | Platform settings (also editable in the console unless set here). |
 | `SENDORA_PLATFORM_SMTP_HOST`, `_PORT`, `_USER`, `_PASSWORD` (or `_PASSWORD_FILE`), `_FROM`, `_TLS` | Default SMTP server for tenants that have no SMTP server of their own (welcome mails, resets, notifications). |
+| `SENDORA_PLATFORM_STORAGE_*` | The platform default object storage (§8): the same fields as a single-tenant installation's `SENDORA_STORAGE_*` with `PLATFORM_` in front (`SENDORA_PLATFORM_STORAGE_BACKEND`, `SENDORA_PLATFORM_STORAGE_S3_BUCKET`, `SENDORA_PLATFORM_STORAGE_S3_SECRET_KEY_FILE`, ...). `SENDORA_STORAGE_*` is ignored in multi-tenant mode. |
+| `SENDORA_PLATFORM_MFA_REQUIRED` | `true` (default): platform administrators must use an authenticator app. `false`: password-only sign-in (§5). |
 
 Every other `SENDORA_<SETTING>` variable keeps its meaning but applies to
 **every** tenant and is read-only in each tenant's admin screen — use this for
@@ -143,10 +145,31 @@ serve the console page or its API).
   idle or 12 hours. The session cookie is host-only, `HttpOnly`,
   `SameSite=Strict` and `Secure` on https. Unsafe requests from another origin
   are refused.
+- **Authenticator requirement** (owner decision): the platform setting
+  `platform_mfa_required` (default `true`, also `SENDORA_PLATFORM_MFA_REQUIRED`).
+  Switching it in the console shows a warning, needs a fresh confirmation and is
+  recorded as `platform_mfa_requirement_changed` in the platform audit log. When
+  `false`, administrators sign in with their password only (also those who
+  enrolled an authenticator); enrolment stays available under *My account*, and
+  destructive actions are confirmed with the authenticator code, or with the
+  password by an administrator without one. Switching it back on ends the
+  sessions of administrators without an authenticator; they enrol at the next
+  sign-in. Keep it on unless the console is otherwise protected (for example
+  reachable only on a private network): without a second factor a stolen
+  password controls every tenant.
+- **Offline recovery** of a platform administrator (lost authenticator or
+  password, no other administrator): stop the server, then
+  `sendora-db platform-admin-reset -data-dir /data -key-file <master key> -user <name> [-mfa] [-password]`.
+  `-mfa` removes the authenticator; `-password` sets a temporary password
+  (printed once) that only allows choosing a new password at the next sign-in.
+  The account is unlocked, its sessions end, and the reset is recorded as
+  `platform_admin_offline_reset` (actor `sendora-db`) in the platform audit log.
 - **Tenants**: create (subdomain, name, first administrator's email and
   username, quotas), list and search with status, user count and storage used,
   suspend/resume, edit quotas, rename, delete (type the subdomain **and** enter
-  a current TOTP code; removes the database, files and backups).
+  a current TOTP code; removes the objects in object storage, the database,
+  files and backups; refused when objects cannot be removed unless *force* is
+  chosen, which lists what was left in the audit record).
 - **First tenant administrator**: created by the platform without a usable
   password plus a one-time "choose your password" link (7 days). With a working
   SMTP server (the platform default) the link is emailed; otherwise the console
@@ -155,7 +178,12 @@ serve the console page or its API).
   DNS TXT record `_sendora-challenge.<domain>` = `sendora-verify=<token>` and
   verified from the console. Only verified domains are routed; one can be made
   primary.
-- **Storage**: the per-tenant storage choice (§8).
+- **Storage**: the platform default storage (*Platform settings*) and each
+  tenant's storage choice with *Test connection* and the switch *Tenant may
+  configure its own storage* (§8).
+- **Network targets**: per tenant, *Allow private network targets* switches the
+  SSRF guard off for that tenant (§8a; needs a fresh confirmation, audited on
+  both sides).
 - **Platform settings**, **platform audit log** (with chain verification) and
   **administrators** (adding, removing and resetting another administrator's
   authenticator need a current TOTP code; the last administrator cannot be
@@ -224,28 +252,66 @@ Offline commands on a tenant database take `-tenant <id>` (the key is derived
 from `-key-file`), plus `-legacy-root` for an imported tenant:
 `sendora-db audit-verify -source /data/tenants/<id>/sendora.db -tenant <id>`.
 
-## 8. Storage backends (integration point)
+## 8. Storage
 
-Pluggable object storage (S3, Azure Blob, GCS) is developed separately
-(`internal/storage`). Multi-tenancy only stores each tenant's choice in the
-platform database, table `tenant_storage`:
+Share files go to object storage (S3, Azure Blob, GCS; [STORAGE.md](STORAGE.md))
+or the local disk, decided by the platform per tenant:
 
-| Field | Meaning |
+| Choice (console) | New files of the tenant go to |
 | --- | --- |
-| `mode` | `platform`: the platform's default backend with `prefix` (default `tenants/<id>/`) before every object key, so tenants never share a key space. `own`: the tenant's own bucket/container. |
-| `prefix` | Object key prefix in `platform` mode. |
-| `config` | Opaque JSON in the storage package's format for `own` mode (e.g. `{"type":"s3","bucket":"…","region":"…","access_key_id":"…","secret_access_key":"…"}`). Secret-looking values are masked in the console and kept when saved unchanged. |
+| **Platform default** (default) | The platform default backend (*Platform settings → Default storage* or `SENDORA_PLATFORM_STORAGE_*`) under the tenant's fixed prefix `<platform prefix>tenants/<tenant id>/` (`storage.Config.WithPrefix`). While the platform default is the local data directory, the tenant's directory `tenants/<id>/shares/`. |
+| **Tenant's own bucket** | A bucket/container entered by a platform administrator (same fields, validation and *Test connection* as Admin → Storage). It must not overlap the platform default's `tenants/` area or another tenant's own bucket. |
 
-Wiring after both branches are merged: `TenantHost.openTenant`
-(`internal/app/mt_host.go`) already passes the configuration to every tenant
-server as `TenantOptions.Storage`
-(`*platform.StorageConfig`). The storage integration builds the tenant's backend
-from it in `NewTenantServer` (`internal/app/mt_tenant.go`) — for `platform`
-mode the process-wide backend wrapped with `Prefix`, for `own` mode a backend
-from `Config` — instead of reading the process-wide storage setting, and keeps
-the tenant's directory as the local default. A changed configuration closes the
-tenant so the next request reopens it with the new backend. Deleting a tenant
-does not remove objects in its own bucket.
+**Tenant may configure its own storage** (per tenant, off by default): the
+tenant's administrators then edit the same storage form in their Admin →
+Storage. *Platform default* there means the console's choice above. A tenant's
+own configuration must use explicit credentials (access key, account key or
+SAS token, service account key — never the server's ambient IAM role,
+managed/workload identity or application default credentials, which belong to
+the platform), its endpoint must pass the SSRF guard (§8a) when saved, and its
+connections, including token requests, go through the guard. Without the switch
+the tenant sees its storage read-only, with an explanation; changes are refused
+(403).
+
+- Encryption is unchanged: files are encrypted with the tenant's own file key
+  before they leave the server, so even a shared bucket only holds ciphertext,
+  and an object of one tenant cannot be decrypted with another tenant's keys.
+  Each tenant's backend only sees its own prefix; object keys from a tenant's
+  database are validated (`files/<32 hex>`), so no key can reach another prefix.
+- Every file records its location (`storage_locations` in the tenant's
+  database), so a change only affects new files. The tenant's administrators
+  move earlier files with Admin → Storage → *Move files* (or offline:
+  `sendora-db storage-migrate -source /data/tenants/<id>/sendora.db -data-dir /data/tenants/<id> -tenant <id> -key-file <master key>`,
+  which resolves the tenant's storage from the platform database).
+- Changing the platform default or a tenant's choice reopens the affected open
+  tenants. The tenant's audit log records `tenant_storage_changed`.
+- **Deleting a tenant** removes everything under its prefix in the platform
+  default (also earlier platform defaults recorded in its database) and
+  Sendora's objects (`files/`, `backups/`, `probe/`) in its own buckets.
+- Remote backup copies (`backup_remote_enabled`, a tenant setting) go to
+  `<tenant prefix>backups/`.
+
+## 8a. Network targets of tenants (SSRF guard)
+
+In multi-tenant mode, servers a tenant's administrator configures — the SMTP
+server, OIDC issuers (discovery, keys, token exchange), audit log forwarding
+(webhook and syslog) and the tenant's own storage endpoint — must not be on the
+platform's network. Refused are loopback, private (RFC 1918, IPv6 ULA),
+link-local (including `169.254.169.254` and other cloud metadata addresses),
+carrier-grade NAT (`100.64.0.0/10`), unspecified, multicast and other
+special-purpose addresses, also when carried in IPv4-mapped, NAT64 or 6to4
+IPv6 addresses, plus internal names (`localhost`, single labels, `.local`,
+`.internal`, `.svc`, `.cluster.local`, `.lan`, `.home.arpa`).
+
+The check runs twice: when a setting is saved (a clear error) and on **every
+connection**, after DNS resolution, on the address actually connected (a custom
+dialer), so DNS rebinding and redirects cannot get around it. Platform-provided
+targets are not affected: the platform SMTP server, the platform default
+storage, and settings or providers set by `SENDORA_*` variables. A platform
+administrator can allow private targets per tenant (*Network targets* in the
+tenant's page; step-up, recorded in the platform and the tenant audit log), for
+example for a tenant with its own VPN-connected mail relay. Single-tenant
+installations are unchanged.
 
 ## 9. DNS, TLS and Kubernetes
 

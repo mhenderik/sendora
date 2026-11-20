@@ -19,7 +19,7 @@ Applies to version 0.1.5 (in development on `main`).
 | Upload staging | `DATA_DIR/uploads/<session>/` | Parts in plain form while an upload is in progress; removed on completion, abort or after 24 h |
 | Download snapshots | `DATA_DIR/.verified-download-*` | Temporary plain copies for verified downloads; removed after the transfer and at start |
 | Backups | `DATA_DIR/backups/` | SQLCipher-encrypted copies of the database (not the share files) |
-| Command-line tool | `sendora-db` (`cmd/sendora-db`) | Key generation, backup, verification (`verify`, `verify-files`, `audit-verify`), offline MFA reset |
+| Command-line tool | `sendora-db` = `sendora db` (`internal/dbcli`, part of the `sendora` binary) | Key generation, backup, verification (`verify`, `verify-files`, `audit-verify`), offline MFA reset |
 | Container image | `Dockerfile`: Debian 13 slim, user 10001, no setuid/setgid binaries | Example manifests in `deploy/` (read-only root file system, all capabilities dropped, `no-new-privileges`, NetworkPolicy in `deploy/kubernetes.yaml`) |
 
 Sendora is a **single-instance** application: one process owns the data directory. There is no clustering or built-in high availability.

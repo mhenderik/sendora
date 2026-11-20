@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mhenderik/sendora/internal/platform"
+	"github.com/mhenderik/sendora/internal/storage"
 )
 
 // Server configuration from the environment, typically a Kubernetes ConfigMap
@@ -147,6 +148,11 @@ func (s *Server) applyConfig() error {
 	}
 	rows.Close()
 	for _, key := range keys {
+		// Multi-tenant mode: the platform decides where tenants' files go
+		// (SENDORA_PLATFORM_STORAGE_*); SENDORA_STORAGE_* does not apply to tenants.
+		if s.tenant != nil && storage.IsSetting(key) && key != "backup_remote_enabled" {
+			continue
+		}
 		names := append([]string{settingEnvName(key)}, configAliases[key]...)
 		for _, name := range names {
 			v, ok, err := readConfigValue(name)

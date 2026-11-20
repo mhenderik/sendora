@@ -130,7 +130,7 @@ jobs:
             -e SENDORA_TEST_GCS_ENDPOINT=http://127.0.0.1:24443 \
             sendora-sqlcipher go test -race -count=1 -timeout 20m -v \
               -run 'Emulator|AzureBlob|ObjectStorage|StorageMigrate|Conformance' \
-              ./internal/storage/... ./internal/app/ ./cmd/sendora-db/
+              ./internal/storage/... ./internal/app/ ./internal/dbcli/
       - name: Emulator logs
         if: failure()
         run: docker logs minio; docker logs azurite; docker logs fakegcs

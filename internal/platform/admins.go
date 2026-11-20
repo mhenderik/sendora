@@ -25,13 +25,16 @@ type Admin struct {
 	LastCounter  int64  `json:"-"`
 	Failures     int    `json:"-"`
 	LockedUntil  int64  `json:"-"`
+	// MustChangePassword is set by the offline reset (sendora-db
+	// platform-admin-reset): the temporary password only allows choosing a new one.
+	MustChangePassword bool `json:"must_change_password"`
 }
 
-const adminCols = `id,username,email,totp_enabled,created_at,password_hash,totp_secret,pending_totp_secret,totp_last_counter,failures,locked_until`
+const adminCols = `id,username,email,totp_enabled,created_at,password_hash,totp_secret,pending_totp_secret,totp_last_counter,failures,locked_until,must_change_password`
 
 func scanAdmin(row interface{ Scan(...any) error }) (*Admin, error) {
 	a := &Admin{}
-	err := row.Scan(&a.ID, &a.Username, &a.Email, &a.TOTPEnabled, &a.CreatedAt, &a.PasswordHash, &a.TOTPSecret, &a.PendingTOTP, &a.LastCounter, &a.Failures, &a.LockedUntil)
+	err := row.Scan(&a.ID, &a.Username, &a.Email, &a.TOTPEnabled, &a.CreatedAt, &a.PasswordHash, &a.TOTPSecret, &a.PendingTOTP, &a.LastCounter, &a.Failures, &a.LockedUntil, &a.MustChangePassword)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -113,12 +116,31 @@ func (p *Platform) DeleteAdmin(id int64) error {
 	return nil
 }
 
-// SetPassword replaces an administrator's password hash and ends their sessions.
+// SetPassword replaces an administrator's password hash (clearing a pending
+// must-change mark) and ends their sessions.
 func (p *Platform) SetPassword(id int64, hash string) error {
-	if _, err := p.St.DB.Exec(`UPDATE platform_admins SET password_hash=? WHERE id=?`, hash, id); err != nil {
+	if _, err := p.St.DB.Exec(`UPDATE platform_admins SET password_hash=?, must_change_password=0 WHERE id=?`, hash, id); err != nil {
 		return err
 	}
 	_, err := p.St.DB.Exec(`DELETE FROM platform_sessions WHERE admin_id=?`, id)
+	return err
+}
+
+// SetTemporaryPassword stores a temporary password that must be changed at
+// the next sign-in, unlocks the account and ends the administrator's sessions
+// (offline recovery).
+func (p *Platform) SetTemporaryPassword(id int64, hash string) error {
+	if _, err := p.St.DB.Exec(`UPDATE platform_admins SET password_hash=?, must_change_password=1, failures=0, locked_until=0 WHERE id=?`, hash, id); err != nil {
+		return err
+	}
+	_, err := p.St.DB.Exec(`DELETE FROM platform_sessions WHERE admin_id=?`, id)
+	return err
+}
+
+// EndSessionsWithoutMFA ends the sessions of administrators without an
+// authenticator (when platform_mfa_required is switched on).
+func (p *Platform) EndSessionsWithoutMFA() error {
+	_, err := p.St.DB.Exec(`DELETE FROM platform_sessions WHERE admin_id IN (SELECT id FROM platform_admins WHERE totp_enabled=0)`)
 	return err
 }
 

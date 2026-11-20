@@ -70,7 +70,7 @@ data:
   # SENDORA_PROVIDER_ENTRA_TENANT_ID: 00000000-0000-0000-0000-000000000000
   # SENDORA_PROVIDER_ENTRA_CLIENT_ID: 00000000-0000-0000-0000-000000000000
   # SENDORA_PROVIDER_ENTRA_ALLOW_REGISTRATION: "true"
-  # Object storage for share files (docs/STORAGE.md). Default: local (DATA_DIR).
+  # Object storage for share files (0.2.0 and later, docs/STORAGE.md). Default: local (DATA_DIR).
   # Files are encrypted before upload; secrets go into sendora-secrets (below).
   # S3 / S3-compatible:
   # SENDORA_STORAGE_BACKEND: s3

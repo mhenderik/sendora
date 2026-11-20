@@ -35,6 +35,17 @@ data:
   SENDORA_PLATFORM_SMTP_FROM: "Sendora <sendora@example.com>"
   SENDORA_PLATFORM_SMTP_TLS: starttls
   SENDORA_PLATFORM_SMTP_PASSWORD_FILE: /run/secrets/sendora-smtp/password
+  # Platform administrators must use an authenticator app (default "true").
+  # SENDORA_PLATFORM_MFA_REQUIRED: "true"
+  # Platform default object storage (docs/STORAGE.md); tenants on the default
+  # write under <prefix>tenants/<tenant id>/. Default: local tenant directories.
+  # SENDORA_PLATFORM_STORAGE_BACKEND: s3
+  # SENDORA_PLATFORM_STORAGE_S3_REGION: eu-central-1
+  # SENDORA_PLATFORM_STORAGE_S3_BUCKET: sendora-tenants
+  # SENDORA_PLATFORM_STORAGE_S3_PREFIX: ""
+  # SENDORA_PLATFORM_STORAGE_S3_AUTH: default   # IRSA / EKS Pod Identity, or static with keys below
+  # SENDORA_PLATFORM_STORAGE_S3_ACCESS_KEY: AKIA...
+  # SENDORA_PLATFORM_STORAGE_S3_SECRET_KEY_FILE: /run/secrets/sendora-s3/secret-key
   # Platform-wide policy for every tenant (optional), e.g.:
   # SENDORA_MFA_POLICY: required
 ---

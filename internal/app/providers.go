@@ -115,6 +115,12 @@ func (s *Server) createProvider(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, m)
 		return
 	}
+	if p.Type == "oidc" {
+		if err := s.checkTarget(r.Context(), p.IssuerURL); err != nil {
+			jerr(w, 400, "issuer URL: "+err.Error())
+			return
+		}
+	}
 	p.UUID = uuid.NewString()
 	res, err := s.St.DB.Exec(`INSERT INTO auth_providers(uuid,name,type,enabled,client_id,client_secret,issuer_url,icon,trust_email,allow_registration) VALUES(?,?,?,?,?,?,?,?,?,?)`,
 		p.UUID, p.Name, p.Type, p.Enabled, p.ClientID, p.ClientSecret, p.IssuerURL, p.Icon, p.TrustEmail, p.AllowRegistration)
@@ -150,6 +156,12 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) {
 	if m := validProvider(&p); m != "" {
 		jerr(w, 400, m)
 		return
+	}
+	if p.Type == "oidc" {
+		if err := s.checkTarget(r.Context(), p.IssuerURL); err != nil {
+			jerr(w, 400, "issuer URL: "+err.Error())
+			return
+		}
 	}
 	if !p.Enabled && s.refuseLastExternalAdmin(w, 0, id) {
 		return
@@ -243,7 +255,7 @@ func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 404, "provider not found")
 		return
 	}
-	ctx, cancel := providerContext(r.Context())
+	ctx, cancel := s.providerContextFor(r.Context(), p)
 	defer cancel()
 	cfg, _, err := s.oauthConfig(ctx, p, r)
 	if err != nil {
@@ -285,7 +297,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	for _, name := range []string{"oidc_state", "oidc_nonce", "oidc_pkce"} {
 		http.SetCookie(w, &http.Cookie{Name: name, Path: "/api/auth/oidc", MaxAge: -1, HttpOnly: true, Secure: s.secureCookies(r), SameSite: http.SameSiteLaxMode})
 	}
-	ctx, cancel := providerContext(r.Context())
+	ctx, cancel := s.providerContextFor(r.Context(), p)
 	defer cancel()
 	cfg, op, err := s.oauthConfig(ctx, p, r)
 	if err != nil {

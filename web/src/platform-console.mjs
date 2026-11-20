@@ -52,12 +52,17 @@ export function quotaPercent(used, max) {
   return Math.min(100, Math.round((Number(used) || 0) * 100 / max))
 }
 
-// The storage configuration is edited as JSON text; it must be an object.
-export function parseStorageConfig(text) {
-  const s = String(text || '').trim()
-  if (!s) return {}
-  let v
-  try { v = JSON.parse(s) } catch { throw new Error(tr('The configuration must be valid JSON.')) }
-  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(tr('The configuration must be a JSON object.'))
-  return v
+// Body of a tenant storage form: the own-bucket settings only in mode own
+// (blank secrets keep the stored value).
+export function storageBody(st) {
+  const body = { mode: st.mode, tenant_managed: !!st.tenant_managed }
+  if (st.mode === 'own') body.settings = Object.fromEntries(Object.entries(st.settings || {}).filter(([, v]) => v !== '' && v !== undefined && v !== null))
+  return body
+}
+
+// Re-authentication for a destructive action: the server accepts the
+// authenticator code, or the password of an administrator without one while
+// the platform does not require it, in the same field.
+export function reauthBody(value) {
+  return { code: String(value || '') }
 }

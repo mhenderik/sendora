@@ -240,6 +240,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if !s.validateStorageUpdate(w, r, updates) { // complete and reachable (storage.go)
 		return
 	}
+	if !s.validateTargetUpdates(w, r, updates) { // multi-tenant SSRF guard (mt_tenant.go)
+		return
+	}
 	olds := make(map[string]string, len(updates))
 	for k := range updates {
 		olds[k] = s.St.Setting(k)
@@ -417,9 +420,14 @@ func (s *Server) uploadBranding(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.clearBranding(kind)
 	name := kind + ext
-	os.WriteFile(filepath.Join(s.St.DataDir, "branding", name), data, 0o600)
+	p, err := localJoin(filepath.Join(s.St.DataDir, "branding"), name)
+	if err != nil {
+		jerr(w, 400, "invalid branding name")
+		return
+	}
+	s.clearBranding(kind)
+	os.WriteFile(p, data, 0o600)
 	s.St.DB.Exec(`UPDATE settings SET value=? WHERE key=?`, name, "ui_"+kind)
 	jout(w, 200, map[string]any{"ok": true})
 }
@@ -441,7 +449,14 @@ func (s *Server) deleteBranding(w http.ResponseWriter, r *http.Request) {
 	jout(w, 200, map[string]any{"ok": true})
 }
 
-func serveImage(w http.ResponseWriter, r *http.Request, p string) {
+// serveImage serves the image name (a single file name) from the trusted
+// directory dir.
+func serveImage(w http.ResponseWriter, r *http.Request, dir, name string) {
+	p, err := localJoin(dir, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
 	ext := strings.ToLower(filepath.Ext(p))
 	ct, ok := imgMime[ext]
 	f, err := os.Open(p)
@@ -469,7 +484,7 @@ func (s *Server) serveBranding(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	serveImage(w, r, filepath.Join(s.St.DataDir, "branding", filepath.Base(name)))
+	serveImage(w, r, filepath.Join(s.St.DataDir, "branding"), filepath.Base(name))
 }
 
 func (s *Server) listBackgrounds(w http.ResponseWriter, r *http.Request) {
@@ -494,11 +509,14 @@ func (s *Server) uploadBackground(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveBackground(w http.ResponseWriter, r *http.Request) {
-	serveImage(w, r, filepath.Join(s.St.DataDir, "backgrounds", filepath.Base(chi.URLParam(r, "file"))))
+	serveImage(w, r, filepath.Join(s.St.DataDir, "backgrounds"), filepath.Base(chi.URLParam(r, "file")))
 }
 
 func (s *Server) deleteBackground(w http.ResponseWriter, r *http.Request) {
-	os.Remove(filepath.Join(s.St.DataDir, "backgrounds", filepath.Base(chi.URLParam(r, "file"))))
+	// Unsafe names cannot exist in the folder; answer as before without touching disk.
+	if p, err := localJoin(filepath.Join(s.St.DataDir, "backgrounds"), filepath.Base(chi.URLParam(r, "file"))); err == nil {
+		os.Remove(p)
+	}
 	jout(w, 200, map[string]any{"ok": true})
 }
 

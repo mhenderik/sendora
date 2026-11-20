@@ -37,6 +37,21 @@ func runMultiTenant(dataDir string, key []byte) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// The platform default object storage (SENDORA_PLATFORM_STORAGE_* or the
+	// console); an invalid configuration stops the start, like single-tenant mode.
+	def := p.PlatformStorage()
+	if err := def.Validate(); err != nil {
+		log.Fatal("platform storage: ", err)
+	}
+	if def.Backend != "local" {
+		log.Printf("platform storage: tenants' new files go to %s (prefix tenants/<tenant id>/)", def.Describe())
+	}
+	if os.Getenv("SENDORA_STORAGE_BACKEND") != "" {
+		log.Printf("WARNING: SENDORA_STORAGE_* is ignored in multi-tenant mode; use SENDORA_PLATFORM_STORAGE_* for the platform default storage")
+	}
+	if !p.MFARequired() {
+		log.Printf("WARNING: platform_mfa_required is off: platform administrators sign in with a password only")
+	}
 	static, err := fs.Sub(distFS, "web/dist")
 	if err != nil {
 		log.Fatal(err)

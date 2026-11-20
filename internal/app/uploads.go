@@ -99,9 +99,10 @@ var uploadIDRe = regexp.MustCompile(`^[a-f0-9]{16,64}$`)
 // uploadDir maps a session id to its staging directory. Ids are always generated
 // hex strings; anything else (e.g. from a tampered database) maps to a fixed
 // directory that is never created, so path tricks cannot reach other places.
+// The id only reaches the path behind the early-return regexp guard.
 func (s *Server) uploadDir(id string) string {
 	if !uploadIDRe.MatchString(id) {
-		id = ".invalid-session"
+		return filepath.Join(s.St.DataDir, "uploads", ".invalid-session")
 	}
 	return filepath.Join(s.St.DataDir, "uploads", id)
 }
@@ -382,6 +383,11 @@ func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Session ids are generated hex; anything else never names a staging directory.
+	if !uploadIDRe.MatchString(id) {
+		jerr(w, 404, "upload not found")
+		return
+	}
 	idx, _ := strconv.Atoi(chi.URLParam(r, "idx"))
 	offset, err := strconv.ParseInt(r.Header.Get("Upload-Offset"), 10, 64)
 	if err != nil {
@@ -500,6 +506,11 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 	defer unlock()
 	id, ok := s.ownUpload(w, r)
 	if !ok {
+		return
+	}
+	// Session ids are generated hex; anything else never names a staging directory.
+	if !uploadIDRe.MatchString(id) {
+		jerr(w, 404, "upload not found")
 		return
 	}
 	u := s.ctxUser(r)
@@ -760,7 +771,10 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	committed = true
-	os.RemoveAll(s.uploadDir(id))
+	// Only generated hex session ids ever name a staging directory.
+	if uploadIDRe.MatchString(id) {
+		os.RemoveAll(s.uploadDir(id))
+	}
 	s.logEvent(u.ID, u.Username, "share_created", "share#"+strconv.FormatInt(sid, 10), fmt.Sprintf("%d files", len(files)))
 	url := s.baseURL(r) + "/share/" + longID
 	emailBase, emailOK := s.emailBaseURL(r)
@@ -823,8 +837,11 @@ func (s *Server) UserUploadSessions(userID int64) ([]string, error) {
 // Caller holds the upload stripe. Keep the reservation until disk cleanup
 // succeeds; failed cleanup must not grant storage for another upload.
 func (s *Server) removeUploadSession(id string) error {
-	if err := os.RemoveAll(s.uploadDir(id)); err != nil {
-		return err
+	// A non-hex id (tampered row) has no staging directory; only its row goes.
+	if uploadIDRe.MatchString(id) {
+		if err := os.RemoveAll(s.uploadDir(id)); err != nil {
+			return err
+		}
 	}
 	_, err := s.St.DB.Exec(`DELETE FROM upload_sessions WHERE id=?`, id)
 	return err

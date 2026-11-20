@@ -42,6 +42,12 @@ Optional (0.2.0): one process serves many tenants on `<slug>.<base domain>` and 
 | `SENDORA_DEFAULT_MAX_USERS`, `SENDORA_DEFAULT_MAX_STORAGE_BYTES` | `0` | Quotas proposed for new tenants (0 = unlimited). |
 | `SENDORA_PLATFORM_AUDIT_RETENTION_DAYS` | `365` | Retention of the platform audit log (90–36500). (`SENDORA_AUDIT_RETENTION_DAYS` keeps setting the tenants' own audit retention.) |
 | `SENDORA_PLATFORM_SMTP_HOST`, `_PORT`, `_USER`, `_PASSWORD` / `_PASSWORD_FILE`, `_FROM`, `_TLS` | unset, `587`, …, `starttls` | Default SMTP server for tenants without their own. |
+| `SENDORA_PLATFORM_MFA_REQUIRED` | `true` | Platform administrators must use an authenticator app. `false` allows password-only sign-in to the console (enrolment stays possible). Changing it in the console needs a fresh confirmation and is audited. |
+| `SENDORA_PLATFORM_STORAGE_BACKEND` and the other `SENDORA_PLATFORM_STORAGE_*` | `local` | The platform default object storage: the fields of [Object storage](#object-storage) with `PLATFORM_` in front (for example `SENDORA_PLATFORM_STORAGE_S3_BUCKET`, `SENDORA_PLATFORM_STORAGE_S3_SECRET_KEY_FILE`). Tenants on the default store their files under `<prefix>tenants/<tenant id>/`. `SENDORA_STORAGE_*` is ignored in multi-tenant mode. |
+
+Targets a tenant's administrator configures (SMTP server, OIDC issuer, audit log webhook and syslog, the tenant's own storage endpoint) must not resolve to loopback, private, link-local, CGNAT or metadata addresses in multi-tenant mode; the check runs when saved and on every connection. The platform can allow private targets per tenant in the console. See [MULTI-TENANT.md](MULTI-TENANT.md) §8a.
+
+The offline tool is part of the main binary: `sendora db <command>` or `sendora-db <command>` (a link to the same program in the image). In multi-tenant mode, `sendora-db platform-admin-reset -data-dir <DATA_DIR> -key-file <master key> -user <name> [-mfa] [-password]` (server stopped) removes a platform administrator's authenticator and/or sets a temporary password that must be changed at the next sign-in.
 
 In multi-tenant mode `APP_URL` and `JWT_SECRET` are ignored (each tenant's URL comes from its domain and each tenant has its own signing secret). The other `SENDORA_<SETTING>` variables apply to every tenant and are read-only in each tenant's admin screen. All platform settings except the base domain can also be changed in the platform console unless set by a variable.
 

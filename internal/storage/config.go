@@ -60,8 +60,69 @@ type Config struct {
 	GCSAuth            string `json:"gcs_auth,omitempty"`
 	GCSCredentialsJSON string `json:"gcs_credentials_json,omitempty"`
 
+	// TenantManaged marks a configuration a tenant administrator entered in
+	// multi-tenant mode (not the platform): no ambient credentials, and its
+	// connections go through the tenant's network guard (store.Backends.Guard).
+	TenantManaged bool `json:"tenant_managed,omitempty"`
+
 	// LocalRoot is the directory of the local backend (the data directory).
 	LocalRoot string `json:"-"`
+	// DialContext, when set, makes every connection of the backend (including
+	// token requests) through it: the SSRF guard of internal/netguard.
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error) `json:"-"`
+}
+
+// ValidateTenantManaged adds the rules for storage a tenant administrator
+// configures in multi-tenant mode: only explicit credentials. The ambient
+// credentials of the process (AWS default chain and IRSA, Azure managed or
+// workload identity, Google application default credentials) belong to the
+// platform and could reach the platform's buckets or other tenants' prefixes.
+func (c Config) ValidateTenantManaged() error {
+	switch c.Backend {
+	case KindS3:
+		if c.S3Auth != S3AuthStatic {
+			return errors.New("use an access key and secret key: the server's own (default) credentials are not available to organisations")
+		}
+	case KindAzure:
+		if c.AzureAuth != AzureAuthSharedKey && c.AzureAuth != AzureAuthSAS {
+			return errors.New("use an account key or SAS token: the server's managed identity is not available to organisations")
+		}
+	case KindGCS:
+		if c.GCSAuth != GCSAuthServiceAcct {
+			return errors.New("use a service account JSON key: the server's default credentials are not available to organisations")
+		}
+	}
+	return nil
+}
+
+// Endpoint returns the endpoint URL the backend connects to: the configured
+// one, or the provider's public default.
+func (c Config) Endpoint() string {
+	switch c.Backend {
+	case KindS3:
+		if c.S3Endpoint == "" {
+			return "https://s3." + c.S3Region + ".amazonaws.com"
+		}
+		return c.S3Endpoint
+	case KindAzure:
+		return c.azureServiceURL()
+	case KindGCS:
+		return c.gcsEndpoint()
+	}
+	return ""
+}
+
+// Overlaps reports whether c and o can reach the same objects: the same
+// service and bucket or container, and one prefix contains the other.
+func (c Config) Overlaps(o Config) bool {
+	if c.Backend != o.Backend || c.Backend == KindLocal || c.Backend == "" {
+		return false
+	}
+	strip := func(x Config) string { x.Prefix = ""; return x.Identity() }
+	if strip(c) != strip(o) {
+		return false
+	}
+	return strings.HasPrefix(c.Prefix, o.Prefix) || strings.HasPrefix(o.Prefix, c.Prefix)
 }
 
 // WithPrefix returns c with sub appended to its prefix (for example a tenant's

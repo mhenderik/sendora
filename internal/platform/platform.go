@@ -52,7 +52,8 @@ var schema = []string{
 		primary_domain TEXT NOT NULL DEFAULT '',
 		stat_users INTEGER NOT NULL DEFAULT 0,
 		stat_storage_bytes INTEGER NOT NULL DEFAULT 0,
-		stat_updated_at TEXT NOT NULL DEFAULT '')`,
+		stat_updated_at TEXT NOT NULL DEFAULT '',
+		allow_private_targets INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS tenant_domains (
 		domain TEXT PRIMARY KEY,
 		tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -66,6 +67,7 @@ var schema = []string{
 		mode TEXT NOT NULL DEFAULT 'platform' CHECK (mode IN ('platform','own')),
 		prefix TEXT NOT NULL DEFAULT '',
 		config TEXT NOT NULL DEFAULT '{}',
+		tenant_managed INTEGER NOT NULL DEFAULT 0,
 		updated_at TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE IF NOT EXISTS platform_admins (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,6 +80,7 @@ var schema = []string{
 		pending_totp_secret TEXT NOT NULL DEFAULT '',
 		failures INTEGER NOT NULL DEFAULT 0,
 		locked_until INTEGER NOT NULL DEFAULT 0,
+		must_change_password INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS platform_sessions (
 		hash TEXT PRIMARY KEY,
@@ -120,6 +123,17 @@ func Open(dataDir string, master []byte, initialize bool) (*Platform, error) {
 			return nil, err
 		}
 	}
+	// Columns added after the first 0.2.0 development builds.
+	for _, c := range []struct{ table, name, decl string }{
+		{"tenants", "allow_private_targets", "INTEGER NOT NULL DEFAULT 0"},
+		{"tenant_storage", "tenant_managed", "INTEGER NOT NULL DEFAULT 0"},
+		{"platform_admins", "must_change_password", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := addColumn(st.DB, c.table, c.name, c.decl); err != nil {
+			st.Close()
+			return nil, err
+		}
+	}
 	p := &Platform{St: st, DataDir: dataDir, master: append([]byte(nil), master...)}
 	for _, d := range settingDefaults {
 		st.DB.Exec(`INSERT OR IGNORE INTO settings(key,value,grp) VALUES(?,?,?)`, d.Key, d.Val, d.Grp)
@@ -129,6 +143,15 @@ func Open(dataDir string, master []byte, initialize bool) (*Platform, error) {
 		return nil, err
 	}
 	return p, nil
+}
+
+func addColumn(db *sql.DB, table, name, decl string) error {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, name).Scan(&n); err != nil || n > 0 {
+		return err
+	}
+	_, err := db.Exec("ALTER TABLE " + table + " ADD COLUMN " + name + " " + decl)
+	return err
 }
 
 // Close closes the platform database and wipes the kept master key.
@@ -151,14 +174,18 @@ type Tenant struct {
 	StatUsers       int64  `json:"user_count"`
 	StatStorage     int64  `json:"storage_used_bytes"`
 	StatUpdatedAt   string `json:"stats_updated_at"`
-	legacyRoot      []byte
+	// AllowPrivateTargets lets the tenant's administrators point SMTP, sign-in
+	// providers, audit forwarding and their own storage at private, loopback
+	// and link-local addresses (off: the multi-tenant SSRF guard applies).
+	AllowPrivateTargets bool `json:"allow_private_targets"`
+	legacyRoot          []byte
 }
 
-const tenantCols = `id,slug,name,status,created_at,max_users,max_storage_bytes,key_mode,legacy_root,primary_domain,stat_users,stat_storage_bytes,stat_updated_at`
+const tenantCols = `id,slug,name,status,created_at,max_users,max_storage_bytes,key_mode,legacy_root,primary_domain,stat_users,stat_storage_bytes,stat_updated_at,allow_private_targets`
 
 func scanTenant(row interface{ Scan(...any) error }) (*Tenant, error) {
 	t := &Tenant{}
-	err := row.Scan(&t.ID, &t.Slug, &t.Name, &t.Status, &t.CreatedAt, &t.MaxUsers, &t.MaxStorageBytes, &t.KeyMode, &t.legacyRoot, &t.PrimaryDomain, &t.StatUsers, &t.StatStorage, &t.StatUpdatedAt)
+	err := row.Scan(&t.ID, &t.Slug, &t.Name, &t.Status, &t.CreatedAt, &t.MaxUsers, &t.MaxStorageBytes, &t.KeyMode, &t.legacyRoot, &t.PrimaryDomain, &t.StatUsers, &t.StatStorage, &t.StatUpdatedAt, &t.AllowPrivateTargets)
 	if err != nil {
 		return nil, err
 	}
@@ -364,6 +391,22 @@ func (p *Platform) SetName(id, name string) error {
 // UpdateStats stores the counts shown in the console (never content).
 func (p *Platform) UpdateStats(id string, users, storage int64) {
 	p.St.DB.Exec(`UPDATE tenants SET stat_users=?, stat_storage_bytes=?, stat_updated_at=? WHERE id=?`, users, storage, now(), id)
+}
+
+// SetAllowPrivateTargets switches the SSRF guard of a tenant off (true) or on.
+func (p *Platform) SetAllowPrivateTargets(id string, allow bool) error {
+	v := 0
+	if allow {
+		v = 1
+	}
+	res, err := p.St.DB.Exec(`UPDATE tenants SET allow_private_targets=? WHERE id=?`, v, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // DeleteTenantRow removes the tenant and its domains and storage config from

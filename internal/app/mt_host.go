@@ -15,7 +15,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mhenderik/sendora/internal/netguard"
 	"github.com/mhenderik/sendora/internal/platform"
+	"github.com/mhenderik/sendora/internal/storage"
 	"github.com/mhenderik/sendora/internal/store"
 )
 
@@ -61,6 +63,8 @@ type TenantHost struct {
 	shutdown bool
 
 	now func() time.Time
+	// openBackend opens object storage backends (storage.Open; tests replace it).
+	openBackend func(context.Context, storage.Config) (storage.Backend, error)
 }
 
 type tenantEntry struct {
@@ -92,7 +96,7 @@ func NewTenantHost(cfg MultiTenantConfig) (*TenantHost, error) {
 	}
 	h := &TenantHost{cfg: cfg, P: cfg.Platform, baseHost: host, basePort: port, scheme: "https",
 		open: map[string]*tenantEntry{}, opening: map[string]chan struct{}{}, closing: map[string]chan struct{}{}, deleting: map[string]bool{},
-		jobsCtx: context.Background(), now: time.Now}
+		jobsCtx: context.Background(), now: time.Now, openBackend: storage.Open}
 	if loopbackHost(host) {
 		h.scheme = "http"
 	}
@@ -298,12 +302,18 @@ func (h *TenantHost) release(e *tenantEntry, idleNow bool) {
 	h.mu.Unlock()
 }
 
+// The settings are validated when saved; the clamps keep a tampered or
+// out-of-range value from overflowing the conversions.
 func (h *TenantHost) maxOpen() int {
-	return int(h.P.SettingInt("max_open_tenants", 50))
+	return int(h.P.SettingIntRange("max_open_tenants", 50, 1, 10000))
 }
 
 func (h *TenantHost) idle() time.Duration {
-	return time.Duration(h.P.SettingInt("tenant_idle_minutes", 15)) * time.Minute
+	return time.Duration(h.P.SettingIntRange("tenant_idle_minutes", 15, 1, 1440)) * time.Minute
+}
+
+func (h *TenantHost) maintenanceInterval() time.Duration {
+	return time.Duration(h.P.SettingIntRange("tenant_maintenance_hours", 6, 1, 168)) * time.Hour
 }
 
 // openTenant opens a tenant's store and server and starts its jobs.
@@ -327,9 +337,16 @@ func (h *TenantHost) openTenant(id string) (*tenantEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	storage, _ := h.P.Storage(id)
+	sc, err := h.P.Storage(id)
+	if err != nil {
+		st.Close()
+		return nil, err
+	}
+	st.Backends().OpenFn = h.openBackend
 	srv, err := NewTenantServer(st, h.cfg.Static, h.cfg.Version, TenantOptions{
-		ID: t.ID, Slug: t.Slug, BaseURL: h.tenantURL(route), MailDefault: h.P.MailDefault, Storage: storage,
+		ID: t.ID, Slug: t.Slug, BaseURL: h.tenantURL(route), MailDefault: h.P.MailDefault,
+		Storage: sc, DefaultStorage: h.P.Resolve(id, sc), PlatformStorage: h.P.PlatformStorage().Describe(),
+		AllowPrivateTargets: t.AllowPrivateTargets,
 	})
 	if err != nil {
 		st.Close()
@@ -468,7 +485,7 @@ func (h *TenantHost) Start(ctx context.Context) {
 				h.refreshOpenStats()
 			case <-sweep.C:
 				h.MaintainIdleTenants(ctx)
-				sweep.Reset(time.Duration(h.P.SettingInt("tenant_maintenance_hours", 6)) * time.Hour)
+				sweep.Reset(h.maintenanceInterval())
 			case <-daily.C:
 				h.platformMaintenance()
 			}
@@ -493,7 +510,7 @@ func (h *TenantHost) refreshOpenStats() {
 
 // platformMaintenance applies the platform audit retention.
 func (h *TenantHost) platformMaintenance() {
-	days := h.P.SettingInt("platform_audit_retention_days", 365)
+	days := h.P.SettingIntRange("platform_audit_retention_days", 365, 90, 36500)
 	if n, err := h.P.St.AuditPurge(time.Now().AddDate(0, 0, -int(days))); err != nil {
 		log.Printf("platform audit retention: %v", err)
 	} else if n > 0 {
@@ -654,12 +671,28 @@ func (h *TenantHost) SetTenantQuotas(actor, id string, maxUsers, maxStorage int6
 }
 
 // reopen closes an open tenant so that changed routing data (primary domain,
-// storage configuration) applies at its next request.
+// storage configuration, network policy) applies at its next request.
 func (h *TenantHost) reopen(id string) { go h.evict(id, 10*time.Minute) }
 
-// DeleteTenant removes a tenant: its database, files and backups. It refuses
-// while requests are still running after a short wait.
-func (h *TenantHost) DeleteTenant(id string) error {
+// reopenAll reopens every open tenant (the platform default storage changed).
+func (h *TenantHost) reopenAll() {
+	for _, id := range h.OpenTenants() {
+		h.reopen(id)
+	}
+}
+
+// deleteResult reports the object storage clean-up of a deleted tenant.
+type deleteResult struct {
+	Removed int
+	Failed  []string
+}
+
+// DeleteTenant removes a tenant: its objects in object storage (everything
+// under its prefix in the platform default, Sendora's objects in its own
+// bucket), its database, files and backups. It refuses while requests are
+// still running after a short wait, and when objects could not be removed
+// unless force is set.
+func (h *TenantHost) DeleteTenant(id string, force bool) (deleteResult, error) {
 	h.mu.Lock()
 	h.deleting[id] = true
 	h.mu.Unlock()
@@ -669,12 +702,129 @@ func (h *TenantHost) DeleteTenant(id string) error {
 		h.mu.Unlock()
 	}()
 	if !h.evict(id, 30*time.Second) {
-		return errors.New("the tenant still has requests in progress; try again shortly")
+		return deleteResult{}, errors.New("the tenant still has requests in progress; try again shortly")
+	}
+	res := h.removeTenantObjects(id)
+	if len(res.Failed) > 0 && !force {
+		return res, fmt.Errorf("objects in object storage could not be removed (%s); try again, or delete with force to leave them behind", strings.Join(res.Failed, "; "))
 	}
 	if err := h.deleteTenantData(id); err != nil {
-		return err
+		return res, err
 	}
-	return h.P.DeleteTenantRow(id)
+	return res, h.P.DeleteTenantRow(id)
+}
+
+// objectArea is one place a tenant's objects may be: exclusive areas (the
+// tenant's prefix in the platform default) are emptied completely, shared
+// buckets only lose Sendora's objects (files/, backups/, probe/).
+type objectArea struct {
+	cfg       storage.Config
+	exclusive bool
+}
+
+// tenantObjectAreas collects the platform's view (fixed prefix, own bucket)
+// and every location recorded in the tenant's database (earlier platform
+// defaults, own buckets, tenant-managed buckets).
+func (h *TenantHost) tenantObjectAreas(id string) []objectArea {
+	var areas []objectArea
+	seen := map[string]bool{}
+	add := func(c storage.Config, exclusive bool) {
+		if c.Backend == storage.KindLocal || c.Backend == "" || seen[c.Identity()] {
+			return
+		}
+		seen[c.Identity()] = true
+		areas = append(areas, objectArea{c, exclusive})
+	}
+	prefix := platform.TenantPrefix(id)
+	isTenantArea := func(c storage.Config) bool { return !c.TenantManaged && strings.HasSuffix(c.Prefix, prefix) }
+	for _, c := range h.P.StorageLocations(id) {
+		add(c, isTenantArea(c))
+	}
+	t, err := h.P.Tenant(id)
+	if err != nil {
+		return areas
+	}
+	dir, err := h.P.TenantDir(id)
+	if err != nil {
+		return areas
+	}
+	dbKey, root, err := h.P.TenantKeys(t)
+	if err != nil {
+		return areas
+	}
+	st, err := store.OpenTenant(dir, dbKey, root, false)
+	clear(dbKey)
+	clear(root)
+	if err != nil {
+		return areas
+	}
+	defer st.Close()
+	rows, err := st.DB.Query(`SELECT config FROM storage_locations ORDER BY id`)
+	if err != nil {
+		return areas
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var js string
+		if rows.Scan(&js) != nil {
+			continue
+		}
+		if c, err := storage.Unmarshal(js); err == nil {
+			add(c, isTenantArea(c))
+		}
+	}
+	return areas
+}
+
+// removeTenantObjects deletes a tenant's objects (see objectArea).
+func (h *TenantHost) removeTenantObjects(id string) deleteResult {
+	var res deleteResult
+	allowPrivate := false
+	if t, err := h.P.Tenant(id); err == nil {
+		allowPrivate = t.AllowPrivateTargets
+	}
+	for _, a := range h.tenantObjectAreas(id) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		cfg := a.cfg
+		if cfg.TenantManaged && !allowPrivate {
+			cfg.DialContext = netguard.DialContext
+		}
+		n, err := deleteObjects(ctx, h.openBackend, cfg, a.exclusive)
+		cancel()
+		res.Removed += n
+		if err != nil {
+			log.Printf("deleting tenant %s: objects in %s: %v", id, a.cfg.Describe(), err)
+			res.Failed = append(res.Failed, a.cfg.Describe()+": "+clip(err.Error(), 200))
+		}
+	}
+	return res
+}
+
+// deleteObjects removes every object of an exclusive area, or Sendora's
+// objects in a shared bucket, and returns how many were removed.
+func deleteObjects(ctx context.Context, open func(context.Context, storage.Config) (storage.Backend, error), cfg storage.Config, exclusive bool) (int, error) {
+	b, err := open(ctx, cfg)
+	if err != nil {
+		return 0, err
+	}
+	prefixes := []string{storage.FilePrefix, storage.BackupPrefix, storage.ProbePrefix}
+	if exclusive {
+		prefixes = []string{""}
+	}
+	n := 0
+	for _, p := range prefixes {
+		var keys []string
+		if err := b.List(ctx, p, func(i storage.Info) error { keys = append(keys, i.Key); return nil }); err != nil {
+			return n, err
+		}
+		for _, k := range keys {
+			if err := b.Delete(ctx, k); err != nil {
+				return n, err
+			}
+			n++
+		}
+	}
+	return n, nil
 }
 
 // deleteTenantData moves the tenant's directory aside (atomic) and removes it.

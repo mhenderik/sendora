@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"io/fs"
@@ -11,7 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mhenderik/sendora/internal/netguard"
 	"github.com/mhenderik/sendora/internal/platform"
+	"github.com/mhenderik/sendora/internal/storage"
 	"github.com/mhenderik/sendora/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -35,10 +38,19 @@ type TenantOptions struct {
 	// setting key (smtp_host, smtp_port, ...); used while the tenant has no SMTP
 	// server of its own. nil = none.
 	MailDefault func(key string) string
-	// Storage is the tenant's object storage choice from the platform database.
-	// Integration point for the storage backends (internal/platform/storage.go):
-	// not interpreted yet; the tenant's directory is the storage.
-	Storage *platform.StorageConfig
+	// Storage is the tenant's object storage choice from the platform database
+	// (internal/platform/storage.go) and DefaultStorage the backend it selects:
+	// the platform default with the tenant's prefix tenants/<id>/, the tenant's
+	// own bucket, or the local tenant directory. With Storage.TenantManaged the
+	// tenant's administrators may configure a bucket of their own instead
+	// (storage_* settings of the tenant, Admin -> Storage).
+	Storage        *platform.StorageConfig
+	DefaultStorage storage.Config
+	// PlatformStorage describes the platform default (for the tenant's screen).
+	PlatformStorage string
+	// AllowPrivateTargets switches the SSRF guard (internal/netguard) off for
+	// targets the tenant's administrators configure.
+	AllowPrivateTargets bool
 }
 
 type tenantState struct {
@@ -57,7 +69,59 @@ func NewTenantServer(st *store.Store, static fs.FS, version string, opts TenantO
 			srv, err = nil, errors.New("tenant server: "+strings.TrimSpace(strings.SplitN(errString(r), "\n", 2)[0]))
 		}
 	}()
+	if !opts.AllowPrivateTargets {
+		st.Backends().Guard = netguard.DialContext
+	}
 	return newServer(st, static, version, &tenantState{opts: opts, mailStop: make(chan struct{})}), nil
+}
+
+// guardTargets reports whether targets configured by this server's
+// administrators must pass the SSRF guard: tenants in multi-tenant mode,
+// unless the platform allows private targets for the tenant. Single-tenant
+// mode is unchanged.
+func (s *Server) guardTargets() bool {
+	return s.tenant != nil && !s.tenant.opts.AllowPrivateTargets
+}
+
+// checkTarget is the save-time SSRF check of a target (host, host:port or
+// URL) for a guarded tenant; nil when allowed or not guarded.
+func (s *Server) checkTarget(ctx context.Context, target string) error {
+	if !s.guardTargets() || strings.TrimSpace(target) == "" {
+		return nil
+	}
+	return netguard.CheckHost(ctx, netguard.HostOf(target))
+}
+
+// guardedTargetSettings are the settings naming a server the application
+// connects to; for a guarded tenant they must not point at the platform's
+// network (the storage endpoints are checked with the storage configuration).
+var guardedTargetSettings = []string{"smtp_host", "audit_forward_syslog", "audit_forward_webhook_url"}
+
+// validateTargetUpdates refuses, for a guarded tenant, changed target settings
+// that resolve to loopback, private, link-local, CGNAT or metadata addresses.
+// The same check runs again on every connection (DNS rebinding). It has
+// answered when it returns false.
+func (s *Server) validateTargetUpdates(w http.ResponseWriter, r *http.Request, updates map[string]string) bool {
+	if !s.guardTargets() {
+		return true
+	}
+	for _, k := range guardedTargetSettings {
+		v, ok := updates[k]
+		if !ok || v == s.St.Setting(k) {
+			continue
+		}
+		if err := s.checkTarget(r.Context(), v); err != nil {
+			jerr(w, 400, k+": "+err.Error())
+			return false
+		}
+	}
+	return true
+}
+
+// tenantStorageEditable reports whether this tenant's administrators may
+// configure their own storage (always true outside multi-tenant mode).
+func (s *Server) tenantStorageEditable() bool {
+	return s.tenant == nil || (s.tenant.opts.Storage != nil && s.tenant.opts.Storage.TenantManaged)
 }
 
 func errString(r any) string {

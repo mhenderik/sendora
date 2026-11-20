@@ -30,11 +30,14 @@ type gcsBackend struct {
 }
 
 func newGCS(ctx context.Context, c Config) (*gcsBackend, error) {
-	base := &http.Client{Transport: httpTransport()}
+	base := &http.Client{Transport: httpTransport(c)}
 	client := base
 	switch c.GCSAuth {
 	case GCSAuthServiceAcct:
-		creds, err := google.CredentialsFromJSONWithType(ctx, []byte(c.GCSCredentialsJSON), google.ServiceAccount, gcsScope)
+		// The token requests (token_uri of the key) go through base as well,
+		// so a tenant's key cannot point them at an internal address.
+		tokenCtx := context.WithValue(ctx, oauth2.HTTPClient, base)
+		creds, err := google.CredentialsFromJSONWithType(tokenCtx, []byte(c.GCSCredentialsJSON), google.ServiceAccount, gcsScope)
 		if err != nil {
 			return nil, errors.New("invalid GCS service account JSON key")
 		}

@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/mhenderik/sendora/internal/app"
+	"github.com/mhenderik/sendora/internal/dbcli"
 	"github.com/mhenderik/sendora/internal/store"
 )
 
@@ -21,6 +23,25 @@ import (
 var distFS embed.FS
 
 var version = "dev"
+
+// dispatchDBTool runs the database tool when the program was started as
+// sendora-db (argv[0]) or as "sendora db ...".
+func dispatchDBTool(args []string) (int, bool) {
+	if len(args) == 0 {
+		return 0, false
+	}
+	name := strings.TrimSuffix(filepath.Base(args[0]), ".exe")
+	if name == "sendora-db" {
+		return dbTool(args[1:]), true
+	}
+	if len(args) >= 2 && args[1] == "db" {
+		return dbTool(args[2:]), true
+	}
+	return 0, false
+}
+
+// dbTool is replaced in tests.
+var dbTool = dbcli.Main
 
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
@@ -30,6 +51,12 @@ func env(k, def string) string {
 }
 
 func main() {
+	// The offline database tool is part of this binary: "sendora db <command>",
+	// or "sendora-db <command>" through a link of that name (the image installs
+	// /usr/local/bin/sendora-db -> /sendora).
+	if code, ok := dispatchDBTool(os.Args); ok {
+		os.Exit(code)
+	}
 	// "sendora healthcheck": container HEALTHCHECK probe against the running server.
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		os.Exit(healthcheck())

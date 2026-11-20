@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/mhenderik/sendora/internal/platform"
+	"github.com/mhenderik/sendora/internal/storage"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -35,6 +37,13 @@ import (
 // Sign-in: username + password, then TOTP. A new administrator must enroll a
 // TOTP authenticator before anything else (sessions in the "enroll" stage can
 // only do that). Destructive actions need a fresh TOTP code (step-up).
+//
+// The owner of the platform may switch the authenticator requirement off
+// (platform_mfa_required=false, SENDORA_PLATFORM_MFA_REQUIRED): administrators
+// then sign in with their password only, may still enrol an authenticator, and
+// confirm destructive actions with their authenticator code when they have one
+// and otherwise with their password. A temporary password set offline
+// (sendora-db platform-admin-reset) only allows choosing a new password.
 
 const (
 	consoleCookie       = "sendora_platform"
@@ -102,13 +111,16 @@ func newPlatformConsole(h *TenantHost) *platformConsole {
 		r.Group(func(r chi.Router) {
 			r.Use(c.session("mfa", "enroll", "full"))
 			r.Get("/me", c.me)
+			r.Post("/password", c.changePassword)
 		})
 		r.Group(func(r chi.Router) {
 			r.Use(c.session("mfa"))
 			r.Post("/login/totp", c.loginTOTP)
 		})
 		r.Group(func(r chi.Router) {
-			r.Use(c.session("enroll"))
+			// Enrolment: required ("enroll") or voluntary ("full", when the
+			// platform does not require an authenticator).
+			r.Use(c.session("enroll", "full"))
 			r.Post("/mfa/begin", c.mfaBegin)
 			r.Post("/mfa/confirm", c.mfaConfirm)
 		})
@@ -128,6 +140,11 @@ func newPlatformConsole(h *TenantHost) *platformConsole {
 			r.Put("/tenants/{id}/primary-domain", c.setPrimaryDomain)
 			r.Get("/tenants/{id}/storage", c.getStorage)
 			r.Put("/tenants/{id}/storage", c.putStorage)
+			r.Post("/tenants/{id}/storage/test", c.testTenantStorage)
+			r.Put("/tenants/{id}/network", c.putNetwork)
+			r.Get("/storage", c.getPlatformStorage)
+			r.Put("/storage", c.putPlatformStorage)
+			r.Post("/storage/test", c.testPlatformStorage)
 			r.Get("/settings", c.getSettings)
 			r.Put("/settings", c.putSettings)
 			r.Get("/audit", c.audit)
@@ -320,6 +337,11 @@ func (c *platformConsole) session(stages ...string) func(http.Handler) http.Hand
 				jerr(w, 403, "complete the sign-in first")
 				return
 			}
+			// A temporary password (offline reset) only allows choosing a new one.
+			if cs.admin.MustChangePassword && r.URL.Path != "/api/platform/me" && r.URL.Path != "/api/platform/password" {
+				jerr(w, 403, "choose a new password first")
+				return
+			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), consoleCtxKey{}, cs)))
 		})
 	}
@@ -499,16 +521,82 @@ func (c *platformConsole) login(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 401, "invalid username or password")
 		return
 	}
-	stage := "mfa"
-	if !a.TOTPEnabled {
-		stage = "enroll"
-	}
+	c.h.P.NoteLoginSuccess(a.ID)
+	stage := c.stageAfterPassword(a)
 	if err := c.startSession(w, a.ID, stage); err != nil {
 		jerr(w, 500, "session failed")
 		return
 	}
-	c.h.P.Audit(a.ID, a.Username, "login_password_ok", "admin "+a.Username, "ok", "stage="+stage, ip)
-	jout(w, 200, map[string]any{"stage": stage})
+	detail := "stage=" + stage
+	if stage == "full" {
+		detail += " (authenticator not required by the platform)"
+		c.h.P.Audit(a.ID, a.Username, "login_ok", "admin "+a.Username, "ok", detail, ip)
+	} else {
+		c.h.P.Audit(a.ID, a.Username, "login_password_ok", "admin "+a.Username, "ok", detail, ip)
+	}
+	jout(w, 200, map[string]any{"stage": stage, "must_change_password": a.MustChangePassword})
+}
+
+// stageAfterPassword is the session stage after a correct password: TOTP or
+// enrolment while the platform requires an authenticator, otherwise full.
+func (c *platformConsole) stageAfterPassword(a *platform.Admin) string {
+	if !c.h.P.MFARequired() {
+		return "full"
+	}
+	if !a.TOTPEnabled {
+		return "enroll"
+	}
+	return "mfa"
+}
+
+// changePassword: POST /api/platform/password {current, password}. Required
+// after an offline reset (temporary password); also the administrator's own
+// password change. The other sessions end; this one continues in its stage.
+func (c *platformConsole) changePassword(w http.ResponseWriter, r *http.Request) {
+	cs := consoleFrom(r)
+	var b struct{ Current, Password string }
+	if decodeLoose(r, &b) != nil {
+		jerr(w, 400, "invalid request")
+		return
+	}
+	if !c.limiter.allow("password:"+strconv.FormatInt(cs.admin.ID, 10), 10, time.Minute) {
+		jerr(w, 429, "too many attempts; try again later")
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(cs.admin.PasswordHash), []byte(b.Current)) != nil {
+		c.h.P.NoteLoginFailure(cs.admin.ID, consoleLoginLimit, consoleLockDuration)
+		c.record(r, "password_change_failed", "admin "+cs.admin.Username, "failed", "wrong current password")
+		jerr(w, 403, "the current password is wrong")
+		return
+	}
+	if b.Password == b.Current {
+		jerr(w, 400, "choose a password different from the current one")
+		return
+	}
+	if msg := c.checkPassword(b.Password, cs.admin.Username); msg != "" {
+		jerr(w, 400, msg)
+		return
+	}
+	h, err := bcrypt.GenerateFromPassword([]byte(b.Password), hashCost)
+	if err != nil {
+		jerr(w, 400, "invalid password")
+		return
+	}
+	if err := c.h.P.SetPassword(cs.admin.ID, string(h)); err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	detail := ""
+	if cs.admin.MustChangePassword {
+		detail = "temporary password replaced"
+	}
+	c.record(r, "password_changed", "admin "+cs.admin.Username, "ok", detail)
+	stage := cs.sess.Stage
+	if err := c.startSession(w, cs.admin.ID, stage); err != nil {
+		jerr(w, 500, "session failed")
+		return
+	}
+	jout(w, 200, map[string]any{"ok": true, "stage": stage})
 }
 
 // totpCheck verifies a code against an administrator's active TOTP secret
@@ -559,7 +647,8 @@ func (c *platformConsole) logout(w http.ResponseWriter, r *http.Request) {
 
 func (c *platformConsole) me(w http.ResponseWriter, r *http.Request) {
 	cs := consoleFrom(r)
-	jout(w, 200, map[string]any{"admin": cs.admin, "stage": cs.sess.Stage})
+	jout(w, 200, map[string]any{"admin": cs.admin, "stage": cs.sess.Stage, "mfa_required": c.h.P.MFARequired(),
+		"must_change_password": cs.admin.MustChangePassword})
 }
 
 func (c *platformConsole) mfaBegin(w http.ResponseWriter, r *http.Request) {
@@ -601,12 +690,23 @@ func (c *platformConsole) mfaConfirm(w http.ResponseWriter, r *http.Request) {
 	jout(w, 200, map[string]any{"stage": "full"})
 }
 
-// stepUp requires a fresh TOTP code in the request (destructive actions).
+// stepUp requires a fresh confirmation in the request (destructive actions):
+// a current authenticator code, or, for an administrator without an
+// authenticator while the platform does not require one, the password.
 func (c *platformConsole) stepUp(w http.ResponseWriter, r *http.Request, code string) bool {
 	cs := consoleFrom(r)
 	if !c.limiter.allow("stepup:"+strconv.FormatInt(cs.admin.ID, 10), 10, time.Minute) {
 		jerr(w, 429, "too many attempts; try again later")
 		return false
+	}
+	if !cs.admin.TOTPEnabled && !c.h.P.MFARequired() {
+		if code == "" || bcrypt.CompareHashAndPassword([]byte(cs.admin.PasswordHash), []byte(code)) != nil {
+			c.h.P.NoteLoginFailure(cs.admin.ID, consoleLoginLimit, consoleLockDuration)
+			c.record(r, "stepup_failed", "admin "+cs.admin.Username, "failed", "password")
+			jerr(w, 403, "your password is required to confirm this action")
+			return false
+		}
+		return true
 	}
 	if !c.totpCheck(cs.admin, code) {
 		c.record(r, "stepup_failed", "admin "+cs.admin.Username, "failed", "")
@@ -717,8 +817,8 @@ func (c *platformConsole) getTenant(w http.ResponseWriter, r *http.Request) {
 		v.VerifyToken = ""
 		dv = append(dv, v)
 	}
-	storage, _ := c.h.P.MaskedStorage(t.ID)
-	jout(w, 200, map[string]any{"tenant": c.view(t), "subdomain": platform.SubdomainHost(t.Slug, c.h.baseHost), "domains": dv, "storage": storage})
+	sv, _ := c.storageView(t)
+	jout(w, 200, map[string]any{"tenant": c.view(t), "subdomain": platform.SubdomainHost(t.Slug, c.h.baseHost), "domains": dv, "storage": sv})
 }
 
 func (c *platformConsole) renameTenant(w http.ResponseWriter, r *http.Request) {
@@ -781,7 +881,12 @@ func (c *platformConsole) deleteTenant(w http.ResponseWriter, r *http.Request) {
 	if t == nil {
 		return
 	}
-	var b struct{ Confirm, Code string }
+	var b struct {
+		Confirm, Code string
+		// Force deletes the tenant even when objects in object storage could
+		// not be removed (an unreachable own bucket); they are listed in the audit log.
+		Force bool
+	}
 	if decodeLoose(r, &b) != nil {
 		jerr(w, 400, "invalid request")
 		return
@@ -793,13 +898,18 @@ func (c *platformConsole) deleteTenant(w http.ResponseWriter, r *http.Request) {
 	if !c.stepUp(w, r, b.Code) {
 		return
 	}
-	if err := c.h.DeleteTenant(t.ID); err != nil {
-		c.record(r, "tenant_delete_failed", tenantTarget(t), "failed", clip(err.Error(), 200))
+	res, err := c.h.DeleteTenant(t.ID, b.Force)
+	if err != nil {
+		c.record(r, "tenant_delete_failed", tenantTarget(t), "failed", clip(err.Error(), 300))
 		jerr(w, 409, err.Error())
 		return
 	}
-	c.record(r, "tenant_deleted", tenantTarget(t), "ok", "database, files and backups removed")
-	jout(w, 200, map[string]any{"ok": true})
+	detail := fmt.Sprintf("database, files and backups removed; %d object(s) removed from object storage", res.Removed)
+	if len(res.Failed) > 0 {
+		detail += "; NOT removed (forced): " + strings.Join(res.Failed, "; ")
+	}
+	c.record(r, "tenant_deleted", tenantTarget(t), "ok", clip(detail, 1000))
+	jout(w, 200, map[string]any{"ok": true, "objects_removed": res.Removed, "objects_failed": res.Failed})
 }
 
 // ---------- domains ----------
@@ -913,41 +1023,320 @@ func (c *platformConsole) setPrimaryDomain(w http.ResponseWriter, r *http.Reques
 	jout(w, 200, map[string]any{"ok": true})
 }
 
-// ---------- storage hook ----------
+// ---------- storage ----------
+
+// storageTestTimeout bounds a connection test from the console.
+const storageTestTimeout = 30 * time.Second
+
+// probeStorage opens cfg and writes, reads and deletes a probe object.
+func (c *platformConsole) probeStorage(ctx context.Context, cfg storage.Config) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, storageTestTimeout)
+	defer cancel()
+	b, err := c.h.openBackend(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	return storage.Probe(ctx, b)
+}
+
+// storageForm reads {mode, settings, tenant_managed} (settings: storage_*).
+type storageForm struct {
+	Mode          string            `json:"mode"`
+	Settings      map[string]string `json:"settings"`
+	TenantManaged bool              `json:"tenant_managed"`
+}
+
+func readStorageForm(r *http.Request) (storageForm, error) {
+	var raw struct {
+		Mode          string         `json:"mode"`
+		Settings      map[string]any `json:"settings"`
+		TenantManaged bool           `json:"tenant_managed"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		return storageForm{}, err
+	}
+	f := storageForm{Mode: raw.Mode, TenantManaged: raw.TenantManaged, Settings: map[string]string{}}
+	for k, v := range raw.Settings {
+		switch x := v.(type) {
+		case string:
+			f.Settings[k] = x
+		case bool:
+			f.Settings[k] = strconv.FormatBool(x)
+		default:
+			return storageForm{}, fmt.Errorf("%s: invalid value", k)
+		}
+	}
+	return f, nil
+}
+
+// storageView is what the console shows for a tenant: its choice (secrets
+// masked), the resulting location and the platform default.
+func (c *platformConsole) storageView(t *platform.Tenant) (map[string]any, error) {
+	sc, err := c.h.P.Storage(t.ID)
+	if err != nil {
+		return nil, err
+	}
+	eff := c.h.P.Resolve(t.ID, sc)
+	def := c.h.P.PlatformStorage()
+	effPrefix := ""
+	if sc.Mode == platform.StorageModePlatform && def.Backend != storage.KindLocal {
+		effPrefix = eff.Prefix
+	}
+	return map[string]any{
+		"choice":           sc.View(),
+		"effective":        eff.Describe(),
+		"effective_prefix": effPrefix,
+		"platform_default": def.Describe(),
+		"platform_backend": def.Backend,
+	}, nil
+}
 
 func (c *platformConsole) getStorage(w http.ResponseWriter, r *http.Request) {
 	t := c.tenantParam(w, r)
 	if t == nil {
 		return
 	}
-	sc, err := c.h.P.MaskedStorage(t.ID)
+	v, err := c.storageView(t)
 	if err != nil {
 		jerr(w, 404, "not found")
 		return
 	}
-	jout(w, 200, sc)
+	jout(w, 200, v)
 }
 
+// tenantStorageConfig validates a form for a tenant and returns the merged
+// own-bucket settings and the backend configuration they select.
+func (c *platformConsole) tenantStorageConfig(t *platform.Tenant, f storageForm) (*platform.StorageConfig, map[string]string, storage.Config, error) {
+	prev, err := c.h.P.Storage(t.ID)
+	if err != nil {
+		return nil, nil, storage.Config{}, err
+	}
+	if f.Mode != platform.StorageModePlatform && f.Mode != platform.StorageModeOwn {
+		return nil, nil, storage.Config{}, errors.New("mode must be platform or own")
+	}
+	settings := prev.Config
+	if f.Mode == platform.StorageModeOwn {
+		if settings, err = platform.MergeStorageSettings(prev.Config, f.Settings); err != nil {
+			return nil, nil, storage.Config{}, err
+		}
+	}
+	next := &platform.StorageConfig{Mode: f.Mode, Config: settings, TenantManaged: f.TenantManaged}
+	return prev, settings, c.h.P.Resolve(t.ID, next), nil
+}
+
+// putStorage: PUT /api/platform/tenants/{id}/storage. A changed own bucket is
+// tested (probe object) before it is saved; the tenant is reopened so its
+// server uses the new location for new files.
 func (c *platformConsole) putStorage(w http.ResponseWriter, r *http.Request) {
 	t := c.tenantParam(w, r)
 	if t == nil {
 		return
 	}
-	var b struct {
-		Mode   string          `json:"mode"`
-		Prefix string          `json:"prefix"`
-		Config json.RawMessage `json:"config"`
-	}
-	if json.NewDecoder(r.Body).Decode(&b) != nil {
+	f, err := readStorageForm(r)
+	if err != nil {
 		jerr(w, 400, "invalid request")
 		return
 	}
-	if err := c.h.P.SetStorage(t.ID, b.Mode, b.Prefix, b.Config); err != nil {
+	prev, settings, cfg, err := c.tenantStorageConfig(t, f)
+	if err != nil {
 		jerr(w, 400, err.Error())
 		return
 	}
-	c.record(r, "tenant_storage_changed", tenantTarget(t), "ok", "mode="+b.Mode)
-	c.tenantEvent(t, r, "tenant_storage_changed", "mode="+b.Mode)
+	prevCfg := c.h.P.Resolve(t.ID, prev)
+	prevJS, _ := prevCfg.Marshal()
+	nextJS, _ := cfg.Marshal()
+	if f.Mode == platform.StorageModeOwn && prevJS != nextJS {
+		if err := c.probeStorage(r.Context(), cfg); err != nil {
+			c.record(r, "tenant_storage_test_failed", tenantTarget(t), "failed", clip(cfg.Describe()+": "+err.Error(), 300))
+			jerr(w, 400, "storage connection test failed; the settings were not saved: "+clip(err.Error(), 300))
+			return
+		}
+	}
+	if err := c.h.P.SetStorage(t.ID, f.Mode, settings, f.TenantManaged); err != nil {
+		jerr(w, 400, err.Error())
+		return
+	}
+	detail := fmt.Sprintf("mode=%s location=%s tenant_managed=%t", f.Mode, cfg.Describe(), f.TenantManaged)
+	if prev.TenantManaged != f.TenantManaged {
+		detail += fmt.Sprintf(" (tenant may configure its own storage: %t -> %t)", prev.TenantManaged, f.TenantManaged)
+	}
+	c.record(r, "tenant_storage_changed", tenantTarget(t), "ok", clip(detail, 400))
+	c.tenantEvent(t, r, "tenant_storage_changed", clip(detail, 400))
+	c.h.reopen(t.ID)
+	v, _ := c.storageView(t)
+	jout(w, 200, v)
+}
+
+// testTenantStorage: POST /api/platform/tenants/{id}/storage/test with an
+// unsaved form; blank secrets keep the stored ones.
+func (c *platformConsole) testTenantStorage(w http.ResponseWriter, r *http.Request) {
+	t := c.tenantParam(w, r)
+	if t == nil {
+		return
+	}
+	f, err := readStorageForm(r)
+	if err != nil {
+		jerr(w, 400, "invalid request")
+		return
+	}
+	_, _, cfg, err := c.tenantStorageConfig(t, f)
+	if err != nil {
+		jerr(w, 400, err.Error())
+		return
+	}
+	c.answerProbe(w, r, cfg, "tenant_storage_tested", tenantTarget(t))
+}
+
+func (c *platformConsole) answerProbe(w http.ResponseWriter, r *http.Request, cfg storage.Config, action, target string) {
+	if cfg.Backend == storage.KindLocal {
+		jout(w, 200, map[string]any{"ok": true, "description": cfg.Describe(), "ms": 0})
+		return
+	}
+	start := time.Now()
+	err := c.probeStorage(r.Context(), cfg)
+	ms := time.Since(start).Milliseconds()
+	if err != nil {
+		c.record(r, action, target, "failed", clip(cfg.Describe()+": "+err.Error(), 300))
+		jout(w, 200, map[string]any{"ok": false, "error": clip(err.Error(), 400), "description": cfg.Describe(), "ms": ms})
+		return
+	}
+	c.record(r, action, target, "ok", cfg.Describe())
+	jout(w, 200, map[string]any{"ok": true, "description": cfg.Describe(), "ms": ms})
+}
+
+// managedStorage lists the platform storage settings set by the environment,
+// under their storage_* names.
+func (c *platformConsole) managedStorage() []string {
+	out := []string{}
+	for k := range c.h.cfg.Managed {
+		if platform.IsStorageSetting(k) {
+			out = append(out, strings.TrimPrefix(k, "platform_"))
+		}
+	}
+	return out
+}
+
+// getPlatformStorage: GET /api/platform/storage, the platform default backend.
+func (c *platformConsole) getPlatformStorage(w http.ResponseWriter, r *http.Request) {
+	all := c.h.P.StorageSettings()
+	settings, set := map[string]string{}, map[string]bool{}
+	for k, v := range all {
+		if storage.SettingSecret(k) {
+			set[k], settings[k] = v != "", ""
+			continue
+		}
+		settings[k] = v
+	}
+	def := c.h.P.PlatformStorage()
+	jout(w, 200, map[string]any{"settings": settings, "set": set, "managed": c.managedStorage(), "description": def.Describe(),
+		"tenant_prefix": platform.TenantPrefix("<tenant id>")})
+}
+
+func (c *platformConsole) platformStorageNext(f storageForm) (map[string]string, storage.Config, error) {
+	in := map[string]string{}
+	for k, v := range f.Settings {
+		if c.h.cfg.Managed["platform_"+k] {
+			continue
+		}
+		in[k] = v
+	}
+	next, err := platform.MergeStorageSettings(c.h.P.StorageSettings(), in)
+	if err != nil {
+		return nil, storage.Config{}, err
+	}
+	cfg := storage.FromSettings(func(k string) string { return next[k] })
+	if err := cfg.Validate(); err != nil {
+		return nil, storage.Config{}, err
+	}
+	return next, cfg, nil
+}
+
+// putPlatformStorage: PUT /api/platform/storage {settings}. A changed remote
+// configuration is tested first; open tenants are reopened so new files go to
+// the new location (earlier files stay readable where they are).
+func (c *platformConsole) putPlatformStorage(w http.ResponseWriter, r *http.Request) {
+	f, err := readStorageForm(r)
+	if err != nil {
+		jerr(w, 400, "invalid request")
+		return
+	}
+	next, cfg, err := c.platformStorageNext(f)
+	if err != nil {
+		jerr(w, 400, err.Error())
+		return
+	}
+	cur := c.h.P.PlatformStorage()
+	curJS, _ := cur.Marshal()
+	nextJS, _ := cfg.Marshal()
+	if cfg.Backend != storage.KindLocal && curJS != nextJS {
+		if err := c.probeStorage(r.Context(), cfg); err != nil {
+			c.record(r, "platform_storage_test_failed", "storage", "failed", clip(cfg.Describe()+": "+err.Error(), 300))
+			jerr(w, 400, "storage connection test failed; the settings were not saved: "+clip(err.Error(), 300))
+			return
+		}
+	}
+	changed, err := c.h.P.PutStorageSettings(next, c.h.cfg.Managed)
+	if err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	if len(changed) > 0 {
+		c.record(r, "platform_storage_changed", "storage", "ok", clip(cur.Describe()+" -> "+cfg.Describe()+"; keys="+strings.Join(changed, ","), 400))
+		c.h.reopenAll()
+	}
+	jout(w, 200, map[string]any{"ok": true, "description": cfg.Describe()})
+}
+
+// testPlatformStorage: POST /api/platform/storage/test with an unsaved form.
+func (c *platformConsole) testPlatformStorage(w http.ResponseWriter, r *http.Request) {
+	f, err := readStorageForm(r)
+	if err != nil {
+		jerr(w, 400, "invalid request")
+		return
+	}
+	_, cfg, err := c.platformStorageNext(f)
+	if err != nil {
+		jerr(w, 400, err.Error())
+		return
+	}
+	c.answerProbe(w, r, cfg, "platform_storage_tested", "storage")
+}
+
+// ---------- network targets (SSRF guard) ----------
+
+// putNetwork: PUT /api/platform/tenants/{id}/network {allow_private_targets,
+// code}. Allowing a tenant's administrators to reach private, loopback and
+// link-local addresses needs a step-up and is audited on both sides.
+func (c *platformConsole) putNetwork(w http.ResponseWriter, r *http.Request) {
+	t := c.tenantParam(w, r)
+	if t == nil {
+		return
+	}
+	var b struct {
+		AllowPrivateTargets bool
+		Code                string
+	}
+	if decodeLoose(r, &b) != nil {
+		jerr(w, 400, "invalid request")
+		return
+	}
+	if b.AllowPrivateTargets == t.AllowPrivateTargets {
+		jout(w, 200, map[string]any{"ok": true})
+		return
+	}
+	if !c.stepUp(w, r, b.Code) {
+		return
+	}
+	if err := c.h.P.SetAllowPrivateTargets(t.ID, b.AllowPrivateTargets); err != nil {
+		jerr(w, 500, "database error")
+		return
+	}
+	detail := fmt.Sprintf("allow_private_targets %t -> %t", t.AllowPrivateTargets, b.AllowPrivateTargets)
+	c.record(r, "tenant_network_policy_changed", tenantTarget(t), "ok", detail)
+	c.tenantEvent(t, r, "tenant_network_policy_changed", detail)
 	c.h.reopen(t.ID)
 	jout(w, 200, map[string]any{"ok": true})
 }
@@ -970,11 +1359,18 @@ func (c *platformConsole) putSettings(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "invalid request")
 		return
 	}
+	// "code": the step-up for platform_mfa_required (not a setting).
+	code, _ := raw["code"].(string)
+	delete(raw, "code")
 	for k, v := range raw {
 		switch x := v.(type) {
 		case string:
 			in[k] = x
 		case float64:
+			if x != math.Trunc(x) || math.Abs(x) > 1<<53 {
+				jerr(w, 400, k+": invalid value")
+				return
+			}
 			in[k] = strconv.FormatInt(int64(x), 10)
 		case bool:
 			in[k] = strconv.FormatBool(x)
@@ -983,12 +1379,40 @@ func (c *platformConsole) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Switching the authenticator requirement is the platform owner's
+	// decision: it needs a fresh confirmation and has its own audit record.
+	oldMFA := c.h.P.MFARequired()
+	mfaChange := false
+	if v, ok := in["platform_mfa_required"]; ok {
+		norm, err := platform.NormalizeSetting("platform_mfa_required", v)
+		if err != nil {
+			jerr(w, 400, "platform_mfa_required: "+err.Error())
+			return
+		}
+		in["platform_mfa_required"] = norm
+		mfaChange = (norm == "true") != oldMFA
+	}
+	if mfaChange && !c.h.cfg.Managed["platform_mfa_required"] && !c.stepUp(w, r, code) {
+		return
+	}
 	changed, err := c.h.P.PutSettings(in, c.h.cfg.Managed)
 	if err != nil {
 		jerr(w, 400, err.Error())
 		return
 	}
 	c.record(r, "platform_settings_changed", "settings", "ok", "keys="+strings.Join(changed, ","))
+	if mfaChange {
+		newMFA := c.h.P.MFARequired()
+		detail := fmt.Sprintf("platform_mfa_required %t -> %t", oldMFA, newMFA)
+		if !newMFA {
+			detail += "; platform administrators can sign in with a password only"
+		} else {
+			// Sessions that were opened without a second factor end.
+			c.h.P.EndSessionsWithoutMFA()
+			detail += "; sessions of administrators without an authenticator were ended"
+		}
+		c.record(r, "platform_mfa_requirement_changed", "settings", "ok", detail)
+	}
 	jout(w, 200, map[string]any{"ok": true})
 }
 

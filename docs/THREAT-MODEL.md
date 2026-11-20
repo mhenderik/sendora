@@ -2,7 +2,7 @@
 
 What Sendora protects, against whom, what it does not protect, and where the checks are. It is the starting point for a security audit; the file format is specified separately in [FILE-FORMAT.md](FILE-FORMAT.md).
 
-Status: written for 0.1.5 from the code and from independent code reviews; updated for the object storage of 0.2.0 (in development, [STORAGE.md](STORAGE.md)). Sendora has not been audited by an independent party yet.
+Status: written for 0.1.5 from the code and from independent code reviews; updated for the object storage and multi-tenancy of 0.2.0 (in development, [STORAGE.md](STORAGE.md), [MULTI-TENANT.md](MULTI-TENANT.md)). Sendora has not been audited by an independent party yet.
 
 ## 1. Assets
 
@@ -30,7 +30,7 @@ Status: written for 0.1.5 from the code and from independent code reviews; updat
 | Disk/backup thief | Has a copy of the volume or a backup, but not the key |
 | Object storage provider (0.2.0, optional) | Stores, serves and may read, delete, replace or roll back the objects in the bucket; sees access patterns. Does not have the key |
 | Network attacker | Between browser and server; Sendora expects TLS in front |
-| Platform administrator (multi-tenant mode, 0.2.0) | Signs in to the platform console (password + TOTP): creates, suspends and deletes tenants, sets quotas, domains and storage configuration. **Must not read any tenant's users, shares, files or audit details**; sees counts only |
+| Platform administrator (multi-tenant mode, 0.2.0) | Signs in to the platform console (password + TOTP; TOTP can be switched off by the platform owner): creates, suspends and deletes tenants, sets quotas, domains and storage configuration. **Must not read any tenant's users, shares, files or audit details**; sees counts only |
 | Tenant administrator / user of another tenant | Full rights in their own tenant; must gain nothing in any other tenant or in the console |
 
 ## 3. Trust boundaries and assumptions
@@ -66,7 +66,10 @@ Multi-tenant mode is optional; these properties apply only with `SENDORA_MULTI_T
 | Files and audit chains of A cannot be decrypted or forged with B's keys; WebAuthn RP IDs differ | per-tenant root key (`store.openStoreRoot`) | `TestMTTenantIsolation` |
 | A request reaches a tenant only through its host; unknown hosts get an identical plain 404; `X-Forwarded-Host` only from trusted proxies | `TenantHost.ServeHTTP`, `requestHost` | `TestMTUnknownHostsArePlain404`, `TestMTForwardedHostOnlyFromTrustedProxies` |
 | The console API exists only on `admin.<base>`; tenant tokens are not accepted there; console cookies are host-only and useless on tenant hosts | `mt_console.go` | `TestMTSuspendedTenantAndConsoleSeparation`, `TestMTConsoleLifecycle` |
-| Platform administrators need TOTP; codes cannot be replayed; deleting a tenant or managing administrators needs a fresh code | `mt_console.go` | `TestMTConsoleLifecycle` |
+| Platform administrators need TOTP (default; `platform_mfa_required`); codes cannot be replayed; deleting a tenant or managing administrators needs a fresh code (or, without an authenticator while the platform does not require one, the password). Switching the requirement needs a fresh confirmation and is audited; switching it on ends sessions without a second factor | `mt_console.go` | `TestMTConsoleLifecycle`, `TestMTPlatformMFASwitch` |
+| An offline reset of a platform administrator (`sendora-db platform-admin-reset`) is audited; a temporary password only allows choosing a new one | `internal/dbcli/platform_admin.go`, console session middleware | `TestPlatformAdminResetCommand`, `TestMTTemporaryPasswordMustBeChanged` |
+| Tenants sharing the platform's bucket write under their own fixed prefix `tenants/<id>/`; each tenant's backend only sees its prefix; objects are encrypted with the tenant's key; deleting a tenant removes its prefix | `platform.Resolve`, `TenantHost.removeTenantObjects` | `TestMTObjectStoragePerTenantOnSharedBucket` (MinIO in CI), `TestTenantStorageResolveAndMask` |
+| Targets a tenant administrator configures (SMTP, OIDC issuer, audit webhook/syslog, own storage endpoint) cannot reach loopback, private, link-local, CGNAT or metadata addresses: checked when saved and by a dialer on every connection (DNS rebinding); tenant-managed storage cannot use the server's ambient cloud credentials | `internal/netguard`, `Server.guardTargets`, `storage.Config.ValidateTenantManaged` | `TestDialerRefusesLoopbackAtConnectTime`, `TestMTTargetGuardOnSave`, `TestMTTenantManagedStorageAndGuard` |
 | The console shows counts only | `platformConsole.view` (no tenant tables are read) | `TestMTConsoleLifecycle` |
 | Quotas (users, storage) cannot be bypassed by another code path | trigger `tenant_user_limit`, upload admission | `TestMTQuotas` |
 | Suspended tenants are not served | `TenantHost.ServeHTTP` | `TestMTSuspendedTenantAndConsoleSeparation` |
@@ -77,6 +80,9 @@ Residual risks of multi-tenant mode:
 - **One process**: a memory-safety or logic bug in the process could cross tenants; tenants share CPU, memory and the process's file descriptors. A busy tenant can slow others.
 - **The host operator holds the master key** and can decrypt every tenant offline. Platform administrators (console) cannot; the operator (shell, key file) can.
 - **One-time setup links**: without SMTP the console shows the first tenant administrator's set-password link once; whoever sees it could claim that account (it is recorded in both audit logs and the address is only verified by using the link). Configure the platform SMTP server to avoid this.
+- **Platform MFA switched off**: with `platform_mfa_required=false` a stolen or guessed console password controls every tenant (create, delete, storage). The default is on; switching it off is the owner's decision and is audited.
+- **Allowed private targets**: a tenant for which the platform allows private network targets can make the server connect to internal addresses (SMTP, OIDC, audit forwarding, storage). Allow it only for trusted tenants; it is audited.
+- **Shared bucket**: tenants on the platform default share one bucket and its credentials, held by the process. Isolation relies on the per-tenant prefix in the server and on per-tenant encryption, not on bucket policies; an operator who needs provider-side separation configures an own bucket per tenant.
 - **Custom domains** are trusted after a DNS TXT check; a domain whose DNS is later taken over keeps routing to the tenant until it is removed in the console.
 - **Outbound requests chosen by tenant administrators** (SMTP host, OIDC issuer, audit webhook/syslog) may target private (RFC 1918) addresses, as in single-tenant mode (loopback, link-local and metadata addresses are refused). In a shared platform this lets a tenant administrator probe the platform's internal network; restrict egress with a network policy. These requests cannot reach another tenant: the process routes only by host name and answers a bare IP with 404.
 - **Imported tenants** keep the single-tenant key as their file/audit root (documented choice); if that key differs from the master key it is stored in the encrypted platform database.

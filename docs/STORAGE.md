@@ -171,6 +171,29 @@ Share files are still not part of a database backup. With an object store, prote
 - Workload identity needs the usual setup: an annotated ServiceAccount (IRSA `eks.amazonaws.com/role-arn`, Azure `azure.workload.identity/client-id` plus the pod label `azure.workload.identity/use: "true"`, GKE `iam.gke.io/gcp-service-account`). Azure and GCS workload identity also need egress to their token endpoints (443) and, for GKE, to the metadata server, which the example policy blocks (169.254.0.0/16): add a rule for `169.254.169.254/32` port 80 (GKE metadata server) only when you use it.
 - With an object store the persistent volume only holds the database, local backups and temporary upload/download data; size it for the largest concurrent uploads and verified downloads.
 
-## 11. Design notes for multi-tenancy (planned)
+## 11. Multi-tenant mode
 
-Release 0.2.0 phase 2 will add tenants with their own SQLCipher databases. The storage layer is prepared for it: a storage configuration is a value (`storage.Config`) with a prefix, keys are relative to that prefix, and locations are recorded per database. A tenant can then use the platform default with its own prefix (`Config.WithPrefix("tenants/<id>/")`) or a bucket of its own, without changes to the backends.
+In multi-tenant mode ([MULTI-TENANT.md](MULTI-TENANT.md) §8) the platform decides
+where each tenant's files go; `SENDORA_STORAGE_*` is ignored there.
+
+- **Platform default**: configured in the platform console (*Platform settings →
+  Default storage*, with *Test connection*) or with `SENDORA_PLATFORM_STORAGE_*`
+  (the variables of this page with `PLATFORM_` in front). A tenant on the default
+  writes under `<platform prefix>tenants/<tenant id>/` (`Config.WithPrefix`), so
+  tenants share the bucket but never a key space. Each tenant's backend sees only
+  its prefix, and every object is encrypted with that tenant's own file key.
+- **Tenant's own bucket**: entered per tenant in the console (same fields and
+  validation). It may not overlap the platform's `tenants/` area or another
+  tenant's own bucket.
+- **Tenant-managed**: when the platform allows it per tenant, the tenant's
+  administrators use Admin → Storage themselves. Only explicit credentials are
+  accepted (no AWS default chain/IRSA, Azure managed or workload identity, or
+  Google application default credentials: those are the platform's), and the
+  endpoint must not resolve to loopback, private, link-local, CGNAT or metadata
+  addresses (checked when saved and on every connection, unless the platform
+  allows private targets for the tenant). Otherwise tenant administrators see
+  their storage read-only.
+- The migration job, remote backup copies, the deletion queue and
+  `sendora-db verify-files`/`storage-migrate` (with `-tenant <id>`) work per
+  tenant. Deleting a tenant removes its prefix in the platform default and
+  Sendora's objects (`files/`, `backups/`, `probe/`) in its own bucket.

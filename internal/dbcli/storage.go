@@ -1,4 +1,4 @@
-package main
+package dbcli
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mhenderik/sendora/internal/netguard"
+	"github.com/mhenderik/sendora/internal/platform"
 	"github.com/mhenderik/sendora/internal/storage"
 	"github.com/mhenderik/sendora/internal/store"
 )
@@ -44,7 +46,7 @@ func storageSetting(st *store.Store) func(string) string {
 // deletes the source: the command-line form of Admin -> Storage ->
 // Migrate. Stop the server first, or accept that a download of a file that is
 // being moved at that moment may fail.
-func storageMigrate(source, dataDir string, key []byte, dryRun bool) error {
+func storageMigrate(source, dataDir string, key []byte, dryRun bool, tc tenantContext) error {
 	want, err := store.DBPath(dataDir)
 	if err != nil {
 		return err
@@ -54,12 +56,24 @@ func storageMigrate(source, dataDir string, key []byte, dryRun bool) error {
 	if a != b {
 		return fmt.Errorf("storage-migrate: -source must be the database of -data-dir (%s)", want)
 	}
-	st, err := store.OpenEncrypted(dataDir, key, false)
+	var st *store.Store
+	if tc.id != "" {
+		st, err = store.OpenTenant(dataDir, key, tc.root, false)
+	} else {
+		st, err = store.OpenEncrypted(dataDir, key, false)
+	}
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	cfg := storage.FromSettings(storageSetting(st))
+	var cfg storage.Config
+	if tc.id != "" {
+		if cfg, err = tenantStorage(st, dataDir, tc); err != nil {
+			return err
+		}
+	} else {
+		cfg = storage.FromSettings(storageSetting(st))
+	}
 	cfg.LocalRoot = dataDir
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("storage configuration: %v", err)
@@ -117,4 +131,50 @@ func storageMigrate(source, dataDir string, key []byte, dryRun bool) error {
 		return fmt.Errorf("storage-migrate: %d file(s) failed; they stay readable in their old location", stats.Failed)
 	}
 	return nil
+}
+
+// tenantContext identifies a tenant of a multi-tenant installation (-tenant).
+type tenantContext struct {
+	id           string
+	master, root []byte
+}
+
+// tenantStorage is the storage a tenant's server would use: what the platform
+// assigned (its prefix in the platform default or its own bucket), or the
+// tenant's own configuration when the platform lets the tenant manage it. The
+// platform database is found two levels above the tenant's directory
+// (DATA_DIR/tenants/<id>).
+func tenantStorage(st *store.Store, tenantDir string, tc tenantContext) (storage.Config, error) {
+	abs, err := filepath.Abs(tenantDir)
+	if err != nil {
+		return storage.Config{}, err
+	}
+	if filepath.Base(abs) != tc.id {
+		return storage.Config{}, fmt.Errorf("storage-migrate: -data-dir must be the tenant's directory DATA_DIR/tenants/%s", tc.id)
+	}
+	platformDir := filepath.Dir(filepath.Dir(abs))
+	p, err := platform.Open(platformDir, tc.master, false)
+	if err != nil {
+		return storage.Config{}, fmt.Errorf("platform database: %w", err)
+	}
+	defer p.Close()
+	t, err := p.Tenant(tc.id)
+	if err != nil {
+		return storage.Config{}, fmt.Errorf("tenant %s not found in the platform database", tc.id)
+	}
+	sc, err := p.Storage(tc.id)
+	if err != nil {
+		return storage.Config{}, err
+	}
+	if !t.AllowPrivateTargets {
+		// The SSRF guard of the tenant's server applies offline too.
+		st.Backends().Guard = netguard.DialContext
+	}
+	if sc.TenantManaged {
+		if own := storage.FromSettings(st.Setting); own.Backend != storage.KindLocal {
+			own.TenantManaged = true
+			return own, nil
+		}
+	}
+	return p.Resolve(tc.id, sc), nil
 }

@@ -24,7 +24,7 @@ type azureBackend struct {
 
 func newAzure(c Config) (*azureBackend, error) {
 	opts := &azblob.ClientOptions{ClientOptions: azcore.ClientOptions{
-		Transport: &http.Client{Transport: httpTransport()},
+		Transport: &http.Client{Transport: httpTransport(c)},
 		Retry:     policy.RetryOptions{MaxRetries: 4},
 	}}
 	serviceURL := c.azureServiceURL()

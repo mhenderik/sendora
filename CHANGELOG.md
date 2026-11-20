@@ -66,6 +66,31 @@ unchanged** (same layout, no migration needed).
   (it reads and migrates files in object stores). Image size (local build): 126 MB -> 147 MB
   uncompressed, about 39.5 MiB -> 45.8 MiB compressed. The Google Cloud Storage backend uses the
   JSON API with `golang.org/x/oauth2/google` instead of the gRPC-based client library.
+- **One binary**: `sendora-db` is now a subcommand of the main program (`sendora db
+  <command>`, or `sendora-db <command>` through the name it is started with). The image
+  installs `/usr/local/bin/sendora-db` (and `/sendora-db`) as links to `/sendora`, so
+  `docker exec <container> sendora-db ...` and existing scripts keep working; the second
+  binary is gone (the code moved from `cmd/sendora-db` to `internal/dbcli`). Image size
+  (local build): 147 MB -> 134 MB uncompressed, 46.0 MiB -> 41.3 MiB (48,196,898 -> 43,352,234 bytes)
+  as `docker save | gzip`. `sendora healthcheck` is unchanged.
+- Dockerfile `ARG VERSION` is 0.2.0.
+
+### Code scanning
+
+- Path handling hardened so the guards are visible to CodeQL's taint analysis (no
+  behaviour change for valid input): the upload session directory is built behind an
+  early-return check of the session ID; chunk, complete, append and clean-up check the ID
+  again before touching files; branding and background images go through a `localJoin`
+  helper (`filepath.IsLocal`, no `..`) right before they are written, served or deleted.
+- Outgoing mail: every address is parsed with CR/LF/NUL rejected and rendered with
+  encoded names for From, To and Reply-To; the Message-ID domain is sanitised. The
+  remaining finding on the SMTP write is inherent (recipient and text are user input by
+  design; headers are CRLF-safe and the body is quoted-printable).
+- Integer settings of the platform are clamped before `int` and `time.Duration`
+  conversions. The SHA-1 of the breached-password check stays (required by the HIBP
+  k-anonymity range API; only 5 hex characters are sent, nothing is stored); documented
+  at the call.
+
 
 ### Multi-tenancy
 
@@ -83,11 +108,11 @@ unchanged** (same layout, no migration needed).
   plain 404, suspended tenants 503. Tenants open on the first request and close when idle
   (LRU, `SENDORA_MAX_OPEN_TENANTS`); background jobs also run for idle tenants on a schedule.
 - Platform console on `admin.<base domain>` (separate page of the web build): platform
-  administrators with mandatory TOTP, first one via a one-time setup code in the log;
-  create, search, suspend, resume and delete tenants (delete needs a TOTP step-up), quotas
-  (maximum users, maximum storage), custom domains with DNS TXT verification, primary
-  domain, per-tenant storage configuration (hook for the storage backends), platform
-  settings (also via `SENDORA_*`), platform SMTP as default for tenants. The console sees
+  administrators with TOTP (required by default, see below), first one via a one-time
+  setup code in the log; create, search, suspend, resume and delete tenants (delete needs
+  a step-up), quotas (maximum users, maximum storage), custom domains with DNS TXT
+  verification, primary domain, per-tenant storage, platform settings (also via
+  `SENDORA_*`), platform SMTP as default for tenants. The console sees
   counts only, never tenant content. A tamper-evident platform audit log records every
   action; actions affecting a tenant are also recorded in the tenant's own audit log.
 - `sendora-db tenant-import` converts a single-tenant `DATA_DIR` into a tenant: the
@@ -100,6 +125,44 @@ unchanged** (same layout, no migration needed).
   in-app database import is disabled for tenants.
 - New example manifest `deploy/kubernetes-multi-tenant.yaml` (wildcard Ingress and TLS
   with cert-manager, ConfigMap).
+- **Per-tenant object storage.** Each tenant's server uses the storage the platform
+  assigns: the **platform default** (console *Platform settings → Default storage* or
+  `SENDORA_PLATFORM_STORAGE_*`, with *Test connection*) under the tenant's fixed prefix
+  `<prefix>tenants/<tenant id>/`, or the **tenant's own bucket** configured in the
+  console (same validation and connection test as Admin → Storage; overlaps with the
+  platform's `tenants/` area or another tenant's bucket are refused). While the default
+  is the local data directory, tenants keep using their directory. A per-tenant switch
+  *Tenant may configure its own storage* lets the tenant's administrators use Admin →
+  Storage themselves (explicit credentials only, never the server's IAM role or
+  workload identity); otherwise they see their storage read-only with an explanation.
+  Tenants share a bucket but never a key space, every object is encrypted with the
+  tenant's own key, and the migration job, remote backup copies and
+  `sendora-db storage-migrate -tenant` work per tenant. Deleting a tenant removes its
+  prefix (and Sendora's objects in its own bucket); it is refused when objects cannot
+  be removed unless forced (the leftovers are listed in the audit record).
+  `SENDORA_STORAGE_*` is ignored in multi-tenant mode.
+- **SSRF guard for tenants** (new package `internal/netguard`): in multi-tenant mode the
+  SMTP server, OIDC issuers, audit log webhook and syslog targets and storage endpoints a
+  tenant's administrator configures must not resolve to loopback, private (RFC 1918,
+  ULA), link-local, carrier-grade NAT, cloud metadata or other special-purpose addresses.
+  Checked when saved and again on every connection by a dialer on the resolved address
+  (DNS rebinding, redirects, GCS token URIs). Platform-provided targets (platform SMTP,
+  platform storage, `SENDORA_*` settings and providers) are not affected. A platform
+  administrator can allow private targets per tenant (*Network targets*; step-up,
+  audited as `tenant_network_policy_changed` in both logs). Single-tenant mode is unchanged.
+- **Platform MFA switch** (owner decision): platform setting `platform_mfa_required`
+  (default `true`, also `SENDORA_PLATFORM_MFA_REQUIRED`). Changing it in the console shows
+  a warning, needs a fresh confirmation and is recorded as
+  `platform_mfa_requirement_changed`. When off, platform administrators sign in with a
+  password only; enrolling an authenticator stays possible (*My account*) and step-ups
+  use the password for administrators without one. Switching it on ends the sessions of
+  administrators without an authenticator.
+- **Offline platform-administrator recovery**: `sendora-db platform-admin-reset -data-dir
+  <DATA_DIR> -key-file <master key> -user <name> [-mfa] [-password]` (server stopped)
+  removes the administrator's authenticator and/or sets a temporary password that must
+  be changed at the next sign-in; unlocks the account, ends its sessions and records
+  `platform_admin_offline_reset` in the platform audit log. Administrators can also
+  change their own password in the console.
 
 ## 0.1.5 (2026-11-18)
 
