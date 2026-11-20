@@ -287,7 +287,11 @@ func (p *Platform) ImportSingleTenant(opt ImportOptions) (*ImportResult, error) 
 		if err != nil {
 			return nil, fmt.Errorf("backups: %w", err)
 		}
-		logf("tenant-import: moved the share directories; %d backup(s) re-encrypted or copied", n)
+		verb := "moved"
+		if from != "" {
+			verb = "copied"
+		}
+		logf("tenant-import: %s the share directories; %d backup(s) re-encrypted or copied", verb, n)
 		j.Phase = phaseMoved
 		if err := p.writeJournal(j); err != nil {
 			return nil, err
