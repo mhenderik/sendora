@@ -196,7 +196,7 @@ setting). See [Upgrade notes](#upgrade-notes-020) at the end of this section.
   chain are verified, and it is resumable and abortable. Offline commands accept
   `-tenant <id>` and `-legacy-root` (with `-source-key-file` for a copied tenant).
 - New example manifest `deploy/kubernetes-multi-tenant.yaml` (wildcard Ingress and TLS with
-  cert-manager, ConfigMap).
+  cert-manager, ConfigMap, default-deny and Sendora NetworkPolicies).
 
 ### User interface
 

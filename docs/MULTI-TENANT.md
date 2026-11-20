@@ -8,6 +8,105 @@ installation and nothing in this document applies.
 
 [Back to the documentation index](README.md)
 
+## Overview
+
+This section explains multi-tenancy in plain language for administrators and decision makers. The sections after it give the technical details.
+
+### Platform and organisations
+
+A **platform** is one Sendora installation that serves several **organisations** (in the technical text also called *tenants*). Each organisation gets its own Sendora: its own web address, users, shares, settings, look and feel, and audit log. To the people of an organisation it looks like a Sendora of their own. They do not see that other organisations share the same server.
+
+| Role | Who it is | What they do |
+|---|---|---|
+| **Platform administrator** | The party that runs the installation (for example an IT department, hosting company or MSP) | Creates and removes organisations, sets quotas and storage limits, verifies custom domains, chooses platform-wide settings. Works in the **platform console** on `admin.<base domain>`. |
+| **Organisation administrator** | An administrator within one organisation | Manages that organisation's users, settings, branding, mail server, sign-in providers and storage, exactly like the administrator of a single installation. Sees only their own organisation. |
+| **Users** | The people of one organisation | Upload, share and receive files as usual. They only ever see their own organisation. |
+
+### How a visitor reaches the right organisation
+
+Every organisation has its own host name. The platform looks only at the host name in the address bar to decide where a request goes:
+
+| Address | Goes to |
+|---|---|
+| `acme.sendora.example.com` | the organisation with subdomain `acme` |
+| `files.acme.com` (a verified custom domain) | the same organisation |
+| `admin.sendora.example.com` | the platform console |
+| any other address | a plain "page not found", the same for every unknown address, so nobody can probe which organisations exist |
+
+```
+  browser                     one Sendora process
+ ─────────                   ─────────────────────────────────────────────────────
+  acme.sendora.example.com ─┐
+  files.acme.com ───────────┼──► router ──► Acme      ──► own database + own storage
+  globex.sendora.example.com┼──► (by host) ──► Globex  ──► own database + own storage
+  admin.sendora.example.com ┘            └──► platform console ──► platform database
+                                                (organisations, quotas, domains;
+                                                 counts only, no content)
+```
+
+### What is kept separate
+
+| Kept separate per organisation | What that means |
+|---|---|
+| Database | Each organisation has its own encrypted database file. |
+| Encryption keys | Each database has its own key, derived from the platform's master key. A link, sign-in session or file of one organisation does not work in another. |
+| Files | Stored apart and encrypted with the organisation's own key, also when several organisations share one bucket. |
+| Audit log | Each organisation has its own tamper-evident audit log; the platform has a separate one for console actions. |
+| Settings and look | Branding, themes, email texts, policies, quotas and languages. |
+| Sign-in | Each organisation has its own accounts, two-step verification and sign-in providers (for example its own Microsoft Entra ID). |
+| Mail | Its own mail server, or the platform's mail server as a fallback. |
+
+### What the platform administrator can and cannot see
+
+| Can see and do | Cannot see or do |
+|---|---|
+| The list of organisations, their status and web addresses | Users, user names or email addresses inside an organisation |
+| Counts: number of users, bytes stored | Shares, file names or file contents |
+| Quotas, storage limits, custom domains | The organisation's audit records |
+| Which kind of storage an organisation uses ("Own storage (Azure)") and how much | The organisation's own bucket, account names or keys; it can neither change nor test them |
+| Suspend, resume or delete an organisation | Sign in as an organisation's user |
+
+Every console action is recorded in the platform audit log, and actions that affect an organisation also appear in that organisation's own audit log, so the organisation can see what the platform did. Note: whoever runs the server and holds the master key can technically decrypt everything with offline tools. Multi-tenancy separates organisations from each other and from the console, not from the operator of the server.
+
+### Storage choices
+
+A new organisation starts **without storage**: until storage is set up, nobody in it can upload. The platform decides what is allowed and offered; the organisation chooses.
+
+| Option | Who provides it | Limit |
+|---|---|---|
+| **Own storage** (allowed by default) | The organisation connects its own S3-compatible, Azure Blob or Google Cloud Storage account under Admin → Storage | No platform limit; the organisation pays its own provider |
+| **Platform bucket** (optional offer) | The platform's shared bucket, with a separate folder per organisation | A storage limit in GB, set per organisation in the console |
+| **Local disk** (optional offer) | The server's own disk | The same storage limit in GB |
+
+Files are always encrypted by Sendora before they are stored. With object storage, an upload takes a little longer before the share is ready (the file is encrypted and copied to the bucket first), and downloads are read back from the bucket, so large files or a far-away region are slower. The screens show this notice when remote storage is chosen.
+
+### How to start
+
+| Starting point | What to do |
+|---|---|
+| **A new platform** | Start Sendora with multi-tenant mode on and a base domain, create the first platform administrator with the setup code from the log, then create organisations in the console. |
+| **An existing Sendora installation** | Use **Admin → Multi-tenant** (the conversion wizard). The installation becomes the first organisation; users, shares and links are kept. After *Restart now* the platform is live. If something goes wrong, the installation starts unchanged. |
+| **An existing installation moving to a new environment** | Copy its data directory and key to the new platform and run `sendora-db tenant-import -from ...`. It becomes a new organisation next to the existing ones; the old installation is only read and can keep running until you switch DNS. |
+
+### DNS and certificates
+
+| Requirement | Why |
+|---|---|
+| A wildcard DNS record `*.sendora.example.com` pointing to the server or ingress | Every organisation and the console get their own subdomain |
+| A wildcard TLS certificate for `*.sendora.example.com` (for example Let's Encrypt with a DNS-01 challenge) | HTTPS for all those subdomains |
+| Per custom domain: a DNS record to the platform, a TXT verification record, and a certificate | Organisations can use their own address |
+
+**Tip for local testing:** use the base domain `localhost:9090` (or another port). Browsers send every `*.localhost` name to your own computer, so `http://acme.localhost:9090` and `http://admin.localhost:9090` work without any DNS. When the server is not reached on port 80 or 443, enter that port in the base domain's port field; the wizard warns when the port does not match.
+
+### Limits
+
+| Limit | Meaning |
+|---|---|
+| One process | All organisations are served by one Sendora process on one server or pod. There is no clustering or failover; scale by giving the server more CPU and memory. |
+| SQLite | Each organisation's database is a single file with one writer at a time; very busy organisations can slow others down. Quotas limit users and storage, not traffic. |
+| One master key | Losing the master key means losing every organisation. Keep a protected copy off the server. |
+| Certificates | Sendora does not issue certificates itself; your ingress or proxy does. |
+
 ## 1. Architecture
 
 ```
@@ -445,7 +544,7 @@ spec:
 - The ingress must pass the original `Host` (or `X-Forwarded-Host`) and the
   proxy addresses must be in `SENDORA_TRUSTED_PROXIES`.
 - Full example: [`deploy/kubernetes-multi-tenant.yaml`](../deploy/kubernetes-multi-tenant.yaml)
-  (wildcard Ingress and TLS, ConfigMap, Secret, one replica).
+  (wildcard Ingress and TLS, ConfigMap, one replica, default-deny and Sendora NetworkPolicies; replace the ingress-controller namespace placeholder).
 
 ## 10. Backup and restore per tenant
 
