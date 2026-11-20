@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.2.0 (in development)
+## 0.2.0 (2026-11-21)
 
 0.2.0 adds pluggable object storage and optional multi-tenancy, and ships as a single
 binary. **The defaults stay the local data directory and single-tenant mode: existing
