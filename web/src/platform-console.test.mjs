@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { slugProblem, pconsole, ConsoleError, fmtSize, quotaPercent, storageBody, reauthBody } from './platform-console.mjs'
+import { slugProblem, pconsole, ConsoleError, fmtSize, quotaPercent, storageKindLabel, reauthBody } from './platform-console.mjs'
 
 test('slugProblem mirrors the server rules', () => {
   for (const ok of ['klant1', 'ab', 'acme-corp', 'x9']) assert.equal(slugProblem(ok), '', ok)
@@ -31,10 +31,11 @@ test('sizes and quota percentages', () => {
   assert.equal(quotaPercent(500, 200), 100)
 })
 
-test('tenant storage form body', () => {
-  assert.deepEqual(storageBody({ mode: 'platform', tenant_managed: true, settings: { storage_backend: 's3' } }), { mode: 'platform', tenant_managed: true })
-  assert.deepEqual(storageBody({ mode: 'own', settings: { storage_backend: 's3', storage_s3_secret_key: '', storage_s3_bucket: 'b' } }),
-    { mode: 'own', tenant_managed: false, settings: { storage_backend: 's3', storage_s3_bucket: 'b' } })
+test('tenant storage kind labels show the type only', () => {
+  assert.equal(storageKindLabel('own:azure'), 'Own storage (Azure)')
+  assert.equal(storageKindLabel('own:s3'), 'Own storage (S3)')
+  assert.equal(storageKindLabel('platform'), 'Platform bucket')
+  assert.equal(storageKindLabel('none'), 'Not set up')
   assert.deepEqual(reauthBody('123456'), { code: '123456' })
   assert.deepEqual(reauthBody(undefined), { code: '' })
 })

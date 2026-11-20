@@ -1,7 +1,6 @@
 package platform
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/mhenderik/sendora/internal/storage"
@@ -12,7 +11,7 @@ func ownS3(bucket, prefix string) map[string]string {
 		"storage_s3_bucket": bucket, "storage_s3_prefix": prefix, "storage_s3_auth": "static", "storage_s3_access_key": "AK", "storage_s3_secret_key": "SECRET"}
 }
 
-func TestTenantStorageResolveAndMask(t *testing.T) {
+func TestTenantStorageOffers(t *testing.T) {
 	p, err := Open(t.TempDir(), key32(t), true)
 	if err != nil {
 		t.Fatal(err)
@@ -24,14 +23,20 @@ func TestTenantStorageResolveAndMask(t *testing.T) {
 	}
 	b, _ := p.CreateTenant("klantb", "B", 0, 0)
 	sc, err := p.Storage(a.ID)
-	if err != nil || sc.Mode != StorageModePlatform || sc.Prefix != "tenants/"+a.ID+"/" {
-		t.Fatalf("default choice %+v %v", sc, err)
+	if err != nil || sc.Offer != OfferNone || !sc.TenantManaged {
+		t.Fatalf("default decision %+v %v", sc, err)
 	}
-	// Platform default local: the tenant's directory.
-	if c := p.Resolve(a.ID, sc); c.Backend != storage.KindLocal {
-		t.Fatalf("resolve with local default: %+v", c)
+	if c := p.Resolve(a.ID, sc); c.Backend != storage.KindNone {
+		t.Fatalf("no offer must mean no storage: %+v", c)
 	}
-	// Platform default remote: the tenant's fixed prefix inside it.
+	if err := p.SetStorage(a.ID, "own", true); err == nil {
+		t.Fatal("invalid offer accepted")
+	}
+	p.SetStorage(a.ID, OfferLocal, false)
+	if sc, _ = p.Storage(a.ID); sc.Offer != OfferLocal || sc.TenantManaged || p.Resolve(a.ID, sc).Backend != storage.KindLocal {
+		t.Fatalf("local offer %+v", sc)
+	}
+	// The platform bucket: the tenant's fixed prefix inside the platform default.
 	next, err := MergeStorageSettings(p.StorageSettings(), ownS3("platform-bucket", "sendora/"))
 	if err != nil {
 		t.Fatal(err)
@@ -39,46 +44,50 @@ func TestTenantStorageResolveAndMask(t *testing.T) {
 	if _, err := p.PutStorageSettings(next, nil); err != nil {
 		t.Fatal(err)
 	}
-	ca, cb := p.Resolve(a.ID, sc), p.Resolve(b.ID, nil)
+	offer := &StorageConfig{Offer: OfferPlatform}
+	ca, cb := p.Resolve(a.ID, offer), p.Resolve(b.ID, offer)
 	if ca.Prefix != "sendora/tenants/"+a.ID+"/" || cb.Prefix != "sendora/tenants/"+b.ID+"/" || ca.S3Bucket != "platform-bucket" || ca.Overlaps(cb) {
 		t.Fatalf("tenant prefixes %q %q", ca.Prefix, cb.Prefix)
 	}
-	// An own bucket that overlaps the platform's tenants/ area is refused.
-	if err := p.SetStorage(a.ID, StorageModeOwn, ownS3("platform-bucket", "sendora/tenants/x/"), false); err == nil {
-		t.Fatal("own bucket inside the platform's tenants area accepted")
-	}
-	if err := p.SetStorage(a.ID, StorageModeOwn, ownS3("klanta-bucket", ""), true); err != nil {
-		t.Fatal(err)
-	}
-	// Another tenant cannot point at the same bucket and prefix.
-	if err := p.SetStorage(b.ID, StorageModeOwn, ownS3("klanta-bucket", "sub/"), false); err == nil || !strings.Contains(err.Error(), "another tenant") {
-		t.Fatalf("overlapping own bucket accepted: %v", err)
-	}
-	sc, _ = p.Storage(a.ID)
-	if !sc.TenantManaged || p.Resolve(a.ID, sc).S3Bucket != "klanta-bucket" {
-		t.Fatalf("own choice %+v", sc)
-	}
-	v := sc.View()
-	if v.Settings["storage_s3_secret_key"] != "" || !v.Set["storage_s3_secret_key"] || v.Settings["storage_s3_bucket"] != "klanta-bucket" {
-		t.Fatalf("view %+v", v)
+	if locs := p.StorageLocations(a.ID); len(locs) != 1 || locs[0].Prefix != ca.Prefix {
+		t.Fatalf("locations %+v", locs)
 	}
 	// A blank secret keeps the stored one; changing the endpoint needs it again.
-	merged, err := MergeStorageSettings(sc.Config, map[string]string{"storage_s3_bucket": "klanta-bucket2", "storage_s3_secret_key": ""})
+	merged, err := MergeStorageSettings(next, map[string]string{"storage_s3_bucket": "platform-bucket2", "storage_s3_secret_key": ""})
 	if err != nil || merged["storage_s3_secret_key"] != "SECRET" {
 		t.Fatalf("merge %v %v", merged, err)
 	}
-	if _, err := MergeStorageSettings(sc.Config, map[string]string{"storage_s3_endpoint": "https://evil.example.com"}); err == nil {
+	if _, err := MergeStorageSettings(next, map[string]string{"storage_s3_endpoint": "https://evil.example.com"}); err == nil {
 		t.Fatal("endpoint changed without retyping the secret")
 	}
-	if _, err := MergeStorageSettings(sc.Config, map[string]string{"backup_remote_enabled": "true"}); err == nil {
+	if _, err := MergeStorageSettings(next, map[string]string{"backup_remote_enabled": "true"}); err == nil {
 		t.Fatal("non-storage key accepted")
 	}
-	locs := p.StorageLocations(a.ID)
-	if len(locs) != 2 {
-		t.Fatalf("locations %+v", locs)
+}
+
+// Tenants stored before the storage offer existed keep the platform default.
+func TestStorageOfferMigration(t *testing.T) {
+	dir, master := t.TempDir(), key32(t)
+	p, err := Open(dir, master, true)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := p.SetStorage(a.ID, StorageModeOwn, map[string]string{"storage_backend": "local"}, false); err == nil {
-		t.Fatal("local own bucket accepted")
+	a, _ := p.CreateTenant("klanta", "A", 0, 0)
+	if _, err := p.St.DB.Exec(`ALTER TABLE tenant_storage DROP COLUMN offer`); err != nil {
+		t.Fatal(err)
+	}
+	p.Close()
+	p, err = Open(dir, master, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if sc, _ := p.Storage(a.ID); sc.Offer != OfferPlatform {
+		t.Fatalf("existing tenant lost its storage: %+v", sc)
+	}
+	b, _ := p.CreateTenant("klantb", "B", 0, 0)
+	if sc, _ := p.Storage(b.ID); sc.Offer != OfferNone {
+		t.Fatalf("new tenant after migration: %+v", sc)
 	}
 }
 
@@ -141,7 +150,7 @@ func TestTenantManagedDefaultOn(t *testing.T) {
 	if sc, _ := p.Storage(a.ID); !sc.TenantManaged {
 		t.Fatal("new tenant: own storage not allowed by default")
 	}
-	if err := p.SetStorage(b.ID, StorageModePlatform, nil, false); err != nil {
+	if err := p.SetStorage(b.ID, OfferNone, false); err != nil {
 		t.Fatal(err)
 	}
 	// A row from an earlier build: off without an explicit choice.

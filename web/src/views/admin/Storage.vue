@@ -22,6 +22,14 @@ const running = computed(() => status.value?.migration?.status === 'running')
 // organisation configure its own storage.
 const tenant = computed(() => status.value?.tenant || null)
 const editable = computed(() => !tenant.value || tenant.value.editable)
+// The "local" choice of a tenant is what the platform provides (nothing: hidden).
+const localLabel = computed(() => {
+  const tn = tenant.value
+  if (!tn) return null
+  if (tn.offer === 'platform') return t('Platform default ({where})', { where: tn.platform_choice })
+  if (tn.offer === 'local') return t('Local disk on the server')
+  return ''
+})
 let timer = null
 
 async function loadStatus() {
@@ -35,7 +43,11 @@ async function loadSettings() {
   s.value = Object.fromEntries(KEYS.map(k => [k, settings[k] ?? '']))
   isSet.value = Object.fromEntries(SECRETS.map(k => [k, !!settings[k + '_set']]))
 }
-async function load() { await Promise.all([loadSettings(), loadStatus()]) }
+async function load() {
+  await Promise.all([loadSettings(), loadStatus()])
+  // Nothing provided by the platform: start the form on S3 instead of a hidden choice.
+  if (tenant.value && tenant.value.offer === 'none' && s.value && s.value.storage_backend === 'local') s.value.storage_backend = 's3'
+}
 onMounted(async () => { try { await load() } catch (e) { err.value = e.message } })
 onUnmounted(() => { if (timer) clearInterval(timer) })
 
@@ -104,12 +116,14 @@ const statusLabel = st => ({ running: t('running'), finished: t('finished'), fai
   <form v-if="s" class="card" @submit.prevent="save">
     <h1>{{ t('Storage settings') }}</h1>
     <template v-if="tenant">
-      <p v-if="!tenant.editable" class="muted" role="note">{{ t('The platform manages the storage of this organisation: new files are stored in {where}. Contact the platform administrator to change it.', { where: tenant.platform_choice }) }}</p>
-      <p v-else class="muted" role="note">{{ t('The platform lets this organisation use storage of its own. Choose the platform default to use the storage the platform provides ({where}).', { where: tenant.platform_choice }) }}</p>
+      <p v-if="!tenant.configured" class="notice storage-missing" role="alert"><strong>{{ t('Storage is not set up yet.') }}</strong>
+        {{ tenant.editable ? t('Choose S3, Azure Blob Storage or Google Cloud Storage below, test the connection and save. Until then, files cannot be uploaded or shared.') : t('The platform does not provide storage for this organisation and does not allow storage of its own. Contact the platform administrator.') }}</p>
+      <p v-else-if="!tenant.editable" class="muted" role="note">{{ t('The platform manages the storage of this organisation: new files are stored in {where}. Contact the platform administrator to change it.', { where: tenant.platform_choice }) }}</p>
+      <p v-else-if="tenant.offer !== 'none'" class="muted" role="note">{{ t('The platform lets this organisation use storage of its own. Choose the platform default to use the storage the platform provides ({where}).', { where: tenant.platform_choice }) }}</p>
     </template>
     <p v-if="KEYS.some(m)" class="muted">{{ t('Settings set in the server configuration (environment or Kubernetes ConfigMap) are read-only here: {n}.', { n: KEYS.filter(m).join(', ') }) }}</p>
     <StorageForm v-if="editable" :model-value="s" :managed="managed" :is-set="isSet" id-prefix="st" :show-notice="!status || status.backend === 'local'"
-      :local-label="tenant ? t('Platform default ({where})', { where: tenant.platform_choice }) : null" :explicit-only="!!tenant" />
+      :local-label="localLabel" :explicit-only="!!tenant" />
     <label class="check"><input :disabled="m('backup_remote_enabled')" type="checkbox" :checked="flag('backup_remote_enabled')" @change="setFlag('backup_remote_enabled', $event)" /> {{ t('Also copy the daily database backups to the object store') }}</label>
     <p class="muted">{{ t('Backups are already encrypted (SQLCipher) and are stored under backups/ next to the files; the number of backups to keep also applies to the remote copies.') }}</p>
 

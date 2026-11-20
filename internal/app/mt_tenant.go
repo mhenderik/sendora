@@ -118,6 +118,43 @@ func (s *Server) validateTargetUpdates(w http.ResponseWriter, r *http.Request, u
 	return true
 }
 
+const msgChooseOwnStorage = "choose S3, Azure Blob Storage or Google Cloud Storage: the platform provides no storage for this organisation"
+
+// msgStorageNotSetUp answers uploads and new shares of a tenant without storage.
+const msgStorageNotSetUp = "Set up storage first under Admin → Storage"
+
+// StorageReady reports whether new files can be stored (false for a tenant
+// whose storage is not set up yet).
+func (s *Server) StorageReady() bool {
+	return s.storageFromSettings().Backend != storage.KindNone
+}
+
+// storageAdmits answers 409 when no storage is set up (uploads, reverse
+// shares, new shares).
+func (s *Server) storageAdmits(w http.ResponseWriter) bool {
+	if s.tenant == nil || s.StorageReady() {
+		return true
+	}
+	jerr(w, http.StatusConflict, msgStorageNotSetUp)
+	return false
+}
+
+// StorageKind is all the platform console may know about a tenant's storage:
+// "none", "local", "platform" (the platform's offer) or "own:<backend>" for
+// storage the tenant configured itself. No names, endpoints or credentials.
+func (s *Server) StorageKind() string {
+	cfg := s.storageFromSettings()
+	switch {
+	case cfg.TenantManaged:
+		return "own:" + cfg.Backend
+	case cfg.Backend == storage.KindNone:
+		return "none"
+	case s.tenant != nil && s.tenant.opts.Storage != nil && s.tenant.opts.Storage.Offer == platform.OfferPlatform && cfg.Backend != storage.KindLocal:
+		return "platform"
+	}
+	return "local"
+}
+
 // tenantStorageEditable reports whether this tenant's administrators may
 // configure their own storage (always true outside multi-tenant mode).
 func (s *Server) tenantStorageEditable() bool {

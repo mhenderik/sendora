@@ -178,9 +178,10 @@ serve the console page or its API).
   DNS TXT record `_sendora-challenge.<domain>` = `sendora-verify=<token>` and
   verified from the console. Only verified domains are routed; one can be made
   primary.
-- **Storage**: the platform default storage (*Platform settings*) and each
-  tenant's storage choice with *Test connection* and the switch *Tenant may
-  configure its own storage* (§8).
+- **Storage**: the platform default storage (*Platform settings*, with *Test
+  connection*) and per tenant only the platform's decision (own storage allowed,
+  platform bucket or local disk offered) plus the kind and usage of the tenant's
+  storage (§8).
 - **Network targets**: per tenant, *Allow private network targets* switches the
   SSRF guard off for that tenant (§8a; needs a fresh confirmation, audited on
   both sides).
@@ -254,50 +255,47 @@ from `-key-file`), plus `-legacy-root` for an imported tenant:
 
 ## 8. Storage
 
-Share files go to object storage (S3, Azure Blob, GCS; [STORAGE.md](STORAGE.md))
-or the local disk, decided by the platform per tenant:
+A tenant's storage is the tenant's business. **A new tenant has no storage**:
+until its administrator sets up storage under Admin → Storage, uploads, new
+shares and reverse-share invitations are refused ("Set up storage first under
+Admin → Storage"); administrators see a banner and users a notice instead of the
+upload form. Database backups of such a tenant stay in its directory.
 
-| Choice (console) | New files of the tenant go to |
+The platform decides only (console, tenant page → *Storage*, or when creating
+the tenant):
+
+| Decision | Meaning |
 | --- | --- |
-| **Platform default** (default) | The platform default backend (*Platform settings → Default storage* or `SENDORA_PLATFORM_STORAGE_*`) under the tenant's fixed prefix `<platform prefix>tenants/<tenant id>/` (`storage.Config.WithPrefix`). While the platform default is the local data directory, the tenant's directory `tenants/<id>/shares/`. |
-| **Tenant's own bucket** | A bucket/container entered by a platform administrator (same fields, validation and *Test connection* as Admin → Storage). It must not overlap the platform default's `tenants/` area or another tenant's own bucket. |
+| **Tenant may configure its own storage** (default on) | The tenant's administrators configure S3, Azure Blob or GCS in Admin → Storage (same form and validation as single-tenant mode, *Test connection*, re-authentication, audit). Explicit credentials only (never the server's IAM role, managed/workload identity or application default credentials), and the endpoint must pass the SSRF guard (§8a) when saved and on every connection. Off: the tenant sees its storage read-only. |
+| **Storage provided by the platform** (default *none*) | Optional offers: the **platform bucket** — the platform default (*Platform settings → Default storage* or `SENDORA_PLATFORM_STORAGE_*`) under the tenant's fixed prefix `<platform prefix>tenants/<tenant id>/`; or the **local disk** of the server (the tenant's directory), only when the platform explicitly offers it. In the tenant's form the offer appears as the first choice. |
 
-**Tenant may configure its own storage** (per tenant, **on by default**, also for
-tenants created before this setting existed; a platform administrator can switch
-it off per tenant, recorded as `tenant_storage_changed` in both audit logs): the
-tenant's administrators then edit the same storage form in their Admin →
-Storage. *Platform default* there means the console's choice above. A tenant's
-own configuration must use explicit credentials (access key, account key or
-SAS token, service account key — never the server's ambient IAM role,
-managed/workload identity or application default credentials, which belong to
-the platform), its endpoint must pass the SSRF guard (§8a) when saved, and its
-connections, including token requests, go through the guard. With the switch
-off the tenant sees its storage read-only, with an explanation; changes are
-refused (403).
+**The platform never sees a tenant's own storage**: the console and its API show
+only the kind ("Own storage (Azure)") and the bytes stored — no bucket or
+container names, endpoints, prefixes, account names or keys — and the platform
+can neither change nor test it (tested: `TestMTNewTenantWithoutStorageAndConsolePrivacy`,
+which also checks that no console API returns tenant users, share data, audit
+details or secrets).
 
-Remote storage can make transfers slower: after an upload, each file is
-encrypted and copied to the object store before the share is ready (longer for
-large files or a distant region), and downloads are read back from it. Admin →
-Storage and the console's tenant page show this notice whenever a remote backend
-is selected or active.
-
+- Tenants created before this release keep what they had (the platform default
+  with their prefix, or their directory while the default was local); every file
+  keeps the location it was written to (`storage_locations` in the tenant's
+  database), so earlier files stay readable after any change. The tenant's
+  administrators move earlier files with Admin → Storage → *Move files* (offline:
+  `sendora-db storage-migrate -source /data/tenants/<id>/sendora.db -data-dir /data/tenants/<id> -tenant <id> -key-file <master key>`).
 - Encryption is unchanged: files are encrypted with the tenant's own file key
-  before they leave the server, so even a shared bucket only holds ciphertext,
-  and an object of one tenant cannot be decrypted with another tenant's keys.
-  Each tenant's backend only sees its own prefix; object keys from a tenant's
-  database are validated (`files/<32 hex>`), so no key can reach another prefix.
-- Every file records its location (`storage_locations` in the tenant's
-  database), so a change only affects new files. The tenant's administrators
-  move earlier files with Admin → Storage → *Move files* (or offline:
-  `sendora-db storage-migrate -source /data/tenants/<id>/sendora.db -data-dir /data/tenants/<id> -tenant <id> -key-file <master key>`,
-  which resolves the tenant's storage from the platform database).
-- Changing the platform default or a tenant's choice reopens the affected open
-  tenants. The tenant's audit log records `tenant_storage_changed`.
+  before they leave the server; tenants on the platform bucket share it but never
+  a key space, and each tenant's backend only sees its own prefix.
+- Changing the platform default or a tenant's decision reopens the affected open
+  tenants and is recorded as `tenant_storage_changed` in both audit logs.
 - **Deleting a tenant** removes everything under its prefix in the platform
-  default (also earlier platform defaults recorded in its database) and
-  Sendora's objects (`files/`, `backups/`, `probe/`) in its own buckets.
-- Remote backup copies (`backup_remote_enabled`, a tenant setting) go to
-  `<tenant prefix>backups/`.
+  bucket and Sendora's objects (`files/`, `backups/`, `probe/`) in the storage the
+  tenant configured itself (with the tenant's own credentials, as part of
+  deleting its data).
+- Remote storage can make transfers slower: after an upload each file is
+  encrypted and copied to the object store before the share is ready (longer for
+  large files or a distant region), and downloads are read back from it. Admin →
+  Storage and the console show this notice whenever a remote backend is selected
+  or active.
 
 ## 8a. Network targets of tenants (SSRF guard)
 

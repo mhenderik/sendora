@@ -125,26 +125,28 @@ unchanged** (same layout, no migration needed).
   in-app database import is disabled for tenants.
 - New example manifest `deploy/kubernetes-multi-tenant.yaml` (wildcard Ingress and TLS
   with cert-manager, ConfigMap).
-- **Per-tenant object storage.** Each tenant's server uses the storage the platform
-  assigns: the **platform default** (console *Platform settings → Default storage* or
-  `SENDORA_PLATFORM_STORAGE_*`, with *Test connection*) under the tenant's fixed prefix
-  `<prefix>tenants/<tenant id>/`, or the **tenant's own bucket** configured in the
-  console (same validation and connection test as Admin → Storage; overlaps with the
-  platform's `tenants/` area or another tenant's bucket are refused). While the default
-  is the local data directory, tenants keep using their directory. The per-tenant switch
-  *Tenant may configure its own storage* (**on by default**, also for existing tenants;
-  the platform can switch it off per tenant, audited) lets the tenant's administrators
-  use Admin → Storage themselves (explicit credentials only, never the server's IAM role
-  or workload identity); when it is off they see their storage read-only with an
-  explanation. Admin → Storage and the console show a notice whenever a remote backend
-  is selected or active: uploads are encrypted and copied to the object store before the
-  share is ready, so large files or a distant region take longer, and downloads too.
-  Tenants share a bucket but never a key space, every object is encrypted with the
-  tenant's own key, and the migration job, remote backup copies and
-  `sendora-db storage-migrate -tenant` work per tenant. Deleting a tenant removes its
-  prefix (and Sendora's objects in its own bucket); it is refused when objects cannot
-  be removed unless forced (the leftovers are listed in the audit record).
-  `SENDORA_STORAGE_*` is ignored in multi-tenant mode.
+- **Per-tenant storage, owned by the tenant.** A new tenant has **no storage**: until its
+  administrator sets up S3, Azure Blob or GCS under Admin → Storage (same form,
+  validation, *Test connection*, re-authentication and audit as single-tenant mode;
+  explicit credentials only, never the server's IAM role or workload identity), uploads,
+  new shares and reverse-share invitations are refused ("Set up storage first under
+  Admin → Storage"), administrators see a banner and users a notice instead of the
+  upload form; database backups stay local. The platform decides only whether the
+  tenant may configure its own storage (default on; switching it off is audited) and
+  what it offers itself, optionally: the **platform bucket** (console *Platform settings
+  → Default storage* or `SENDORA_PLATFORM_STORAGE_*`, under the tenant's fixed prefix
+  `<prefix>tenants/<tenant id>/`) or the **local disk** of the server. The tenant
+  creation form defaults to *none*. **The platform never sees a tenant's own storage**:
+  the console and its API show only the kind ("Own storage (Azure)") and the usage, no
+  bucket, container, endpoint, prefix, account or key, and cannot change or test it.
+  Existing tenants keep what they had; every file keeps its location, the tenant's
+  migration job and `sendora-db storage-migrate -tenant` move earlier files, and
+  deleting a tenant removes its prefix (and Sendora's objects in its own storage;
+  refused when objects cannot be removed unless forced). Admin → Storage and the
+  console show a notice whenever a remote backend is selected or active: uploads are
+  encrypted and copied to the object store before the share is ready, so large files
+  or a distant region take longer, and downloads too. `SENDORA_STORAGE_*` is ignored in
+  multi-tenant mode.
 - **SSRF guard for tenants** (new package `internal/netguard`): in multi-tenant mode the
   SMTP server, OIDC issuers, audit log webhook and syslog targets and storage endpoints a
   tenant's administrator configures must not resolve to loopback, private (RFC 1918,

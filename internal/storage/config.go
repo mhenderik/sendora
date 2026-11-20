@@ -17,7 +17,13 @@ const (
 	KindS3    = "s3"
 	KindAzure = "azure"
 	KindGCS   = "gcs"
+	// KindNone: no storage at all (a tenant in multi-tenant mode whose storage
+	// is not set up yet). It cannot be opened; uploads are refused.
+	KindNone = "none"
 )
+
+// ErrNotConfigured is returned for KindNone.
+var ErrNotConfigured = errors.New("no storage is set up yet")
 
 // Credential modes.
 const (
@@ -147,6 +153,8 @@ func (c Config) Identity() string {
 		return "azure|" + c.azureServiceURL() + "|" + c.AzureContainer + "|" + c.Prefix
 	case KindGCS:
 		return "gcs|" + c.gcsEndpoint() + "|" + c.GCSBucket + "|" + c.Prefix
+	case KindNone:
+		return KindNone
 	}
 	return KindLocal
 }
@@ -164,6 +172,8 @@ func (c Config) Describe() string {
 		return fmt.Sprintf("azure://%s/%s/%s", c.AzureAccount, c.AzureContainer, c.Prefix)
 	case KindGCS:
 		return fmt.Sprintf("gs://%s/%s", c.GCSBucket, c.Prefix)
+	case KindNone:
+		return "not set up"
 	}
 	return "local data directory"
 }
@@ -208,6 +218,8 @@ func (c Config) Validate() error {
 	switch c.Backend {
 	case KindLocal, "":
 		return nil
+	case KindNone:
+		return ErrNotConfigured
 	case KindS3:
 		if err := ValidateS3Bucket(c.S3Bucket); err != nil {
 			return err
@@ -282,6 +294,9 @@ func (c Config) Validate() error {
 
 // Open returns the backend described by c.
 func Open(ctx context.Context, c Config) (Backend, error) {
+	if c.Backend == KindNone {
+		return nil, ErrNotConfigured
+	}
 	if c.Backend == KindLocal || c.Backend == "" {
 		return NewLocal(c.LocalRoot)
 	}

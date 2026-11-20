@@ -6,7 +6,7 @@ import QrCode from '../components/QrCode.vue'
 import StorageForm from '../components/StorageForm.vue'
 import { t, tr, lang, setLang, builtinLanguages } from '../i18n'
 import { gbToBytes, bytesToGB } from '../quota.mjs'
-import { pconsole, slugProblem, fmtSize, quotaPercent, storageBody, reauthBody } from '../platform-console.mjs'
+import { pconsole, slugProblem, fmtSize, quotaPercent, reauthBody, storageKindLabel } from '../platform-console.mjs'
 
 const boot = ref(null), stage = ref('loading'), me = ref(null), err = ref(''), notice = ref(''), busy = ref(false)
 const mfaRequired = ref(true), mustChange = ref(false)
@@ -63,30 +63,27 @@ const logout = () => run(async () => { await pconsole('/logout', { method: 'POST
 
 // ---------- tenants ----------
 const tenants = ref([]), q = ref(''), sel = ref(null), created = ref(null)
-const nt = reactive({ slug: '', name: '', admin_email: '', admin_username: '', max_users: '0', max_storage_gb: '0' })
+const nt = reactive({ slug: '', name: '', admin_email: '', admin_username: '', max_users: '0', max_storage_gb: '0', storage_offer: 'none', allow_own_storage: true })
 const slugHint = computed(() => nt.slug ? t(slugProblem(nt.slug)) : '')
 async function loadTenants() { tenants.value = (await pconsole('/tenants?q=' + encodeURIComponent(q.value))).tenants }
 const search = () => run(loadTenants)
 const createTenant = () => run(async () => {
   const d = await pconsole('/tenants', { method: 'POST', body: {
     slug: nt.slug.trim(), name: nt.name, admin_email: nt.admin_email, admin_username: nt.admin_username,
-    max_users: Number(nt.max_users) || 0, max_storage_bytes: gbToBytes(String(nt.max_storage_gb || '0')) } })
+    max_users: Number(nt.max_users) || 0, max_storage_bytes: gbToBytes(String(nt.max_storage_gb || '0')),
+    storage_offer: nt.storage_offer, allow_own_storage: nt.allow_own_storage } })
   created.value = d
-  Object.assign(nt, { slug: '', name: '', admin_email: '', admin_username: '', max_users: '0', max_storage_gb: '0' })
+  Object.assign(nt, { slug: '', name: '', admin_email: '', admin_username: '', max_users: '0', max_storage_gb: '0', storage_offer: 'none', allow_own_storage: true })
   await loadTenants()
 })
 const quota = reactive({ max_users: '0', max_storage_gb: '0' })
-const storage = reactive({ mode: 'platform', tenant_managed: false, settings: {}, set: {}, view: null, test: null, testing: false })
+const storage = reactive({ offer: 'none', tenant_managed: true, view: null })
 const net = reactive({ allow: false, code: '' })
 const domainInput = ref(''), del = reactive({ confirm: '', code: '', force: false })
 function applyStorage(v) {
   storage.view = v || null
-  storage.mode = v?.choice?.mode || 'platform'
-  storage.tenant_managed = !!v?.choice?.tenant_managed
-  storage.settings = { ...(v?.choice?.settings || {}) }
-  if (!storage.settings.storage_backend || storage.settings.storage_backend === 'local') storage.settings.storage_backend = 's3'
-  storage.set = v?.choice?.set || {}
-  storage.test = null
+  storage.offer = v?.offer || 'none'
+  storage.tenant_managed = v ? !!v.tenant_managed : true
 }
 async function openTenant(id) {
   await run(async () => {
@@ -111,13 +108,9 @@ const verifyDomain = d => run(async () => { await pconsole(`/tenants/${tid()}/do
 const removeDomain = d => run(async () => { await pconsole(`/tenants/${tid()}/domains/${encodeURIComponent(d)}`, { method: 'DELETE' }); await refreshSel() })
 const makePrimary = d => run(async () => { await pconsole(`/tenants/${tid()}/primary-domain`, { method: 'PUT', body: { domain: d } }); await refreshSel() })
 const saveStorage = () => run(async () => {
-  applyStorage(await pconsole(`/tenants/${tid()}/storage`, { method: 'PUT', body: storageBody(storage) }))
+  applyStorage(await pconsole(`/tenants/${tid()}/storage`, { method: 'PUT', body: { offer: storage.offer, tenant_managed: storage.tenant_managed } }))
   notice.value = t('Saved')
 })
-const testStorage = async () => {
-  err.value = ''; storage.test = null; storage.testing = true
-  try { storage.test = await pconsole(`/tenants/${tid()}/storage/test`, { method: 'POST', body: storageBody(storage) }) } catch (e) { err.value = e.message } finally { storage.testing = false }
-}
 const saveNetwork = () => run(async () => {
   await pconsole(`/tenants/${tid()}/network`, { method: 'PUT', body: { allow_private_targets: net.allow, ...reauth(net.code) } })
   net.code = ''; notice.value = t('Saved'); await refreshSel()
@@ -271,6 +264,16 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
                 <div><label for="n-mu">{{ t('Maximum users (0 = unlimited)') }}</label><input id="n-mu" v-model="nt.max_users" inputmode="numeric" /></div>
                 <div><label for="n-ms">{{ t('Maximum storage in GB (0 = unlimited)') }}</label><input id="n-ms" v-model="nt.max_storage_gb" inputmode="decimal" /></div>
               </div>
+              <div class="row">
+                <div><label for="n-offer">{{ t('Storage provided by the platform') }}</label>
+                  <select id="n-offer" v-model="nt.storage_offer">
+                    <option value="none">{{ t('None: the tenant sets up its own storage') }}</option>
+                    <option value="platform">{{ t('Platform bucket (own prefix)') }}</option>
+                    <option value="local">{{ t('Local disk on the server') }}</option>
+                  </select></div>
+                <div><label class="check" style="margin-top:38px"><input type="checkbox" v-model="nt.allow_own_storage" /> {{ t('Tenant may configure its own storage') }}</label></div>
+              </div>
+              <p class="muted">{{ t('Without storage provided by the platform, uploads are refused until the tenant\'s administrator sets up storage under Admin → Storage.') }}</p>
               <div class="actions"><button :disabled="busy || !!slugHint">{{ t('Create tenant') }}</button></div>
             </form>
             <div v-if="created" class="card" role="status" style="margin-top:16px">
@@ -352,25 +355,19 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
           </div>
           <form class="card" @submit.prevent="saveStorage">
             <h3>{{ t('Storage') }}</h3>
-            <p v-if="storage.view">{{ t('New files of this tenant are stored in: {where}', { where: storage.view.effective }) }}
-              <template v-if="storage.view.effective_prefix"><br />{{ t('Prefix in the platform bucket') }}: <code>{{ storage.view.effective_prefix }}</code></template></p>
-            <label for="s-mode">{{ t('Where files are stored') }}</label>
-            <select id="s-mode" v-model="storage.mode">
-              <option value="platform">{{ t('Platform default with the tenant\'s own prefix ({where})', { where: storage.view?.platform_default || '' }) }}</option>
-              <option value="own">{{ t('Tenant\'s own bucket') }}</option>
+            <p v-if="storage.view">{{ t('In use') }}: <strong>{{ storageKindLabel(storage.view.kind) }}</strong> · {{ fmtSize(storage.view.usage_bytes) }}</p>
+            <p v-if="storage.view && (storage.view.kind || '').startsWith('own:')" class="muted">{{ t('The tenant manages its own storage. Its configuration is not visible to the platform.') }}</p>
+            <p v-if="storage.view && (storage.view.kind === 'platform' || (storage.view.kind || '').startsWith('own:'))" class="notice" role="note">{{ t('Remote storage can make uploads slower: after the transfer, each file is encrypted and copied to the object store before the share is ready, so large files or a distant region take longer. Downloads are read back from the object store and can be slower as well.') }}</p>
+            <label for="s-offer">{{ t('Storage provided by the platform') }}</label>
+            <select id="s-offer" v-model="storage.offer">
+              <option value="none">{{ t('None: the tenant sets up its own storage') }}</option>
+              <option value="platform">{{ t('Platform bucket (own prefix)') }}</option>
+              <option value="local">{{ t('Local disk on the server') }}</option>
             </select>
-            <p v-if="storage.mode === 'own' || (storage.view && storage.view.platform_backend !== 'local')" class="notice" role="note">{{ t('Remote storage can make uploads slower: after the transfer, each file is encrypted and copied to the object store before the share is ready, so large files or a distant region take longer. Downloads are read back from the object store and can be slower as well.') }}</p>
-            <p v-if="storage.mode === 'platform' && storage.view?.platform_backend === 'local'" class="muted">{{ t('The platform default is the local data directory: the tenant\'s files stay in its directory. Configure object storage under Platform settings.') }}</p>
-            <template v-if="storage.mode === 'own'">
-              <StorageForm :model-value="storage.settings" :is-set="storage.set" id-prefix="ts" local-label="" :show-notice="false" />
-              <p v-if="storage.test && storage.test.ok" class="ok" role="status">{{ t('Connection works: a test object was written, read and deleted in {ms} ms ({where}).', { ms: storage.test.ms, where: storage.test.description }) }}</p>
-              <p v-if="storage.test && !storage.test.ok" class="err" role="alert">{{ t('Connection test failed: {error}', { error: storage.test.error }) }}</p>
-            </template>
+            <p v-if="storage.offer === 'platform' && storage.view?.platform_backend === 'local'" class="muted">{{ t('The platform default is the local data directory: the tenant\'s files stay in its directory. Configure object storage under Platform settings.') }}</p>
             <label class="check"><input type="checkbox" v-model="storage.tenant_managed" /> {{ t('Tenant may configure its own storage') }}</label>
-            <p class="muted">{{ t('When allowed, the tenant\'s administrators can choose a bucket of their own in their storage settings (explicit credentials only; internal addresses are refused unless private targets are allowed below). Otherwise they see this storage read-only.') }}</p>
             <p class="muted">{{ t('Files keep the location they were written to; the tenant\'s administrators can move earlier files to the current location (Admin → Storage).') }}</p>
-            <div class="actions"><button :disabled="busy">{{ t('Save') }}</button>
-              <button v-if="storage.mode === 'own'" type="button" class="secondary" :disabled="storage.testing" @click="testStorage">{{ storage.testing ? t('Testing…') : t('Test connection') }}</button></div>
+            <div class="actions"><button :disabled="busy">{{ t('Save') }}</button></div>
           </form>
           <form class="card" @submit.prevent="saveNetwork">
             <h3>{{ t('Network targets') }}</h3>

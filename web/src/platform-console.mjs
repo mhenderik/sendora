@@ -52,12 +52,15 @@ export function quotaPercent(used, max) {
   return Math.min(100, Math.round((Number(used) || 0) * 100 / max))
 }
 
-// Body of a tenant storage form: the own-bucket settings only in mode own
-// (blank secrets keep the stored value).
-export function storageBody(st) {
-  const body = { mode: st.mode, tenant_managed: !!st.tenant_managed }
-  if (st.mode === 'own') body.settings = Object.fromEntries(Object.entries(st.settings || {}).filter(([, v]) => v !== '' && v !== undefined && v !== null))
-  return body
+// What the console shows of a tenant's storage: the kind only ("own:azure",
+// "platform", "local", "none"), never its configuration.
+const BACKENDS = { s3: 'S3', azure: 'Azure', gcs: 'Google Cloud Storage' }
+export function storageKindLabel(kind) {
+  const k = String(kind || '')
+  if (k.startsWith('own:')) return translateMessage(tr('Own storage ({type})')).replace('{type}', BACKENDS[k.slice(4)] || k.slice(4))
+  if (k === 'platform') return translateMessage(tr('Platform bucket'))
+  if (k === 'local') return translateMessage(tr('Local disk on the server'))
+  return translateMessage(tr('Not set up'))
 }
 
 // Re-authentication for a destructive action: the server accepts the

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/mhenderik/sendora/internal/filecrypt"
+	"github.com/mhenderik/sendora/internal/platform"
 	"github.com/mhenderik/sendora/internal/storage"
 	"github.com/mhenderik/sendora/internal/store"
 )
@@ -98,6 +99,12 @@ func (s *Server) storageLocked(updates map[string]string) bool {
 // location. Interrupted migrations are marked failed.
 func (s *Server) initStorage() error {
 	cfg := s.storageFromSettings()
+	if cfg.Backend == storage.KindNone {
+		// A tenant whose storage is not set up: uploads are refused until it
+		// is; existing files stay readable where they are.
+		_, err := s.St.DB.Exec(`UPDATE storage_migrations SET status='failed',error='interrupted by a restart',finished_at=CURRENT_TIMESTAMP WHERE status='running'`)
+		return err
+	}
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("storage: %v", err)
 	}
@@ -279,6 +286,17 @@ func (s *Server) validateStorageUpdate(w http.ResponseWriter, r *http.Request, u
 		return s.St.Setting(k)
 	}
 	next := s.storageFrom(get)
+	if next.Backend == storage.KindNone {
+		if _, ok := updates["storage_backend"]; ok {
+			jerr(w, 400, msgChooseOwnStorage)
+			return false
+		}
+		if get("backup_remote_enabled") == "true" {
+			jerr(w, 400, "remote backup copies need an object storage backend (S3, Azure or GCS)")
+			return false
+		}
+		return true
+	}
 	if err := next.Validate(); err != nil {
 		jerr(w, 400, err.Error())
 		return false
@@ -331,15 +349,20 @@ func (s *Server) storageStatus(w http.ResponseWriter, r *http.Request) {
 		if cfg.TenantManaged {
 			managedBy = "tenant"
 		}
+		offer := platform.OfferNone
+		if s.tenant.opts.Storage != nil {
+			offer = s.tenant.opts.Storage.Offer
+		}
 		out["tenant"] = map[string]any{
-			"editable":         s.tenantStorageEditable(),
-			"managed_by":       managedBy,
-			"platform_choice":  s.tenant.opts.DefaultStorage.Describe(),
-			"platform_default": s.tenant.opts.PlatformStorage,
-			"guarded":          s.guardTargets(),
+			"editable":        s.tenantStorageEditable(),
+			"managed_by":      managedBy,
+			"configured":      cfg.Backend != storage.KindNone,
+			"offer":           offer,
+			"platform_choice": s.tenant.opts.DefaultStorage.Describe(),
+			"guarded":         s.guardTargets(),
 		}
 	}
-	if err != nil {
+	if err != nil && cfg.Backend != storage.KindNone { // not set up: the screen shows a banner
 		out["error"] = clip(err.Error(), 300)
 	}
 	usage, uerr := store.StorageUsageByLocation(s.St.DB, id)
@@ -396,6 +419,9 @@ func (s *Server) storageTest(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	err := cfg.Validate()
+	if cfg.Backend == storage.KindNone {
+		err = errors.New(msgChooseOwnStorage)
+	}
 	if err == nil {
 		err = s.validateTenantStorage(ctx, cfg)
 	}

@@ -248,7 +248,7 @@ to that tenant's log with the role `platform_admin` (marked *both* below).
 | `platform_admin_offline_reset` | `sendora-db platform-admin-reset` | system (`sendora-db`) | `admin <name>` | `authenticator removed` and/or `temporary password set`; sessions ended |
 | `password_changed`, `password_change_failed` | A platform administrator changed their password (also after a temporary password) | platform administrator | `admin <name>` | `temporary password replaced` when applicable |
 | `platform_storage_changed`, `platform_storage_tested`, `platform_storage_test_failed` | Platform default storage saved or tested | platform administrator | `storage` | `<old> -> <new>; keys=...` or the location and error |
-| `tenant_storage_changed` (both), `tenant_storage_tested`, `tenant_storage_test_failed` | A tenant's storage choice saved or tested | platform administrator | `tenant <slug> (<id>)` | `mode=... location=... tenant_managed=...` |
+| `tenant_storage_changed` (both) | The platform's storage decision for a tenant changed (offer, own storage allowed) | platform administrator | `tenant <slug> (<id>)` | `offer <old> -> <new>; own storage allowed <old> -> <new>` |
 | `tenant_network_policy_changed` (both) | Private network targets allowed or refused for a tenant (after a fresh confirmation) | platform administrator | `tenant <slug> (<id>)` | `allow_private_targets <old> -> <new>` |
 | `tenant_deleted` | Tenant deleted | platform administrator | `tenant <slug> (<id>)` | number of objects removed from object storage; with *force*, the locations whose objects were **not** removed |
 

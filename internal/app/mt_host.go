@@ -612,7 +612,17 @@ func (h *TenantHost) Shutdown(wait time.Duration) {
 // CreateTenant registers a tenant, creates its database and its first
 // administrator. It returns the one-time password link when it could not be
 // emailed ("" when emailed).
-func (h *TenantHost) CreateTenant(actor, slug, name, adminUser, adminEmail string, maxUsers, maxStorage int64) (*platform.Tenant, string, bool, error) {
+//
+// storageOffer is what the platform provides ("none" by default: the tenant
+// sets up storage of its own; "platform" bucket; "local" disk) and allowOwn
+// whether the tenant may configure storage of its own.
+func (h *TenantHost) CreateTenant(actor, slug, name, adminUser, adminEmail string, maxUsers, maxStorage int64, storageOffer string, allowOwn bool) (*platform.Tenant, string, bool, error) {
+	if storageOffer == "" {
+		storageOffer = platform.OfferNone
+	}
+	if !platform.ValidOffer(storageOffer) {
+		return nil, "", false, errors.New("storage offer must be none, platform or local")
+	}
 	t, err := h.P.CreateTenant(slug, name, maxUsers, maxStorage)
 	if err != nil {
 		return nil, "", false, err
@@ -621,6 +631,9 @@ func (h *TenantHost) CreateTenant(actor, slug, name, adminUser, adminEmail strin
 		h.deleteTenantData(t.ID)
 		h.P.DeleteTenantRow(t.ID)
 		return nil, "", false, err
+	}
+	if err := h.P.SetStorage(t.ID, storageOffer, allowOwn); err != nil {
+		return fail(err)
 	}
 	dir, err := h.P.TenantDir(t.ID)
 	if err != nil {
@@ -639,7 +652,7 @@ func (h *TenantHost) CreateTenant(actor, slug, name, adminUser, adminEmail strin
 	var link string
 	var emailed bool
 	err = h.withTenant(t.ID, func(s *Server) error {
-		s.RecordPlatformEvent(actor, "tenant_created", "slug="+t.Slug+fmt.Sprintf(" max_users=%d max_storage_bytes=%d", maxUsers, maxStorage))
+		s.RecordPlatformEvent(actor, "tenant_created", "slug="+t.Slug+fmt.Sprintf(" max_users=%d max_storage_bytes=%d storage_offer=%s own_storage_allowed=%t", maxUsers, maxStorage, storageOffer, allowOwn))
 		var perr error
 		link, emailed, perr = s.ProvisionAdmin(actor, adminUser, adminEmail)
 		return perr

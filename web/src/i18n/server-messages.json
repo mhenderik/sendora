@@ -406,7 +406,9 @@
     "the tenant still has requests in progress; try again shortly",
     "only a verified domain of this tenant can be the primary domain",
     "this password is too easy to guess",
-    "username or email already exists"
+    "username or email already exists",
+    "Set up storage first under Admin → Storage",
+    "choose S3, Azure Blob Storage or Google Cloud Storage: the platform provides no storage for this organisation"
   ],
   "dynamic": [
     "%d file(s) in %d share(s) are missing on disk and cannot be downloaded after the import.",

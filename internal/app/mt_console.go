@@ -140,7 +140,6 @@ func newPlatformConsole(h *TenantHost) *platformConsole {
 			r.Put("/tenants/{id}/primary-domain", c.setPrimaryDomain)
 			r.Get("/tenants/{id}/storage", c.getStorage)
 			r.Put("/tenants/{id}/storage", c.putStorage)
-			r.Post("/tenants/{id}/storage/test", c.testTenantStorage)
 			r.Put("/tenants/{id}/network", c.putNetwork)
 			r.Get("/storage", c.getPlatformStorage)
 			r.Put("/storage", c.putPlatformStorage)
@@ -763,6 +762,8 @@ func (c *platformConsole) createTenant(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Slug, Name, AdminUsername, AdminEmail string
 		MaxUsers, MaxStorageBytes             *int64
+		StorageOffer                          string
+		AllowOwnStorage                       *bool
 	}
 	if decodeLoose(r, &b) != nil {
 		jerr(w, 400, "invalid request")
@@ -780,13 +781,18 @@ func (c *platformConsole) createTenant(w http.ResponseWriter, r *http.Request) {
 		b.AdminUsername = strings.SplitN(strings.TrimSpace(b.AdminEmail), "@", 2)[0]
 	}
 	cs := consoleFrom(r)
-	t, link, emailed, err := c.h.CreateTenant(cs.admin.Username, b.Slug, b.Name, b.AdminUsername, b.AdminEmail, maxUsers, maxStorage)
+	allowOwn := b.AllowOwnStorage == nil || *b.AllowOwnStorage
+	t, link, emailed, err := c.h.CreateTenant(cs.admin.Username, b.Slug, b.Name, b.AdminUsername, b.AdminEmail, maxUsers, maxStorage, b.StorageOffer, allowOwn)
 	if err != nil {
 		c.record(r, "tenant_create_failed", "tenant "+clip(b.Slug, 64), "failed", clip(err.Error(), 200))
 		jerr(w, 400, err.Error())
 		return
 	}
-	detail := fmt.Sprintf("admin=%s max_users=%d max_storage_bytes=%d welcome=", clip(b.AdminUsername, 64), maxUsers, maxStorage)
+	offer := b.StorageOffer
+	if offer == "" {
+		offer = platform.OfferNone
+	}
+	detail := fmt.Sprintf("admin=%s max_users=%d max_storage_bytes=%d storage_offer=%s own_storage_allowed=%t welcome=", clip(b.AdminUsername, 64), maxUsers, maxStorage, offer, allowOwn)
 	if emailed {
 		detail += "emailed"
 	} else {
@@ -1042,7 +1048,7 @@ func (c *platformConsole) probeStorage(ctx context.Context, cfg storage.Config) 
 	return storage.Probe(ctx, b)
 }
 
-// storageForm reads {mode, settings, tenant_managed} (settings: storage_*).
+// storageForm reads the platform default storage form {settings} (storage_*).
 type storageForm struct {
 	Mode          string            `json:"mode"`
 	Settings      map[string]string `json:"settings"`
@@ -1072,24 +1078,24 @@ func readStorageForm(r *http.Request) (storageForm, error) {
 	return f, nil
 }
 
-// storageView is what the console shows for a tenant: its choice (secrets
-// masked), the resulting location and the platform default.
+// storageView is what the console may know about a tenant's storage: the
+// platform's decision (offer, own storage allowed), the kind of storage in
+// use ("own:s3", "platform", "local", "none") and the bytes stored. Never the
+// configuration of the tenant's own storage (bucket, endpoint, prefix,
+// account, keys): that is the tenant's business.
 func (c *platformConsole) storageView(t *platform.Tenant) (map[string]any, error) {
 	sc, err := c.h.P.Storage(t.ID)
 	if err != nil {
 		return nil, err
 	}
-	eff := c.h.P.Resolve(t.ID, sc)
+	kind := ""
+	c.h.withTenant(t.ID, func(s *Server) error { kind = s.StorageKind(); return nil })
 	def := c.h.P.PlatformStorage()
-	effPrefix := ""
-	if sc.Mode == platform.StorageModePlatform && def.Backend != storage.KindLocal {
-		effPrefix = eff.Prefix
-	}
 	return map[string]any{
-		"choice":           sc.View(),
-		"effective":        eff.Describe(),
-		"effective_prefix": effPrefix,
-		"platform_default": def.Describe(),
+		"offer":            sc.Offer,
+		"tenant_managed":   sc.TenantManaged,
+		"kind":             kind,
+		"usage_bytes":      t.StatStorage,
 		"platform_backend": def.Backend,
 	}, nil
 }
@@ -1107,87 +1113,39 @@ func (c *platformConsole) getStorage(w http.ResponseWriter, r *http.Request) {
 	jout(w, 200, v)
 }
 
-// tenantStorageConfig validates a form for a tenant and returns the merged
-// own-bucket settings and the backend configuration they select.
-func (c *platformConsole) tenantStorageConfig(t *platform.Tenant, f storageForm) (*platform.StorageConfig, map[string]string, storage.Config, error) {
-	prev, err := c.h.P.Storage(t.ID)
-	if err != nil {
-		return nil, nil, storage.Config{}, err
-	}
-	if f.Mode != platform.StorageModePlatform && f.Mode != platform.StorageModeOwn {
-		return nil, nil, storage.Config{}, errors.New("mode must be platform or own")
-	}
-	settings := prev.Config
-	if f.Mode == platform.StorageModeOwn {
-		if settings, err = platform.MergeStorageSettings(prev.Config, f.Settings); err != nil {
-			return nil, nil, storage.Config{}, err
-		}
-	}
-	next := &platform.StorageConfig{Mode: f.Mode, Config: settings, TenantManaged: f.TenantManaged}
-	return prev, settings, c.h.P.Resolve(t.ID, next), nil
-}
-
-// putStorage: PUT /api/platform/tenants/{id}/storage. A changed own bucket is
-// tested (probe object) before it is saved; the tenant is reopened so its
-// server uses the new location for new files.
+// putStorage: PUT /api/platform/tenants/{id}/storage {offer, tenant_managed}.
+// The platform offers its bucket or the server's disk, or nothing, and allows
+// or forbids storage of the tenant's own; the tenant is reopened so its server
+// applies the decision to new files.
 func (c *platformConsole) putStorage(w http.ResponseWriter, r *http.Request) {
 	t := c.tenantParam(w, r)
 	if t == nil {
 		return
 	}
-	f, err := readStorageForm(r)
-	if err != nil {
+	var b struct {
+		Offer         string `json:"offer"`
+		TenantManaged bool   `json:"tenant_managed"`
+	}
+	if json.NewDecoder(r.Body).Decode(&b) != nil {
 		jerr(w, 400, "invalid request")
 		return
 	}
-	prev, settings, cfg, err := c.tenantStorageConfig(t, f)
+	prev, err := c.h.P.Storage(t.ID)
 	if err != nil {
+		jerr(w, 404, "not found")
+		return
+	}
+	if err := c.h.P.SetStorage(t.ID, b.Offer, b.TenantManaged); err != nil {
 		jerr(w, 400, err.Error())
 		return
 	}
-	prevCfg := c.h.P.Resolve(t.ID, prev)
-	prevJS, _ := prevCfg.Marshal()
-	nextJS, _ := cfg.Marshal()
-	if f.Mode == platform.StorageModeOwn && prevJS != nextJS {
-		if err := c.probeStorage(r.Context(), cfg); err != nil {
-			c.record(r, "tenant_storage_test_failed", tenantTarget(t), "failed", clip(cfg.Describe()+": "+err.Error(), 300))
-			jerr(w, 400, "storage connection test failed; the settings were not saved: "+clip(err.Error(), 300))
-			return
-		}
-	}
-	if err := c.h.P.SetStorage(t.ID, f.Mode, settings, f.TenantManaged); err != nil {
-		jerr(w, 400, err.Error())
-		return
-	}
-	detail := fmt.Sprintf("mode=%s location=%s tenant_managed=%t", f.Mode, cfg.Describe(), f.TenantManaged)
-	if prev.TenantManaged != f.TenantManaged {
-		detail += fmt.Sprintf(" (tenant may configure its own storage: %t -> %t)", prev.TenantManaged, f.TenantManaged)
-	}
-	c.record(r, "tenant_storage_changed", tenantTarget(t), "ok", clip(detail, 400))
-	c.tenantEvent(t, r, "tenant_storage_changed", clip(detail, 400))
+	detail := fmt.Sprintf("offer %s -> %s; own storage allowed %t -> %t", prev.Offer, b.Offer, prev.TenantManaged, b.TenantManaged)
+	c.record(r, "tenant_storage_changed", tenantTarget(t), "ok", detail)
+	c.tenantEvent(t, r, "tenant_storage_changed", detail)
 	c.h.reopen(t.ID)
+	t, _ = c.h.P.Tenant(t.ID)
 	v, _ := c.storageView(t)
 	jout(w, 200, v)
-}
-
-// testTenantStorage: POST /api/platform/tenants/{id}/storage/test with an
-// unsaved form; blank secrets keep the stored ones.
-func (c *platformConsole) testTenantStorage(w http.ResponseWriter, r *http.Request) {
-	t := c.tenantParam(w, r)
-	if t == nil {
-		return
-	}
-	f, err := readStorageForm(r)
-	if err != nil {
-		jerr(w, 400, "invalid request")
-		return
-	}
-	_, _, cfg, err := c.tenantStorageConfig(t, f)
-	if err != nil {
-		jerr(w, 400, err.Error())
-		return
-	}
-	c.answerProbe(w, r, cfg, "tenant_storage_tested", tenantTarget(t))
 }
 
 func (c *platformConsole) answerProbe(w http.ResponseWriter, r *http.Request, cfg storage.Config, action, target string) {

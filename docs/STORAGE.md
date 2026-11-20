@@ -173,27 +173,25 @@ Share files are still not part of a database backup. With an object store, prote
 
 ## 11. Multi-tenant mode
 
-In multi-tenant mode ([MULTI-TENANT.md](MULTI-TENANT.md) §8) the platform decides
-where each tenant's files go; `SENDORA_STORAGE_*` is ignored there.
+In multi-tenant mode ([MULTI-TENANT.md](MULTI-TENANT.md) §8) each tenant sets up
+its own storage in Admin → Storage; a new tenant has none, and uploads are
+refused until it does. `SENDORA_STORAGE_*` is ignored there.
 
-- **Platform default**: configured in the platform console (*Platform settings →
-  Default storage*, with *Test connection*) or with `SENDORA_PLATFORM_STORAGE_*`
-  (the variables of this page with `PLATFORM_` in front). A tenant on the default
-  writes under `<platform prefix>tenants/<tenant id>/` (`Config.WithPrefix`), so
-  tenants share the bucket but never a key space. Each tenant's backend sees only
-  its prefix, and every object is encrypted with that tenant's own file key.
-- **Tenant's own bucket**: entered per tenant in the console (same fields and
-  validation). It may not overlap the platform's `tenants/` area or another
-  tenant's own bucket.
-- **Tenant-managed** (on by default; the platform can switch it off per tenant,
-  audited): the tenant's administrators use Admin → Storage themselves. Only explicit credentials are
-  accepted (no AWS default chain/IRSA, Azure managed or workload identity, or
-  Google application default credentials: those are the platform's), and the
-  endpoint must not resolve to loopback, private, link-local, CGNAT or metadata
-  addresses (checked when saved and on every connection, unless the platform
-  allows private targets for the tenant). Otherwise tenant administrators see
-  their storage read-only.
+- **Own storage** (allowed by default; the platform can forbid it per tenant):
+  the form of this page, explicit credentials only (no AWS default chain/IRSA,
+  Azure managed or workload identity, or Google application default credentials:
+  those are the platform's), and the endpoint must not resolve to loopback,
+  private, link-local, CGNAT or metadata addresses (checked when saved and on
+  every connection, unless the platform allows private targets for the tenant).
+  The platform console shows only the kind and the usage.
+- **Platform bucket** (optional offer per tenant): the platform default
+  (*Platform settings → Default storage* or `SENDORA_PLATFORM_STORAGE_*`, the
+  variables of this page with `PLATFORM_` in front) under
+  `<platform prefix>tenants/<tenant id>/` (`Config.WithPrefix`). Each tenant's
+  backend sees only its prefix, and every object is encrypted with that tenant's
+  own file key.
+- **Local disk** of the server: only when the platform offers it per tenant.
 - The migration job, remote backup copies, the deletion queue and
   `sendora-db verify-files`/`storage-migrate` (with `-tenant <id>`) work per
-  tenant. Deleting a tenant removes its prefix in the platform default and
-  Sendora's objects (`files/`, `backups/`, `probe/`) in its own bucket.
+  tenant. Deleting a tenant removes its prefix in the platform bucket and
+  Sendora's objects (`files/`, `backups/`, `probe/`) in its own storage.

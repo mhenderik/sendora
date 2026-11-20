@@ -187,10 +187,14 @@ func TestMTObjectStoragePerTenantOnSharedBucket(t *testing.T) {
 	}
 	b, tokB := m.newTenant("klantb")
 	tb, _ := m.p.TenantBySlug("klantb")
-	// The console shows the resulting prefix.
+	// The platform offers its bucket to both tenants.
+	for _, id := range []string{ta.ID, tb.ID} {
+		c.want(c.do("PUT", "/api/platform/tenants/"+id+"/storage", "", map[string]any{"offer": "platform", "tenant_managed": true}, "Cookie", cookie), 200, "offer platform bucket")
+		m.h.evict(id, 0)
+	}
 	sv := c.do("GET", "/api/platform/tenants/"+ta.ID+"/storage", "", nil, "Cookie", cookie)
-	if sv.S("effective_prefix") != root+"tenants/"+ta.ID+"/" {
-		t.Fatalf("effective prefix: %s", sv.Body)
+	if sv.S("kind") != "platform" || sv.S("offer") != "platform" {
+		t.Fatalf("console storage view: %s", sv.Body)
 	}
 
 	contentA := "TENANT-A-SECRET-" + randomText(filecrypt.ChunkSize/2)
@@ -252,7 +256,7 @@ func TestMTObjectStoragePerTenantOnSharedBucket(t *testing.T) {
 	if st := a.do("GET", "/api/storage", tokA, nil); !strings.Contains(string(st.Body), `"editable":true`) {
 		t.Fatalf("own storage not allowed by default: %s", st.Body)
 	}
-	c.want(c.do("PUT", "/api/platform/tenants/"+ta.ID+"/storage", "", map[string]any{"mode": "platform", "tenant_managed": false}, "Cookie", cookie), 200, "switch tenant storage off")
+	c.want(c.do("PUT", "/api/platform/tenants/"+ta.ID+"/storage", "", map[string]any{"offer": "platform", "tenant_managed": false}, "Cookie", cookie), 200, "switch tenant storage off")
 	m.h.evict(ta.ID, 0)
 	st := a.do("GET", "/api/storage", tokA, nil)
 	a.want(st, 200, "tenant storage status")
@@ -297,11 +301,17 @@ func TestMTDeleteTenantWithUnreachableBucket(t *testing.T) {
 	m := newMTEnv(t)
 	mb := m.memoryStorage()
 	c, cookie, secret := m.consoleLogin()
-	m.newTenant("klantx")
+	old := netguard.LookupNetIP
+	t.Cleanup(func() { netguard.LookupNetIP = old })
+	netguard.LookupNetIP = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
+	x, tok := m.newTenant("klantx")
 	tx, _ := m.p.TenantBySlug("klantx")
 	own := map[string]any{"storage_backend": "s3", "storage_s3_endpoint": "https://s3.example.com", "storage_s3_region": "eu-west-1", "storage_s3_bucket": "klantx",
 		"storage_s3_prefix": "", "storage_s3_auth": "static", "storage_s3_access_key": "AKX", "storage_s3_secret_key": "sx"}
-	c.want(c.do("PUT", "/api/platform/tenants/"+tx.ID+"/storage", "", map[string]any{"mode": "own", "settings": own}, "Cookie", cookie), 200, "own bucket")
+	x.want(x.do("PUT", "/api/settings", tok, own), 200, "tenant's own bucket")
+	x.want(x.share(tok, map[string]string{"x.txt": "in the own bucket", "y.txt": "second"}, nil), 201, "share in own bucket")
 	m.h.openBackend = func(ctx context.Context, cfg storage.Config) (storage.Backend, error) {
 		if cfg.S3Bucket == "klantx" {
 			return nil, io.ErrUnexpectedEOF
@@ -338,10 +348,10 @@ func TestMTTenantManagedStorageAndGuard(t *testing.T) {
 	tm, _ := m.p.TenantBySlug("klantm")
 	mine := map[string]any{"storage_backend": "s3", "storage_s3_endpoint": "https://s3.tenant.example.com", "storage_s3_region": "eu-west-1", "storage_s3_bucket": "klantm-own",
 		"storage_s3_prefix": "sendora/", "storage_s3_auth": "static", "storage_s3_access_key": "AKM", "storage_s3_secret_key": "tenant-secret"}
-	c.want(c.do("PUT", "/api/platform/tenants/"+tm.ID+"/storage", "", map[string]any{"mode": "platform", "tenant_managed": false}, "Cookie", cookie), 200, "switch tenant storage off")
+	c.want(c.do("PUT", "/api/platform/tenants/"+tm.ID+"/storage", "", map[string]any{"offer": "local", "tenant_managed": false}, "Cookie", cookie), 200, "switch tenant storage off")
 	m.h.evict(tm.ID, 0)
 	a.want(a.do("PUT", "/api/settings", tok, mine), 403, "own storage switched off")
-	c.want(c.do("PUT", "/api/platform/tenants/"+tm.ID+"/storage", "", map[string]any{"mode": "platform", "tenant_managed": true}, "Cookie", cookie), 200, "allow tenant storage")
+	c.want(c.do("PUT", "/api/platform/tenants/"+tm.ID+"/storage", "", map[string]any{"offer": "local", "tenant_managed": true}, "Cookie", cookie), 200, "allow tenant storage")
 	m.h.evict(tm.ID, 0)
 	st := a.do("GET", "/api/storage", tok, nil)
 	if tn, _ := st.J()["tenant"].(map[string]any); tn == nil || tn["editable"] != true {
@@ -512,5 +522,86 @@ func TestMTTemporaryPasswordMustBeChanged(t *testing.T) {
 	if a, _ := m.p.AdminByName("root"); a.MustChangePassword {
 		t.Fatal("mark not cleared")
 	}
-	_ = platform.StorageModeOwn
+}
+
+// A tenant created in the console has no storage until its administrator
+// sets up its own: uploads, new shares and reverse shares are refused with a
+// clear message. Once set up, the console sees only the kind and the usage,
+// never the configuration, and no console API returns tenant users, shares,
+// audit details or secrets.
+func TestMTNewTenantWithoutStorageAndConsolePrivacy(t *testing.T) {
+	m := newMTEnv(t)
+	m.memoryStorage()
+	old := netguard.LookupNetIP
+	t.Cleanup(func() { netguard.LookupNetIP = old })
+	netguard.LookupNetIP = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
+	c, cookie, _ := m.consoleLogin()
+	r := c.do("POST", "/api/platform/tenants", "", map[string]any{"slug": "klantn", "name": "Klant N", "admin_email": "boss@klantn.test"}, "Cookie", cookie)
+	c.want(r, 201, "create tenant")
+	tn, _ := m.p.TenantBySlug("klantn")
+	if sc, _ := m.p.Storage(tn.ID); sc.Offer != platform.OfferNone || !sc.TenantManaged {
+		t.Fatalf("new tenant storage decision: %+v", sc)
+	}
+	link, _ := r.J()["setup_link"].(string)
+	e := m.host("klantn." + mtBase)
+	e.want(e.do("POST", "/api/auth/reset-password", "", map[string]any{"token": link[strings.LastIndex(link, "/")+1:], "password": mtPassword}), 200, "first password")
+	lr := e.do("POST", "/api/auth/login", "", map[string]any{"username": "boss", "password": mtPassword})
+	e.want(lr, 200, "login")
+	tok := lr.S("access_token")
+	if me := e.do("GET", "/api/users/me", tok, nil); me.J()["storage_ready"] != false {
+		t.Fatalf("storage_ready: %s", me.Body)
+	}
+	up := e.do("POST", "/api/uploads", tok, map[string]any{"files": []map[string]any{{"name": "a.txt", "full_path": "a.txt", "size": 3}}})
+	if up.Code != 409 || up.S("error") != msgStorageNotSetUp {
+		t.Fatalf("upload without storage: %d %s", up.Code, up.Body)
+	}
+	if inv := e.do("POST", "/api/reverse-shares/invite", tok, map[string]any{"email": "guest@example.com"}); inv.Code != 409 {
+		t.Fatalf("reverse share without storage: %d %s", inv.Code, inv.Body)
+	}
+	st := e.do("GET", "/api/storage", tok, nil)
+	if tnv, _ := st.J()["tenant"].(map[string]any); tnv == nil || tnv["configured"] != false || tnv["offer"] != "none" || tnv["editable"] != true {
+		t.Fatalf("tenant storage status: %s", st.Body)
+	}
+	// "Platform default" is not available without an offer.
+	e.want(e.do("PUT", "/api/settings", tok, map[string]any{"storage_backend": "local"}), 400, "no platform storage to choose")
+	own := map[string]any{"storage_backend": "azure", "storage_azure_account": "klantnstore", "storage_azure_container": "klantn-files",
+		"storage_azure_prefix": "secret-prefix/", "storage_azure_auth": "shared_key", "storage_azure_account_key": "S0VZLVNFQ1JFVA=="}
+	e.want(e.do("PUT", "/api/settings", tok, own), 200, "own storage")
+	e.want(e.share(tok, map[string]string{"a.txt": "TENANT-CONTENT-1", "b.txt": "TENANT-CONTENT-2"}, map[string]any{"name": "Quarterly secrets"}), 201, "upload after setup")
+
+	// The console sees the kind and the usage only.
+	m.h.refreshOpenStats()
+	sv := c.do("GET", "/api/platform/tenants/"+tn.ID+"/storage", "", nil, "Cookie", cookie)
+	c.want(sv, 200, "console storage view")
+	if sv.S("kind") != "own:azure" {
+		t.Fatalf("kind: %s", sv.Body)
+	}
+	var keys []string
+	for k := range sv.J() {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if strings.Join(keys, ",") != "kind,offer,platform_backend,tenant_managed,usage_bytes" {
+		t.Fatalf("console storage view fields: %v", keys)
+	}
+	forbidden := []string{"klantnstore", "klantn-files", "secret-prefix", "S0VZLVNFQ1JFVA", "blob.core.windows.net", "boss@klantn.test", "Quarterly secrets",
+		"a.txt", "TENANT-CONTENT", "password_hash", mtPassword}
+	for _, path := range []string{"/api/platform/tenants", "/api/platform/tenants/" + tn.ID, "/api/platform/tenants/" + tn.ID + "/storage",
+		"/api/platform/settings", "/api/platform/storage", "/api/platform/audit", "/api/platform/admins", "/api/platform/me"} {
+		g := c.do("GET", path, "", nil, "Cookie", cookie)
+		c.want(g, 200, path)
+		for _, f := range forbidden {
+			if strings.Contains(string(g.Body), f) {
+				t.Fatalf("%s exposes %q: %s", path, f, g.Body)
+			}
+		}
+	}
+	// The console can neither change nor test a tenant's own storage.
+	c.want(c.do("POST", "/api/platform/tenants/"+tn.ID+"/storage/test", "", map[string]any{}, "Cookie", cookie), 404, "no test of tenant storage")
+	c.want(c.do("PUT", "/api/platform/tenants/"+tn.ID+"/storage", "", map[string]any{"offer": "none", "tenant_managed": true, "settings": own}, "Cookie", cookie), 200, "decision only")
+	if s := m.server("klantn"); s.St.Setting("storage_azure_account") != "klantnstore" {
+		t.Fatal("console changed the tenant's storage settings")
+	}
 }

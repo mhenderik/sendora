@@ -979,7 +979,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	}
 	u.QuotaBytes, u.QuotaInheritsDefault = usage.QuotaBytes, usage.QuotaInheritsDefault
 	s.fillMFA(u)
-	out := map[string]any{"version": s.Version, "user": u, "providers": linked, "has_password": u.passwordHash != "", "terms_pending": s.termsPending(u), "quota_inherits_default": usage.QuotaInheritsDefault, "quota_bytes": usage.QuotaBytes, "storage_used_bytes": usage.StoredBytes, "storage_reserved_bytes": usage.ReservedBytes, "storage_available_bytes": usage.AvailableBytes}
+	out := map[string]any{"version": s.Version, "user": u, "providers": linked, "has_password": u.passwordHash != "", "terms_pending": s.termsPending(u), "quota_inherits_default": usage.QuotaInheritsDefault, "quota_bytes": usage.QuotaBytes, "storage_used_bytes": usage.StoredBytes, "storage_reserved_bytes": usage.ReservedBytes, "storage_available_bytes": usage.AvailableBytes, "storage_ready": s.tenant == nil || s.StorageReady()}
 	s.passwordExpiryFields(u, out)
 	jout(w, 200, out)
 }

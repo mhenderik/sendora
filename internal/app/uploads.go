@@ -118,6 +118,9 @@ func (s *Server) ownUpload(w http.ResponseWriter, r *http.Request) (string, bool
 }
 
 func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
+	if !s.storageAdmits(w) {
+		return
+	}
 	u := s.ctxUser(r)
 	var b struct {
 		Files   []uploadFileReq
@@ -502,6 +505,9 @@ func (s *Server) completeUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Request, generate func() (string, error)) {
+	if !s.storageAdmits(w) {
+		return
+	}
 	unlock := lockStripe(&s.uploadLocks, chi.URLParam(r, "id"))
 	defer unlock()
 	id, ok := s.ownUpload(w, r)

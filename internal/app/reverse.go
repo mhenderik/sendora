@@ -11,6 +11,9 @@ import (
 )
 
 func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) {
+	if !s.storageAdmits(w) {
+		return
+	}
 	u := s.ctxUser(r)
 	if u.IsGuest || !s.St.SettingBool("allow_reverse_shares") {
 		jerr(w, 403, "reverse shares disabled")

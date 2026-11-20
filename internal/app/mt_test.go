@@ -73,7 +73,8 @@ func (m *mtEnv) host(host string) *env { return &env{t: m.t, ts: m.ts, host: hos
 // through the one-time link; it returns the host helper and an access token.
 func (m *mtEnv) newTenant(slug string) (*env, string) {
 	m.t.Helper()
-	_, link, emailed, err := m.h.CreateTenant("tester", slug, strings.ToUpper(slug), "admin", "admin@"+slug+".test", 0, 0)
+	// Tests store files on the tenant's directory (the platform offers local disk).
+	_, link, emailed, err := m.h.CreateTenant("tester", slug, strings.ToUpper(slug), "admin", "admin@"+slug+".test", 0, 0, "local", true)
 	if err != nil {
 		m.t.Fatal(err)
 	}
@@ -347,18 +348,11 @@ func TestMTConsoleLifecycle(t *testing.T) {
 	if res.StatusCode != 308 || res.Header.Get("Location") != "https://klant1."+mtBase+"/x?y=1" {
 		t.Fatalf("redirect: %d %s", res.StatusCode, res.Header.Get("Location"))
 	}
-	m.memoryStorage()
-	own := map[string]any{"storage_backend": "s3", "storage_s3_endpoint": "https://s3.example.com", "storage_s3_region": "eu-west-1", "storage_s3_bucket": "klant1-files",
-		"storage_s3_prefix": "", "storage_s3_auth": "static", "storage_s3_access_key": "AKID", "storage_s3_secret_key": "SUPERSECRET"}
-	c.want(c.do("PUT", "/api/platform/tenants/"+id+"/storage", "", map[string]any{"mode": "own", "settings": own}, "Cookie", cookie), 200, "own storage")
-	r = c.do("GET", "/api/platform/tenants/"+id+"/storage", "", nil, "Cookie", cookie)
-	if strings.Contains(string(r.Body), "SUPERSECRET") || !strings.Contains(string(r.Body), `"storage_s3_secret_key":true`) {
-		t.Fatalf("storage secret shown: %s", r.Body)
+	c.want(c.do("PUT", "/api/platform/tenants/"+id+"/storage", "", map[string]any{"offer": "local", "tenant_managed": false}, "Cookie", cookie), 200, "storage decision")
+	if sc, _ := m.p.Storage(id); sc.Offer != "local" || sc.TenantManaged {
+		t.Fatalf("storage decision not stored: %+v", sc)
 	}
-	sc, _ := m.p.Storage(id)
-	if sc.Config["storage_s3_secret_key"] != "SUPERSECRET" || sc.Mode != "own" {
-		t.Fatal("storage secret not stored")
-	}
+	c.want(c.do("PUT", "/api/platform/tenants/"+id+"/storage", "", map[string]any{"offer": "bogus"}, "Cookie", cookie), 400, "invalid offer")
 	// Delete needs the confirmation and a fresh TOTP code.
 	c.want(c.do("POST", "/api/platform/tenants/"+id+"/delete", "", map[string]any{"confirm": "klant1", "code": "000000"}, "Cookie", cookie), 403, "delete without step-up")
 	c.want(c.do("POST", "/api/platform/tenants/"+id+"/delete", "", map[string]any{"confirm": "nope", "code": m.nextCode(secret)}, "Cookie", cookie), 400, "delete without confirmation")

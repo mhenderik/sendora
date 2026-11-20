@@ -69,6 +69,7 @@ var schema = []string{
 		config TEXT NOT NULL DEFAULT '{}',
 		tenant_managed INTEGER NOT NULL DEFAULT 1,
 		tenant_managed_explicit INTEGER NOT NULL DEFAULT 0,
+		offer TEXT NOT NULL DEFAULT 'none',
 		updated_at TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE IF NOT EXISTS platform_admins (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,11 +125,16 @@ func Open(dataDir string, master []byte, initialize bool) (*Platform, error) {
 			return nil, err
 		}
 	}
-	// Columns added after the first 0.2.0 development builds.
+	// Columns added after the first 0.2.0 development builds. Tenants stored
+	// before the storage offer existed keep what they had: the platform default
+	// (with their prefix, or their directory while the default is local).
+	var hadOffer int
+	st.DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('tenant_storage') WHERE name='offer'`).Scan(&hadOffer)
 	for _, c := range []struct{ table, name, decl string }{
 		{"tenants", "allow_private_targets", "INTEGER NOT NULL DEFAULT 0"},
 		{"tenant_storage", "tenant_managed", "INTEGER NOT NULL DEFAULT 1"},
 		{"tenant_storage", "tenant_managed_explicit", "INTEGER NOT NULL DEFAULT 0"},
+		{"tenant_storage", "offer", "TEXT NOT NULL DEFAULT 'none'"},
 		{"platform_admins", "must_change_password", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := addColumn(st.DB, c.table, c.name, c.decl); err != nil {
@@ -138,6 +144,12 @@ func Open(dataDir string, master []byte, initialize bool) (*Platform, error) {
 	}
 	// Tenants may configure their own storage unless a platform administrator
 	// switched it off for them (an explicit choice); older rows had no choice.
+	if hadOffer == 0 {
+		if _, err := st.DB.Exec(`UPDATE tenant_storage SET offer='platform' WHERE mode='platform'`); err != nil {
+			st.Close()
+			return nil, err
+		}
+	}
 	if _, err := st.DB.Exec(`UPDATE tenant_storage SET tenant_managed=1 WHERE tenant_managed_explicit=0 AND tenant_managed=0`); err != nil {
 		st.Close()
 		return nil, err
@@ -338,7 +350,7 @@ func (p *Platform) insertTenant(t *Tenant, legacyRoot []byte) error {
 		t.ID, t.Slug, t.Name, t.Status, t.CreatedAt, t.MaxUsers, t.MaxStorageBytes, t.KeyMode, root); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO tenant_storage(tenant_id,mode,prefix,tenant_managed,updated_at) VALUES(?, 'platform', ?, 1, ?)`, t.ID, "tenants/"+t.ID+"/", now()); err != nil {
+	if _, err := tx.Exec(`INSERT INTO tenant_storage(tenant_id,mode,prefix,offer,tenant_managed,updated_at) VALUES(?, 'platform', ?, 'none', 1, ?)`, t.ID, "tenants/"+t.ID+"/", now()); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
