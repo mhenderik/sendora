@@ -17,7 +17,7 @@ import (
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|verify-files|audit-verify|mfa-reset|tenant-import [flags]")
+		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|verify-files|audit-verify|mfa-reset|tenant-import|storage-migrate [flags]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	source := flags.String("source", "", "database source path; stop the app before offline operations")
@@ -36,6 +36,7 @@ func run(args []string) error {
 	abort := flags.Bool("abort", false, "tenant-import: undo an unfinished conversion")
 	tenant := flags.String("tenant", "", "multi-tenant: operate on this tenant's database (the key is derived from -key-file, the master key)")
 	legacyRoot := flags.Bool("legacy-root", false, "multi-tenant: the tenant was imported from a single-tenant installation; its files and audit chain use the master key (verify-files, audit-verify)")
+	dryRun := flags.Bool("dry-run", false, "storage-migrate: only report how many files would be copied")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -132,6 +133,12 @@ func run(args []string) error {
 			return err
 		}
 		fmt.Println("All multi-factor factors and sessions of the user were removed. Stop the application before running this offline step.")
+	case "storage-migrate":
+		dir := *dataDir
+		if dir == "" {
+			dir = filepath.Dir(*source)
+		}
+		return storageMigrate(*source, dir, key, *dryRun)
 	case "verify-files":
 		dir := *dataDir
 		if dir == "" {

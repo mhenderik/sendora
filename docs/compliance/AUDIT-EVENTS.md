@@ -2,7 +2,7 @@
 
 This catalogue lists every audit action the Sendora server writes, so that an auditor can judge coverage and a SIEM engineer can build rules. It was compiled from the code (every `logEvent`, `logShare`, `critical`/`auditCritical`, `auditAccessDenied` and `auditDecryptFailed` call in `internal/app`, plus the generic rules in `auditMiddleware`/`auditOutcome` and `classifyAction` in `internal/app/audit.go`). The chain itself is implemented in `internal/store/audit.go`.
 
-Applies to version 0.1.5.
+Applies to version 0.1.5; the `storage_*` and `backup_remote_*` events to 0.2.0 (in development).
 
 [Back to the compliance index](README.md) · wiki: [Audit log](https://github.com/mhenderik/sendora/wiki/Audit-Log)
 
@@ -36,6 +36,7 @@ Every record has these fields (table `audit_log`; same names in the JSON Lines e
 | `invite#<id>` | Reverse-share invitations |
 | `provider#<id>`, `provider` | Sign-in providers |
 | `backup`, `<backup file name>` | Backups |
+| `storage` | Object storage settings, connection tests and migrations (0.2.0) |
 | `settings`, `audit_log`, `access_review` | Fixed labels |
 | `lang:<code>` | Interface translations |
 | `<route pattern>` or `METHOD <path>` | `access_denied` records |
@@ -100,6 +101,7 @@ The outcome is then either the handler's own record (normally with the same acti
 | `provider_created` | `POST /api/auth-providers` | S | admin | `provider` | middleware |
 | `provider_updated` | `PUT /api/auth-providers/{id}` | S | admin | `provider#<id>` | middleware |
 | `provider_deleted` | `DELETE /api/auth-providers/{id}` | S | admin | `provider#<id>` | middleware |
+| `storage_migration_requested` | `POST /api/storage/migrate` | S | admin | `storage` | handler writes `storage_migration_started` (see 4.4); a refusal (nothing to migrate, already running, backend unusable) gets the generic outcome (`status=409`) |
 | `backup_created` | `POST /api/backups` | | admin | `backup` | handler |
 | `backup_downloaded` | `GET /api/backups/{name}` | S | security | `<file name>` / `size=<n> bytes` | middleware |
 | `backup_deleted` | `DELETE /api/backups/{name}` | S | admin | `backup#<name>` | handler |
@@ -188,6 +190,11 @@ Every path that sets a local password is recorded: setup and self-registration c
 | `audit_ip_logging_changed` | `audit_log_ip` changed | caller | `settings` | `'old' -> 'new'` | ok |
 | `application_url_changed` | `application_url` changed | caller | `settings` | `'old' -> 'new'` | ok |
 | `provider_created`, `provider_updated`, `provider_deleted` | Sign-in provider changed (critical; outcome by the middleware) | caller | `provider[#<id>]` | `status=<code>` | by status |
+| `storage_backend_changed` | `storage_backend` changed (in addition to `settings_changed`) | caller | `settings` | `'old' -> 'new' (<location description>)` | ok |
+| `storage_connection_tested` | *Test connection* succeeded (`POST /api/storage/test`, step-up): a probe object was written, read back and deleted | caller | `storage` | location description (backend, bucket/container, prefix; no credentials) | ok |
+| `storage_connection_test_failed` | *Test connection* failed, or saving changed storage settings was refused because their connection test failed | caller | `storage` | `<location description>: <error>` (max. 400 characters; no credentials) | failed |
+| `storage_migration_started` | Storage migration started from the web interface (after `storage_migration_requested`) or by `sendora-db storage-migrate` (actor `sendora-db`, role and category `system`) | caller | `storage` | `migration#<n> to <location description>` | ok |
+| `storage_migration_cancel_requested` | Administrator cancelled the running migration (`POST /api/storage/migrate/cancel`, step-up) | caller | `storage` | `migration#<n>` | ok |
 | `backup_created` | Administrator made a backup | caller | `<file name>` | empty | ok |
 | `backup_deleted` | Administrator deleted a backup | caller | `<file name>` | empty | ok |
 | `db_import_prepared` | Uploaded database validated and re-keyed | caller | empty | `users=<n> admins=<n> shares=<n> files=<n>` | ok |
@@ -213,6 +220,12 @@ Other administrator mutations (branding, backgrounds, themes, email templates an
 | `backup_created_auto` | system | Automatic backup (every 24 h while `backups_enabled`) | system | `<file name>` | empty | ok |
 | `backup_failed_auto` | system | Automatic backup failed | system | empty | `automatic backup failed; details are in the server log` | failed |
 | `backup_pruned` | system | Old automatic backup removed beyond `backup_keep` | system | `<file name>` | `backup_keep=<n>` | ok |
+| `backup_remote_copied` | system | Automatic backup also uploaded to the object store (`backup_remote_enabled`) | system | `<file name>` | empty | ok |
+| `backup_remote_failed` | system | Upload of the automatic backup to the object store failed | system | `<file name>` | `remote backup copy failed; details are in the server log` | failed |
+| `backup_remote_pruned` | system | Old remote backup copy removed beyond `backup_keep` | system | `<file name>` | `backup_keep=<n>` | ok |
+| `storage_migration_finished` | system | Storage migration ended with every file copied, verified and switched | system (`sendora-db` for the command) | `storage` | `migration#<n> to <location>: <n> copied, <n> failed, <n> skipped, <n> bytes` | ok |
+| `storage_migration_failed` | system | Storage migration ended with failed files or an error (failed files stay readable in their old location) | system (`sendora-db`) | `storage` | as above plus `; <reason>` | failed |
+| `storage_migration_cancelled` | system | Storage migration cancelled by an administrator, by a stop of the server or by Ctrl-C of the command | system (`sendora-db`) | `storage` | as above | ok |
 | `share_files_purged` | system | Shares expired more than `clean_files_days` ago were removed | system | empty | `<n> shares removed, <n> failed (expired more than <d> days ago)` | ok |
 | `account_removed_auto` | system | Unverified self-registration older than 48 h removed; guest account of an expired, unused open-link invitation removed | system | `user#<id> (<name>)` | `reason=email not verified within 48 hours of registration` or `reason=guest invitation expired unused` | ok |
 

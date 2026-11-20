@@ -61,6 +61,7 @@ Sendora has **not** been independently audited or penetration tested. The docume
 
 - [Compliance and audit documentation](docs/compliance/README.md): [security whitepaper](docs/compliance/SECURITY-WHITEPAPER.md), [shared responsibility matrix](docs/compliance/SHARED-RESPONSIBILITY.md) (ISO/IEC 27001, SOC 2), [data flows](docs/compliance/DATA-FLOW.md), [personal data](docs/compliance/PERSONAL-DATA.md), [audit events](docs/compliance/AUDIT-EVENTS.md), [vulnerability and dependency management](docs/compliance/VULNERABILITY-AND-DEPENDENCY-MANAGEMENT.md)
 - [Threat model](docs/THREAT-MODEL.md) and [file format specification](docs/FILE-FORMAT.md)
+- [Object storage](docs/STORAGE.md): S3-compatible, Azure Blob and Google Cloud Storage backends (files encrypted before upload), migration
 - [Security policy](SECURITY.md), including how to verify release images
 
 ## Bundled background photos

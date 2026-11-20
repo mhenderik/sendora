@@ -15,6 +15,7 @@ import { t } from '../../i18n'
       <router-link to="/admin/security">{{ t('Security') }}</router-link>
       <router-link to="/admin/languages">{{ t('Languages') }}</router-link>
       <router-link to="/admin/backups">{{ t('Backups') }}</router-link>
+      <router-link to="/admin/storage">{{ t('Storage') }}</router-link>
       <router-link to="/admin/logs">{{ t('Audit log') }}</router-link>
     </div>
     <router-view />

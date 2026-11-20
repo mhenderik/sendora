@@ -68,6 +68,7 @@ func (s *Server) GracefulStop(timeout time.Duration, stopJobs func(), shutdown f
 		if stopJobs != nil {
 			stopJobs()
 		}
+		s.stopMigration()
 		if shutdown != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			if err := shutdown(ctx); err != nil {
@@ -116,6 +117,8 @@ func (s *Server) autoBackup() bool {
 	for _, n := range s.pruneBackups() {
 		s.logEvent(0, "system", "backup_pruned", n, "backup_keep="+strconv.Itoa(s.St.SettingInt("backup_keep", 7)))
 	}
+	// The backup is already SQLCipher-encrypted: the object store gets ciphertext.
+	s.copyBackupRemote(name)
 	return true
 }
 
@@ -261,6 +264,8 @@ func (s *Server) maintain() {
 		AND guest_user_id NOT IN (SELECT id FROM users)`, now)
 	s.pruneIPBans()
 	s.purgeAudit()
+	// Remote objects of removed files (queued by the database) and retries.
+	s.kickDeletes()
 }
 
 // Automatic retention never removes pre-migration plaintext backups or

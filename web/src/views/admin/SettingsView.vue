@@ -24,6 +24,7 @@ async function save() {
   try {
     const body = { ...s.value, default_storage_quota_bytes: String(gbToBytes(quotaGB.value)) }
     for (const k of SECURITY_KEYS) delete body[k] // saved on the Security tab
+    for (const k of Object.keys(body)) if (k.startsWith('storage_') || k.startsWith('backup_remote_')) delete body[k] // saved on the Storage tab
     await api('/settings', { method: 'PUT', body }); await loadBoot(); await load(); msg.value = t('Saved')
     return true
   } catch (e) { err.value = e.message; return false }

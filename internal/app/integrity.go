@@ -421,7 +421,7 @@ func snapshotLimit() int64 {
 // between hashing a mutable source and streaming it. Legacy files get a first
 // baseline only; that cannot establish what their original uploader sent.
 func (s *Server) copyVerifiedSource(ctx context.Context, dst io.Writer, f FileInfo) error {
-	in, _, err := s.openStoredFile(f)
+	in, _, err := s.openStoredFile(ctx, f)
 	if err != nil {
 		return err
 	}

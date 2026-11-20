@@ -72,7 +72,7 @@ func (s *Store) ScanImportedCopy(path string, fn func(shareID int64, diskPath st
 			os.Remove(path + suffix)
 		}
 	}()
-	rows, err := db.Query(`SELECT f.share_id,f.disk_path FROM files f JOIN shares s ON s.id=f.share_id WHERE s.status<>'deleted'`)
+	rows, err := db.Query(`SELECT f.share_id,f.disk_path FROM files f JOIN shares s ON s.id=f.share_id WHERE s.status<>'deleted' AND f.storage_id=0`)
 	if err != nil {
 		return err
 	}
@@ -402,8 +402,10 @@ func clearImportedSecrets(db *sql.DB) error {
 	return err
 }
 
-// rebaseImportedFiles validates share IDs and rewrites each file's disk_path to
-// this server's data directory (see PrepareImported).
+// rebaseImportedFiles validates share IDs and rewrites each local file's
+// disk_path to this server's data directory (see PrepareImported). Files in an
+// object store keep their location and key: they stay readable as long as the
+// imported location's bucket and credentials are.
 func rebaseImportedFiles(db *sql.DB, dataDir string) error {
 	rows, err := db.Query(`SELECT long_id FROM shares`)
 	if err != nil {
@@ -425,7 +427,7 @@ func rebaseImportedFiles(db *sql.DB, dataDir string) error {
 	if err != nil {
 		return err
 	}
-	rows, err = db.Query(`SELECT f.id,s.long_id,f.disk_path FROM files f JOIN shares s ON s.id=f.share_id`)
+	rows, err = db.Query(`SELECT f.id,s.long_id,f.disk_path FROM files f JOIN shares s ON s.id=f.share_id WHERE f.storage_id=0`)
 	if err != nil {
 		return err
 	}
