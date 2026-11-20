@@ -2,7 +2,7 @@
 
 Sendora is self-hosted software, not a service: the organisation that deploys it (the "operator" or "customer") runs the infrastructure and the processes around it. This matrix states, per control area, what the Sendora application provides, what the operator must do, and what evidence Sendora can produce for an audit. It is organised by the ISO/IEC 27001:2022 Annex A themes and the SOC 2 Trust Services Criteria. It does not certify anything: Sendora has **not** been independently audited, and an operator's certification depends on the operator's own controls.
 
-Applies to version 0.1.5; object storage rows to 0.2.0 (in development).
+Applies to version 0.2.0 (in development); object storage rows and section 4a are new in 0.2.0.
 
 [Back to the compliance index](README.md)
 
@@ -134,8 +134,10 @@ When one installation serves several organisations, the **platform operator** ru
 | Area | Sendora provides | Platform operator | Tenant |
 |---|---|---|---|
 | Isolation between tenants | separate encrypted database, directory, keys and secrets per tenant; isolation tests | runs one process per platform, protects the master key, keeps the image current | — |
-| Platform access | console with mandatory TOTP, step-up for destructive actions, platform audit log | manages platform administrators, reviews the platform audit log | — |
+| Platform access | console with TOTP required by default (`platform_mfa_required`; switching it off is audited), step-up for destructive actions, platform audit log, offline `platform-admin-reset` (audited) | manages platform administrators, decides on the MFA requirement, reviews the platform audit log | — |
 | Tenant administration | each tenant's own admin screens, audit log, backups | sets quotas and domains; never needs tenant content | manages users, settings, SMTP, providers, retention |
+| Storage | per-tenant storage: own S3/Azure/GCS (explicit credentials, SSRF-guarded endpoint) or a platform offer (platform bucket under a fixed prefix, or local disk); per-tenant storage limit for platform storage; encryption with the tenant's own file key | decides whether a tenant may use its own storage and what it offers; operates the platform bucket; sets storage limits | configures and pays for its own storage, its retention, versioning and region |
+| Network targets | SSRF guard for tenant-configured SMTP, OIDC, audit forwarding and storage endpoints; per-tenant exception (audited in both logs) | allows private targets only where needed | — |
 | DNS and TLS | DNS TXT verification of custom domains | wildcard certificate, ingress, custom-domain certificates | creates the DNS records for its custom domain |
 | Backups | per-tenant automatic backups; offline restore procedure | backs up the whole `DATA_DIR` and the master key, restores on request | downloads its own backups |
 | Email | per-tenant SMTP; platform SMTP as default | operates/contracts the default SMTP server | may configure its own SMTP |
@@ -152,7 +154,7 @@ When one installation serves several organisations, the **platform operator** ru
 | No high availability, single instance | Platform-level restart and storage redundancy |
 | No native TLS | Reverse proxy or Ingress |
 | No key rotation, no HSM/KMS | Strict key custody; plan for re-deployment if the key is compromised |
-| Offline `sendora-db` actions are not audited | Restrict and log host access |
+| Most offline `sendora-db` actions are not audited (`storage-migrate`, `tenant-import` and `platform-admin-reset` are) | Restrict and log host access |
 | No scheduled access reviews or sign-off workflow | Run reviews as a process with the exported report |
 | No SLA, support contract or security team | Assess as supplier risk |
 | Not independently audited or penetration tested | Commission your own assessment |

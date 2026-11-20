@@ -2,7 +2,7 @@
 
 This document gives an auditor or security reviewer one place to read how Sendora is built and secured: architecture, trust boundaries, authentication, authorisation, cryptography, logging, data protection, secure development and known limitations. It summarises what the code does and links to the detailed documents rather than repeating them. Every statement was checked against the source code of the version below; where something an auditor might expect is not there, this document says so.
 
-Applies to version 0.1.5 (in development on `main`).
+Applies to version 0.2.0 (in development). Object storage and multi-tenant mode are optional; with the defaults (local data directory, single-tenant) Sendora behaves as 0.1.5.
 
 [Back to the compliance index](README.md)
 
@@ -15,14 +15,15 @@ Applies to version 0.1.5 (in development on `main`).
 | Server | One Go executable (`main.go`, `internal/app`, `internal/store`, `internal/filecrypt`) with the chi router | Serves the API under `/api` and the embedded single-page app. Plain HTTP only; TLS is terminated in front (reverse proxy or Ingress) |
 | Web interface | Vue 3 (`web/src`), built into the executable | No inline script; CSP `script-src 'self'` |
 | Database | SQLite with SQLCipher 4.20.0 (built from a checksum-verified source in the `Dockerfile`), file `DATA_DIR/sendora.db` | Accounts, shares metadata, settings, secrets, audit log |
-| Share file storage | `DATA_DIR/shares/<link id>/<index>_<file name>` | File contents AES-256-GCM per file (format in [FILE-FORMAT.md](../FILE-FORMAT.md)); directory and file names are not encrypted |
+| Share file storage | `DATA_DIR/shares/<link id>/<index>_<file name>` (default `local` backend), or an S3-compatible, Azure Blob or Google Cloud Storage bucket as `<prefix>files/<32 random hex>` (`internal/storage`) | File contents AES-256-GCM per file (format in [FILE-FORMAT.md](../FILE-FORMAT.md)), encrypted **before** upload to an object store; local directory and file names are not encrypted, object names are random. See [STORAGE.md](../STORAGE.md) |
 | Upload staging | `DATA_DIR/uploads/<session>/` | Parts in plain form while an upload is in progress; removed on completion, abort or after 24 h |
 | Download snapshots | `DATA_DIR/.verified-download-*` | Temporary plain copies for verified downloads; removed after the transfer and at start |
-| Backups | `DATA_DIR/backups/` | SQLCipher-encrypted copies of the database (not the share files) |
-| Command-line tool | `sendora-db` = `sendora db` (`internal/dbcli`, part of the `sendora` binary) | Key generation, backup, verification (`verify`, `verify-files`, `audit-verify`), offline MFA reset |
+| Backups | `DATA_DIR/backups/`, optionally copied to `<prefix>backups/` in the object store (`backup_remote_enabled`) | SQLCipher-encrypted copies of the database (not the share files) |
+| Multi-tenant mode (optional) | `SENDORA_MULTI_TENANT=true`: `internal/platform`, `internal/app/mt_*.go`; `DATA_DIR/platform.db` plus `DATA_DIR/tenants/<random id>/` per tenant | One process routes by host to one server instance per tenant, each with its own SQLCipher database and keys; a platform console on `admin.<base domain>`. See [MULTI-TENANT.md](../MULTI-TENANT.md) |
+| Command-line tool | `sendora-db` = `sendora db` (`internal/dbcli`, part of the `sendora` binary) | Key generation, backup, verification (`verify`, `verify-files`, `audit-verify`), offline MFA reset, `storage-migrate`, `tenant-import`, `platform-admin-reset` |
 | Container image | `Dockerfile`: Debian 13 slim, user 10001, no setuid/setgid binaries | Example manifests in `deploy/` (read-only root file system, all capabilities dropped, `no-new-privileges`, NetworkPolicy in `deploy/kubernetes.yaml`) |
 
-Sendora is a **single-instance** application: one process owns the data directory. There is no clustering or built-in high availability.
+Sendora is a **single-instance** application: one process owns the data directory (in multi-tenant mode one process serves all tenants). There is no clustering or built-in high availability.
 
 The data flows are described in [DATA-FLOW.md](DATA-FLOW.md).
 
@@ -35,6 +36,9 @@ The data flows are described in [DATA-FLOW.md](DATA-FLOW.md).
 | Browser ↔ server | The browser runs the shipped JavaScript. CSP, `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer`, `Sec-Fetch-Site`/`Origin` checks against CSRF |
 | Sendora process ↔ data volume | The process holds the database key in memory. Anyone who controls the running process or the key file can read everything. **Sendora is not end-to-end encrypted** |
 | Sendora → outbound services | SMTP, identity providers, audit forwarding, optional Have I Been Pwned. Outbound OIDC and forwarding requests refuse loopback (OIDC), link-local and cloud-metadata addresses after DNS resolution |
+| Sendora → object storage (optional) | The provider receives ciphertext only under random names; it sees sizes, times and access patterns, and can delete or withhold objects (availability), not read or undetectably change them. Credentials are stored in the encrypted database; redirecting a stored secret to another endpoint requires re-entering it |
+| Tenant ↔ tenant (multi-tenant) | Separate database, directory, derived keys, signing secrets and HMAC keys per tenant; host-only cookies; routing only by host (`X-Forwarded-Host` only from trusted proxies). Targets a tenant administrator configures (SMTP, OIDC, audit forwarding, own storage endpoint) must not resolve to loopback, private, link-local, CGNAT or metadata addresses (`internal/netguard`, checked when saved and on every connection) |
+| Platform console ↔ tenants | Platform administrators manage tenants, quotas, domains and storage offers but see counts only, never tenant users, shares, files, audit details or a tenant's own storage configuration. TOTP is required by default (`platform_mfa_required`) |
 
 The full actor and threat analysis is in [THREAT-MODEL.md](../THREAT-MODEL.md).
 
@@ -84,7 +88,7 @@ The full actor and threat analysis is in [THREAT-MODEL.md](../THREAT-MODEL.md).
 
 ### 3.6 Step-up re-authentication and administrator network restriction
 
-- Critical administrator actions need a sign-in or confirmation not older than `admin_stepup_minutes` (default 5, 1–60): deleting or erasing users, changing administrator/auditor roles, creating/changing/deleting sign-in providers, changing security settings, downloading, deleting and restoring (importing) backups, and MFA reset requests. Confirmation is by second factor, or password when no factor exists; provider-only administrators sign in at the provider again. Applying an import additionally requires the administrator's local password.
+- Critical administrator actions need a sign-in or confirmation not older than `admin_stepup_minutes` (default 5, 1–60): deleting or erasing users, changing administrator/auditor roles, creating/changing/deleting sign-in providers, changing security settings, changing storage settings, testing a storage connection, starting or cancelling a storage migration, scheduling the multi-tenant conversion and *Restart now*, downloading, deleting and restoring (importing) backups, and MFA reset requests. Confirmation is by second factor, or password when no factor exists; provider-only administrators sign in at the provider again. Applying an import additionally requires the administrator's local password.
 - `admin_ip_allowlist` (empty by default) restricts administration routes and the audit log to listed addresses or CIDR ranges; refusals are audited (`access_denied`). Saving a list that excludes the caller is refused; `SENDORA_DISABLE_ADMIN_IP_ALLOWLIST=true` is the recovery switch.
 
 ## 4. Authorisation model
@@ -106,13 +110,14 @@ Administrator residual powers (documented in the threat model): delete a user an
 | Use | Mechanism |
 |---|---|
 | Database at rest | SQLCipher 4.20.0 (AES-256-CBC with HMAC-SHA512 per page), raw 32-byte key from `SENDORA_DB_KEY_FILE` |
+| Multi-tenant keys | The key file is the master key and is never used directly: `HKDF-SHA256(master, "sendora/v1/platform-db")` for the platform database, `HKDF-SHA256(master, "sendora/v1/tenant-db/<tenant id>")` (128-bit random ID) per tenant; file, audit, token and HMAC keys follow from the tenant key. Tenants imported from a single-tenant installation keep the old key as the root of their file and audit keys (*legacy root*) |
 | Share files at rest | AES-256-GCM in 64 KiB chunks, per-file key via HKDF-SHA256 from the database key and a random 32-byte salt; format v2 binds a random file ID into every chunk's AAD; last-chunk flag prevents truncation/extension. Specification and test vectors: [FILE-FORMAT.md](../FILE-FORMAT.md) |
 | Integrity of downloads | SHA-256 recorded at upload and checked for verified downloads; modified chunks answer 409 and are audited |
 | Audit chain | HMAC-SHA256 chain with an HKDF-derived key; checkpoints on retention purge |
 | Passwords | bcrypt cost 12 (account and share passwords) |
 | Tokens | HS256 with per-purpose HKDF subkeys; refresh, reset and MFA-reset tokens stored as hashes |
-| Backups | Same SQLCipher key as the live database |
-| In transit | Not provided by Sendora itself (plain HTTP listener). Outbound: SMTP with STARTTLS (default) or implicit TLS, minimum TLS 1.2, mode `none` possible; syslog over TLS by default; webhook HTTPS only (HTTP only for `localhost`) |
+| Backups | Same SQLCipher key as the live database (remote copies are the same encrypted file) |
+| In transit | Not provided by Sendora itself (plain HTTP listener). Outbound: SMTP with STARTTLS (default) or implicit TLS, minimum TLS 1.2, mode `none` possible; syslog over TLS by default; webhook HTTPS only (HTTP only for `localhost`); object storage over HTTPS (`http://` only for loopback, private and cluster-internal hosts) |
 
 **Key handling.** The key file must be a regular file of exactly 32 bytes, owned by root or the service user, without group-write or world access; Sendora refuses to start otherwise. The key is never logged, never placed in a connection string, and buffers holding it are wiped after use. Only a fingerprint (first 8 bytes of an HMAC) is logged and audited (`key_fingerprint_changed`). On Linux core dumps are disabled and the process is made non-dumpable. Other secrets (`JWT_SECRET_FILE`, SMTP password, provider client secrets, webhook and metrics tokens) follow the same file-permission rule.
 
@@ -167,7 +172,7 @@ Reports go through GitHub private vulnerability reporting. Response goals (not g
 - Not end-to-end encrypted; the host operator and anyone with the key or process memory can read all data.
 - No malware or content scanning of uploads; no data-loss prevention.
 - No four-eyes approval; no legal hold or e-discovery; no records-management holds on shares.
-- Single instance; no built-in high availability or off-site backup (backups are on the same volume and contain the database only).
+- Single instance; no built-in high availability. Backups contain the database only; an off-site copy exists only with an object store and `backup_remote_enabled`.
 - No native TLS; no `/.well-known/security.txt` (see [README.md](README.md#securitytxt)).
 - No key rotation once encrypted files exist; no HSM/KMS.
 - Whole-database rollback is not detected; the audit chain proves integrity of what is present, and forwarding plus the heartbeat is the defence against truncation.
@@ -176,8 +181,10 @@ Reports go through GitHub private vulnerability reporting. Response goals (not g
 - Plain upload parts and download snapshots exist on disk during transfers.
 - Share directory names on the volume are the link IDs, and stored file names contain the original file names (section 5): protect volume copies and volume backups as sensitive.
 - Verified-download slots are global and limited.
-- Offline `sendora-db` actions are not audited.
+- Most offline `sendora-db` actions (for example `mfa-reset`, `backup`, `verify`) are not audited; `storage-migrate`, `tenant-import` and `platform-admin-reset` write audit records.
 - Passkeys are tested against a software authenticator and test vectors, not every real device.
+- Multi-tenant mode isolates tenants from each other and from the console, not from the host operator, who holds the master key. With `platform_mfa_required=false` a stolen console password controls every tenant.
+- An object storage provider sees object sizes (approximate file sizes) and access times, and keeps deleted objects as long as its versioning or soft delete retains them.
 - Not independently audited or penetration tested.
 
-More detail: [THREAT-MODEL.md](../THREAT-MODEL.md) sections 5 and 6, and the wiki pages [Security notes](https://github.com/mhenderik/sendora/wiki/Security-Notes), [Encryption](https://github.com/mhenderik/sendora/wiki/Encryption) and [Hardening guide](https://github.com/mhenderik/sendora/wiki/Hardening-Guide).
+More detail: [THREAT-MODEL.md](../THREAT-MODEL.md) sections 4a, 5 and 6, and the wiki pages [Security notes](https://github.com/mhenderik/sendora/wiki/Security-Notes), [Encryption](https://github.com/mhenderik/sendora/wiki/Encryption) and [Hardening guide](https://github.com/mhenderik/sendora/wiki/Hardening-Guide).

@@ -103,7 +103,7 @@ metadata:
   labels:
     app.kubernetes.io/name: sendora
     app.kubernetes.io/instance: sendora
-    app.kubernetes.io/version: "0.1.5"
+    app.kubernetes.io/version: "0.2.0"
     app.kubernetes.io/component: server
     app.kubernetes.io/part-of: sendora
 spec:
@@ -125,7 +125,7 @@ spec:
         app: sendora
         app.kubernetes.io/name: sendora
         app.kubernetes.io/instance: sendora
-        app.kubernetes.io/version: "0.1.5"
+        app.kubernetes.io/version: "0.2.0"
         app.kubernetes.io/component: server
         app.kubernetes.io/part-of: sendora
     spec:
@@ -161,8 +161,8 @@ spec:
           # Published release image (pin a version or digest; see the releases on GitHub).
           # Digest-pinned form (immune to a moved tag; verify the signature first,
           # see SECURITY.md):
-          #   image: ghcr.io/mhenderik/sendora:0.1.5@sha256:<digest of the release>
-          image: ghcr.io/mhenderik/sendora:0.1.5
+          #   image: ghcr.io/mhenderik/sendora:0.2.0@sha256:<digest of the release>
+          image: ghcr.io/mhenderik/sendora:0.2.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

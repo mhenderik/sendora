@@ -4,75 +4,226 @@
 
 ## 0.2.0 (in development)
 
-0.2.0 adds pluggable object storage and optional multi-tenancy. **The defaults stay
-the local data directory and single-tenant mode; existing installations keep working
-unchanged** (same layout, no migration needed).
+0.2.0 adds pluggable object storage and optional multi-tenancy, and ships as a single
+binary. **The defaults stay the local data directory and single-tenant mode: existing
+installations keep working unchanged** (same data layout, no migration, no new required
+setting). See [Upgrade notes](#upgrade-notes-020) at the end of this section.
+
+### Highlights
+
+- **Object storage for share files**: S3-compatible services (AWS S3, MinIO, Cloudflare
+  R2, Wasabi, Backblaze B2), Azure Blob Storage or Google Cloud Storage, next to the local
+  data directory. Files are **encrypted before they leave the server**; the provider only
+  sees ciphertext under random names. See [docs/STORAGE.md](docs/STORAGE.md).
+- **Migration** of existing files between backends (Admin → Storage or
+  `sendora-db storage-migrate`), every copy verified before the source is removed, and
+  optional **remote copies of the daily database backups**.
+- **Optional multi-tenancy**: one process serves many organisations on
+  `<slug>.<base domain>` or verified custom domains, each with its own SQLCipher database,
+  keys (HKDF-derived from the master key), users, settings, storage and audit log. See
+  [docs/MULTI-TENANT.md](docs/MULTI-TENANT.md).
+- **Platform console** on `admin.<base domain>`: tenants, quotas, domains, storage offers
+  and storage limits, platform settings and a tamper-evident platform audit log. The
+  console sees counts only, never tenant content or a tenant's own storage.
+- **Tenants own their storage**: a tenant sets up its own S3/Azure/GCS account, or uses
+  what the platform offers (the platform bucket under a fixed prefix, or the local disk).
+- **SSRF guard** for everything a tenant administrator can point the server at (SMTP,
+  OIDC, audit forwarding, storage endpoints).
+- **Conversion wizard** (Admin → Multi-tenant) with a graceful self-restart, and
+  `sendora-db tenant-import` to convert an installation offline or to **copy it from
+  another host** (`-from`).
+- **One binary**: `sendora-db` is now a subcommand of `sendora` (the image keeps a
+  `sendora-db` link). The image is smaller than with two binaries.
+- **Live password feedback** on every password field, layout fixes and CodeQL hardening.
 
 ### Object storage
 
-- Share files can be stored on an **S3-compatible service** (AWS S3, MinIO, Cloudflare
-  R2, Wasabi, Backblaze B2; static keys or the AWS default credential chain including
-  IRSA/web identity and EKS Pod Identity), **Azure Blob Storage** (shared key, SAS, or
-  `DefaultAzureCredential` with workload/managed identity) or **Google Cloud Storage**
-  (service-account JSON or Application Default Credentials/GKE workload identity, through
-  the JSON API without the gRPC client library). New setting `storage_backend`
-  (`local`, `s3`, `azure`, `gcs`) with per-backend settings `storage_s3_*`,
-  `storage_azure_*`, `storage_gcs_*`; see [docs/STORAGE.md](docs/STORAGE.md).
-- **Encryption stays in Sendora:** files are encrypted (format v2) before they leave the
-  server; object stores only see ciphertext under random names (`files/<32 hex>`) that
-  reveal neither share link IDs nor file names. Uploads are assembled locally as before,
-  encrypted and streamed to the store; a failed upload leaves no partial object.
-  Downloads, HTTP range requests, ZIP downloads, verified downloads and previews read
-  from the store without loading whole files into memory.
-- **Per-file location:** every file record names its storage location (new columns
-  `files.storage_id`, `files.object_key`, table `storage_locations` with the
-  configuration and credentials each location was used with). Switching the backend or
-  bucket only affects new files; earlier files stay readable where they are.
-- **Migration** of existing files to the current backend: a background job from
-  Admin → Storage (progress, cancel, audit trail) and
-  `sendora-db storage-migrate [-dry-run]`. Each file is copied, verified completely
-  (every GCM chunk tag, file ID, SHA-256), switched and then its source deleted (web job:
-  after 15 minutes). Plain legacy files are encrypted on the way; failed files stay in
-  their old location.
-- Deleting files, shares, users and GDPR erasure remove remote objects through a
-  deletion queue filled in the same database transaction (retried with backoff). Expiry
-  clean-up and `sendora-db verify-files` (including orphan objects) work for remote
-  backends.
-- **Remote backup copies:** `backup_remote_enabled` also uploads the automatic
-  (SQLCipher-encrypted) daily backups to `<prefix>backups/`; `backup_keep` applies to
-  the remote copies too.
+- New setting `storage_backend` (`local`, `s3`, `azure`, `gcs`) with per-backend settings
+  `storage_s3_*`, `storage_azure_*` and `storage_gcs_*`, also as `SENDORA_STORAGE_*`
+  variables (read-only in the screen; `_FILE` for secrets).
+  - **S3**: static keys or the AWS default credential chain (including IRSA/web identity
+    and EKS Pod Identity); path-style or virtual-hosted addressing; multipart uploads in
+    8 MiB parts, aborted on failure.
+  - **Azure Blob Storage**: shared key, SAS or `DefaultAzureCredential` (workload or
+    managed identity); block blobs committed only when complete.
+  - **Google Cloud Storage**: service-account JSON or Application Default Credentials
+    (GKE workload identity), through the JSON API without the gRPC client library.
+- **Encryption stays in Sendora**: files are encrypted (format v2) before upload and
+  stored as `<prefix>files/<32 hex>`, names that reveal neither share link IDs nor file
+  names. Uploads are assembled locally as before, encrypted and streamed to the store; a
+  failed upload leaves no partial object. Downloads, HTTP range requests, ZIP downloads,
+  verified downloads and previews read from the store without loading whole files into
+  memory.
+- **Per-file location**: every file record names its storage location (new columns
+  `files.storage_id`, `files.object_key`; table `storage_locations` with the configuration
+  and credentials each location was used with). Switching the backend or bucket only
+  affects new files; earlier files stay readable where they are.
+- **Migration** to the current backend: a background job from Admin → Storage (progress,
+  cancel, audit trail) and `sendora-db storage-migrate [-dry-run]`. Each file is copied,
+  verified completely (every GCM chunk tag, file ID, SHA-256), switched and then its
+  source deleted (web job: after 15 minutes). Plain legacy files are encrypted on the
+  way; failed files stay in their old location.
+- **Deletion queue**: deleting files, shares and users, expiry clean-up and GDPR erasure
+  remove remote objects through a queue filled in the same database transaction (retried
+  with backoff). `sendora-db verify-files` checks remote files and lists orphan objects.
+- **Remote backup copies**: `backup_remote_enabled` also uploads the automatic
+  (SQLCipher-encrypted) daily backups to `<prefix>backups/`; `backup_keep` applies to the
+  remote copies too.
 - New **Storage** tab in the admin settings: backend selector and fields, write-only
   secrets, *Test connection* (writes, reads and deletes a probe object), files and bytes
-  per location, pending deletions and the migration control. All settings are also
-  `SENDORA_STORAGE_*` variables (read-only in the screen, `_FILE` for secrets).
-- Changing storage settings, testing a connection and starting or cancelling a migration
-  need a step-up and are audited (`storage_backend_changed`, `storage_connection_tested`,
-  `storage_connection_test_failed`, `storage_migration_*`, `backup_remote_*`). Saving a
-  changed remote configuration runs a connection test first; changing the endpoint,
-  account or access key requires entering the stored secret again; `http://` endpoints
-  are accepted only for loopback, private and cluster-internal hosts; bucket, container,
-  account, region and prefix names are validated; an invalid configuration stops the
-  server at start.
-- Documentation: new [docs/STORAGE.md](docs/STORAGE.md); configuration, threat model
-  (object storage provider), data flows, shared responsibility and audit events updated;
-  commented storage examples in `deploy/kubernetes.yaml`.
+  per location, pending deletions and the migration control. A notice explains that
+  remote storage makes uploads and downloads slower (files are encrypted and copied to
+  the store before a share is ready).
+- **Safeguards**: changing storage settings, testing a connection and starting or
+  cancelling a migration need a step-up and are audited (`storage_backend_changed`,
+  `storage_connection_tested`, `storage_connection_test_failed`, `storage_migration_*`,
+  `backup_remote_*`). Saving a changed remote configuration runs a connection test first;
+  changing the endpoint, account or access key requires entering the stored secret again;
+  `http://` endpoints are accepted only for loopback, private and cluster-internal hosts;
+  bucket, container, account, region and prefix names are validated; an invalid
+  configuration stops the server at start.
 
-### Build
+### Multi-tenancy
 
-- New dependencies: `aws-sdk-go-v2` (`service/s3`, `config`, `credentials`), Azure
-  `azblob` and `azidentity`, `golang.org/x/oauth2/google`. `azblob` is pinned at
-  v1.6.4: v1.7 and later pull in Apache Arrow (about 4.7 MB more binary).
-- Binary size (linux, stripped): `sendora` 14.4 MB -> 25.6 MB, `sendora-db` 3.3 MB -> 13.4 MB
-  (it reads and migrates files in object stores). Image size (local build): 126 MB -> 147 MB
-  uncompressed, about 39.5 MiB -> 45.8 MiB compressed. The Google Cloud Storage backend uses the
-  JSON API with `golang.org/x/oauth2/google` instead of the gRPC-based client library.
-- **One binary**: `sendora-db` is now a subcommand of the main program (`sendora db
+**Architecture and isolation**
+
+- Enabled with `SENDORA_MULTI_TENANT=true` and `SENDORA_BASE_DOMAIN` (or by the conversion
+  wizard). `DATA_DIR` then holds `platform.db` and `tenants/<random id>/` with exactly the
+  layout of a single-tenant data directory.
+- Each tenant has its own SQLCipher database, directory (shares, uploads, backups,
+  branding), users, settings, SMTP, sign-in providers and audit log, served by its own
+  server instance. The tenant's database key is
+  `HKDF-SHA256(master key, "sendora/v1/tenant-db/<tenant id>")`; file keys, the audit key,
+  the token signing secret and all HMAC keys follow from it, so a token, cookie, link or
+  file of one tenant never verifies or decrypts in another. `APP_URL` and `JWT_SECRET` are
+  ignored in multi-tenant mode.
+- Routing by host (`X-Forwarded-Host` only from trusted proxies); unknown hosts get a
+  plain 404, suspended tenants 503. Each tenant has one origin (its primary domain; other
+  hosts redirect), and cookies are host-only. Tenants open on the first request and close
+  when idle (LRU, `SENDORA_MAX_OPEN_TENANTS`); background jobs also run for idle tenants
+  on a schedule (`SENDORA_TENANT_MAINTENANCE_HOURS`).
+- Safety: a single-tenant start refuses a multi-tenant `DATA_DIR` and vice versa; the
+  in-app database import is disabled for tenants.
+
+**Platform console**
+
+- `admin.<base domain>` (separate page of the web build). The first platform administrator
+  is created with a one-time setup code from the log. Create, search, suspend, resume,
+  rename and delete tenants (delete needs a step-up and also removes the tenant's objects
+  in object storage), quotas (maximum users, storage limit), custom domains with DNS TXT
+  verification, primary domain, platform settings (also via `SENDORA_*`), platform SMTP as
+  the default for tenants, and the platform administrators.
+- The console sees counts only, never tenant users, shares, files, audit details or the
+  configuration of a tenant's own storage. A tamper-evident **platform audit log** records
+  every action; actions affecting a tenant are also recorded in the tenant's own audit log.
+- **Platform MFA switch** (owner decision): `platform_mfa_required` (default `true`, also
+  `SENDORA_PLATFORM_MFA_REQUIRED`). Changing it shows a warning, needs a fresh confirmation
+  and is recorded as `platform_mfa_requirement_changed`. When off, platform administrators
+  sign in with a password only (enrolling an authenticator stays possible); switching it
+  on ends the sessions of administrators without an authenticator.
+- **Offline platform-administrator recovery**: `sendora-db platform-admin-reset -data-dir
+  <DATA_DIR> -key-file <master key> -user <name> [-mfa] [-password]` (server stopped)
+  removes the authenticator and/or sets a temporary password that must be changed at the
+  next sign-in, unlocks the account, ends its sessions and records
+  `platform_admin_offline_reset`. Administrators can change their own password in the
+  console.
+
+**Storage for tenants, offers and limits**
+
+- A new tenant has **no storage**: until its administrator sets up S3, Azure Blob or GCS
+  under Admin → Storage (same form, validation, *Test connection*, re-authentication and
+  audit as single-tenant mode; explicit credentials only, never the server's IAM role or
+  workload identity), uploads, new shares and reverse-share invitations are refused with
+  "Set up storage first under Admin → Storage"; database backups stay local.
+- The platform decides only whether the tenant may configure its own storage (default on;
+  audited) and what it offers itself: the **platform bucket** (console *Platform settings →
+  Default storage* or `SENDORA_PLATFORM_STORAGE_*`, under `<prefix>tenants/<tenant id>/`)
+  or the **local disk**. The platform setting **Storage for new tenants**
+  (`new_tenant_storage_offer`, `SENDORA_NEW_TENANT_STORAGE_OFFER`, default `none`) is
+  preselected in the create-tenant form (`platform_new_tenant_storage_changed`).
+- **The platform never sees a tenant's own storage**: the console shows only the kind
+  ("Own storage (Azure)") and the usage, and cannot change or test it.
+- A per-tenant **storage limit** in GB on the tenant's Storage card (the
+  `max_storage_bytes` quota; re-authentication, audited) applies only to storage the
+  platform provides; uploads beyond it are refused and tenant administrators see used /
+  limit. A tenant's own storage has no platform limit.
+- Existing tenants keep what they had; every file keeps its location; the tenant's
+  migration job and `sendora-db storage-migrate -tenant` move earlier files.
+  `SENDORA_STORAGE_*` is ignored in multi-tenant mode.
+
+**SSRF guard** (new package `internal/netguard`)
+
+- In multi-tenant mode the SMTP server, OIDC issuers, audit log webhook and syslog targets
+  and storage endpoints a tenant's administrator configures must not resolve to loopback,
+  private (RFC 1918, ULA), link-local, carrier-grade NAT, cloud metadata or other
+  special-purpose addresses. Checked when saved and again on every connection by a dialer
+  on the resolved address (DNS rebinding, redirects, GCS token URIs). Platform-provided
+  targets are not affected. A platform administrator can allow private targets per tenant
+  (*Network targets*; step-up, `tenant_network_policy_changed` in both logs).
+  Single-tenant mode is unchanged.
+
+**Conversion and import**
+
+- **Conversion wizard** (Admin → Multi-tenant, single-tenant administrators): base domain
+  (host and port as separate fields, stored as `host[:port]`, with the resulting addresses
+  shown live and a warning when the port differs from the one in use), first organisation
+  (this installation), first platform administrator, MFA requirement and the current
+  address as a custom domain (existing links keep working). Confirming needs
+  re-authentication and schedules the conversion (`DATA_DIR/multitenant-pending.json`,
+  0600, password only as a bcrypt hash; audited; cancellable); the page then lists the
+  details and the resulting addresses.
+- At the next start a verified database backup is made and the tenant import runs; the
+  mode is persisted in `DATA_DIR/sendora-mode.json` (`SENDORA_MULTI_TENANT` > persisted
+  mode > single-tenant) and the server starts multi-tenant. A failure is rolled back and
+  the server starts single-tenant unchanged, with the error shown in the UI.
+- **Restart now** (re-authentication, audited as `restart_requested`), offered once a
+  conversion is scheduled and in the console's *Platform settings*: an orderly stop, then
+  the process re-executes itself (`SENDORA_RESTART_MODE=exit`: exit code 75 for a
+  supervisor). The page waits for the new addresses and links to them.
+- The console can change the base domain (host and port; stored in the data directory for
+  the next start unless `SENDORA_BASE_DOMAIN` is set); multi-tenant mode logs a warning
+  when requests arrive on a non-default port the base domain lacks. Custom domains are
+  reduced to their host name.
+- `sendora-db tenant-import` converts a single-tenant `DATA_DIR` into a tenant offline:
+  the database is re-encrypted with the derived key, share and branding directories are
+  moved, backups re-encrypted, everything verified, the originals archived. Resumable and
+  abortable (`-abort`). Imported tenants keep the old key as the root of their file and
+  audit keys, so nothing is rewritten.
+- **Moving to another host**: `sendora-db tenant-import -from <old DATA_DIR>
+  -source-key-file <old key> [-custom-domain <old host>]` copies a single-tenant
+  installation into an existing multi-tenant environment (other tenants may exist) as a
+  new tenant. The source is only read (also when mounted read-only), files and the audit
+  chain are verified, and it is resumable and abortable. Offline commands accept
+  `-tenant <id>` and `-legacy-root` (with `-source-key-file` for a copied tenant).
+- New example manifest `deploy/kubernetes-multi-tenant.yaml` (wildcard Ingress and TLS with
+  cert-manager, ConfigMap).
+
+### User interface
+
+- Every password field shows a character counter and a checklist of the active policy
+  (account policy, or the platform rule for platform administrators) with `aria-live`
+  feedback.
+- Form rows align their fields at the top (hints below the input), buttons next to inputs
+  line up, settings rows keep inputs level when labels wrap, and headings inside forms
+  get consistent spacing.
+- New admin pages Storage and Multi-tenant and the platform console. Their texts are in
+  English and Dutch; German, French and Spanish show the English text for them until
+  translated.
+
+### Build and packaging
+
+- **One binary**: `sendora-db` is a subcommand of the main program (`sendora db
   <command>`, or `sendora-db <command>` through the name it is started with). The image
-  installs `/usr/local/bin/sendora-db` (and `/sendora-db`) as links to `/sendora`, so
-  `docker exec <container> sendora-db ...` and existing scripts keep working; the second
-  binary is gone (the code moved from `cmd/sendora-db` to `internal/dbcli`). Image size
-  (local build): 147 MB -> 134 MB uncompressed, 46.0 MiB -> 41.3 MiB (48,196,898 -> 43,352,234 bytes)
-  as `docker save | gzip`. `sendora healthcheck` is unchanged.
+  installs `/usr/local/bin/sendora-db` and `/sendora-db` as links to `/sendora`, so
+  `docker exec <container> sendora-db ...` and existing scripts keep working. The code
+  moved from `cmd/sendora-db` to `internal/dbcli`. `sendora healthcheck` is unchanged.
+- New dependencies: `aws-sdk-go-v2` (`service/s3`, `config`, `credentials`), Azure
+  `azblob` and `azidentity`, `golang.org/x/oauth2/google`. `azblob` is pinned at v1.6.4:
+  v1.7 and later pull in Apache Arrow (about 4.7 MB more binary).
+- Sizes (linux, stripped, local build): `sendora` 14.4 MB -> 25.6 MB with the storage
+  SDKs, and the separate `sendora-db` binary (13.4 MB with the SDKs) is gone. Image
+  126 MB -> 134 MB uncompressed, 39.5 MiB -> 41.3 MiB as `docker save | gzip` (147 MB /
+  46.0 MiB with two binaries).
 - Dockerfile `ARG VERSION` is 0.2.0.
 
 ### Code scanning
@@ -82,129 +233,34 @@ unchanged** (same layout, no migration needed).
   early-return check of the session ID; chunk, complete, append and clean-up check the ID
   again before touching files; branding and background images go through a `localJoin`
   helper (`filepath.IsLocal`, no `..`) right before they are written, served or deleted.
-- Outgoing mail: every address is parsed with CR/LF/NUL rejected and rendered with
-  encoded names for From, To and Reply-To; the Message-ID domain is sanitised. The
-  remaining finding on the SMTP write is inherent (recipient and text are user input by
-  design; headers are CRLF-safe and the body is quoted-printable).
+- Outgoing mail: every address is parsed with CR/LF/NUL rejected and rendered with encoded
+  names for From, To and Reply-To; the Message-ID domain is sanitised. The remaining
+  finding on the SMTP write is inherent (recipient and text are user input by design;
+  headers are CRLF-safe and the body is quoted-printable).
 - Integer settings of the platform are clamped before `int` and `time.Duration`
   conversions. The SHA-1 of the breached-password check stays (required by the HIBP
-  k-anonymity range API; only 5 hex characters are sent, nothing is stored); documented
-  at the call.
+  k-anonymity range API; only 5 hex characters are sent, nothing is stored); documented at
+  the call.
 
+### Documentation
 
-### Multi-tenancy
+- New [docs/STORAGE.md](docs/STORAGE.md) and [docs/MULTI-TENANT.md](docs/MULTI-TENANT.md).
+  Configuration, threat model (object storage provider, tenant isolation), security
+  whitepaper, data flows, personal data, shared responsibility and audit events updated;
+  commented storage examples in `deploy/kubernetes.yaml`. Version pins in the manifests,
+  the Compose `.env.example` and the quick starts are 0.2.0.
 
-- Optional multi-tenant mode (`SENDORA_MULTI_TENANT=true`, `SENDORA_BASE_DOMAIN`): one
-  process serves many organisations on `<slug>.<base domain>` or verified custom domains.
-  **Single-tenant mode stays the default and is unchanged**; existing installations are
-  not affected. See [docs/MULTI-TENANT.md](docs/MULTI-TENANT.md).
-- Each tenant has its own SQLCipher database, directory (shares, uploads, backups,
-  branding), users, settings, SMTP, sign-in providers and audit log, served by its own
-  server instance. The tenant's database key is derived from the master key with
-  HKDF-SHA256 and the tenant's random ID (`sendora/v1/tenant-db/<id>`); file keys, the audit
-  key, the token signing secret and all HMAC keys follow from it, so a token, cookie,
-  link or file of one tenant never verifies or decrypts in another.
-- Routing by host (`X-Forwarded-Host` only from trusted proxies); unknown hosts get a
-  plain 404, suspended tenants 503. Tenants open on the first request and close when idle
-  (LRU, `SENDORA_MAX_OPEN_TENANTS`); background jobs also run for idle tenants on a schedule.
-- Platform console on `admin.<base domain>` (separate page of the web build): platform
-  administrators with TOTP (required by default, see below), first one via a one-time
-  setup code in the log; create, search, suspend, resume and delete tenants (delete needs
-  a step-up), quotas (maximum users, maximum storage), custom domains with DNS TXT
-  verification, primary domain, per-tenant storage, platform settings (also via
-  `SENDORA_*`), platform SMTP as default for tenants. The console sees
-  counts only, never tenant content. A tamper-evident platform audit log records every
-  action; actions affecting a tenant are also recorded in the tenant's own audit log.
-- `sendora-db tenant-import` converts a single-tenant `DATA_DIR` into a tenant: the
-  database is re-encrypted with the derived key, share and branding directories are
-  moved, backups re-encrypted, everything verified, the originals archived. Resumable
-  and abortable (`-abort`). Imported tenants keep the old key as the root for their file
-  and audit keys, so files stay decryptable and the audit chain verifiable without
-  rewriting. Offline commands accept `-tenant <id>` (and `-legacy-root`).
-- **Conversion wizard** (Admin → Multi-tenant, single-tenant administrators): base
-  domain, first organisation (this installation), first platform administrator, MFA
-  requirement and the current address as a custom domain (existing links keep
-  working). Confirming needs re-authentication and schedules the conversion
-  (`DATA_DIR/multitenant-pending.json`, 0600, password only as a bcrypt hash; audited;
-  cancellable). At the next start a verified database backup is made and the tested
-  tenant import runs; the mode is persisted in `DATA_DIR/sendora-mode.json`
-  (`SENDORA_MULTI_TENANT` > persisted mode > single-tenant) and the server starts
-  multi-tenant. A failure is rolled back and the server starts single-tenant unchanged,
-  with the error shown in the UI. The scheduled conversion is shown as a list with the
-  resulting addresses (also as a summary before confirming). *Restart now* (re-auth,
-  audited) is always available: an orderly stop, then the process re-executes itself
-  (`SENDORA_RESTART_MODE=exit`: exit code 75 for a supervisor); the page waits for the
-  new addresses and links to them. The platform console offers the same restart.
-  The base domain is entered as host and port (wizard and console *Platform settings*,
-  stored as `host[:port]`; the console stores it in the data directory for the next start
-  unless `SENDORA_BASE_DOMAIN` is set) with the resulting addresses shown live; a port
-  that differs from the one in use is warned about, and multi-tenant mode logs a warning
-  when requests arrive on a non-default port the base domain lacks. Custom domains are
-  reduced to their host name.
-- **Moving to another host**: `sendora-db tenant-import -from <old DATA_DIR>
-  -source-key-file <old key> [-custom-domain <old host>]` copies a single-tenant
-  installation into an existing multi-tenant environment (other tenants may exist) as a
-  new tenant; the source is only read (also when mounted read-only), the old key stays
-  the tenant's root, files and the audit chain are verified, and it is resumable and
-  abortable. The storage limit is set directly on the tenant's Storage card.
-- Safety: a single-tenant start refuses a multi-tenant `DATA_DIR` and vice versa; the
-  in-app database import is disabled for tenants.
-- New example manifest `deploy/kubernetes-multi-tenant.yaml` (wildcard Ingress and TLS
-  with cert-manager, ConfigMap).
-- **Per-tenant storage, owned by the tenant.** A new tenant has **no storage**: until its
-  administrator sets up S3, Azure Blob or GCS under Admin → Storage (same form,
-  validation, *Test connection*, re-authentication and audit as single-tenant mode;
-  explicit credentials only, never the server's IAM role or workload identity), uploads,
-  new shares and reverse-share invitations are refused ("Set up storage first under
-  Admin → Storage"), administrators see a banner and users a notice instead of the
-  upload form; database backups stay local. The platform decides only whether the
-  tenant may configure its own storage (default on; switching it off is audited) and
-  what it offers itself, optionally: the **platform bucket** (console *Platform settings
-  → Default storage* or `SENDORA_PLATFORM_STORAGE_*`, under the tenant's fixed prefix
-  `<prefix>tenants/<tenant id>/`) or the **local disk** of the server. The tenant
-  creation form defaults to *none*. **The platform never sees a tenant's own storage**:
-  the console and its API show only the kind ("Own storage (Azure)") and the usage, no
-  bucket, container, endpoint, prefix, account or key, and cannot change or test it.
-  A per-tenant **storage limit** in GB on the console's Storage card (the existing
-  `max_storage_bytes` quota, one source of truth; re-authentication, audited) applies
-  only to storage the platform provides; uploads and reverse-share uploads beyond it
-  are refused with a clear message and tenant administrators see used / limit. Storage
-  of the tenant's own has no platform limit.
-  The platform setting **Storage for new tenants** (`new_tenant_storage_offer`, console or
-  `SENDORA_NEW_TENANT_STORAGE_OFFER`; default `none`) is preselected in the create-tenant
-  form; changing it needs re-authentication and is audited
-  (`platform_new_tenant_storage_changed`). The platform bucket can only be offered while
-  a platform default backend is configured.
-  Existing tenants keep what they had; every file keeps its location, the tenant's
-  migration job and `sendora-db storage-migrate -tenant` move earlier files, and
-  deleting a tenant removes its prefix (and Sendora's objects in its own storage;
-  refused when objects cannot be removed unless forced). Admin → Storage and the
-  console show a notice whenever a remote backend is selected or active: uploads are
-  encrypted and copied to the object store before the share is ready, so large files
-  or a distant region take longer, and downloads too. `SENDORA_STORAGE_*` is ignored in
-  multi-tenant mode.
-- **SSRF guard for tenants** (new package `internal/netguard`): in multi-tenant mode the
-  SMTP server, OIDC issuers, audit log webhook and syslog targets and storage endpoints a
-  tenant's administrator configures must not resolve to loopback, private (RFC 1918,
-  ULA), link-local, carrier-grade NAT, cloud metadata or other special-purpose addresses.
-  Checked when saved and again on every connection by a dialer on the resolved address
-  (DNS rebinding, redirects, GCS token URIs). Platform-provided targets (platform SMTP,
-  platform storage, `SENDORA_*` settings and providers) are not affected. A platform
-  administrator can allow private targets per tenant (*Network targets*; step-up,
-  audited as `tenant_network_policy_changed` in both logs). Single-tenant mode is unchanged.
-- **Platform MFA switch** (owner decision): platform setting `platform_mfa_required`
-  (default `true`, also `SENDORA_PLATFORM_MFA_REQUIRED`). Changing it in the console shows
-  a warning, needs a fresh confirmation and is recorded as
-  `platform_mfa_requirement_changed`. When off, platform administrators sign in with a
-  password only; enrolling an authenticator stays possible (*My account*) and step-ups
-  use the password for administrators without one. Switching it on ends the sessions of
-  administrators without an authenticator.
-- **Offline platform-administrator recovery**: `sendora-db platform-admin-reset -data-dir
-  <DATA_DIR> -key-file <master key> -user <name> [-mfa] [-password]` (server stopped)
-  removes the administrator's authenticator and/or sets a temporary password that must
-  be changed at the next sign-in; unlocks the account, ends its sessions and records
-  `platform_admin_offline_reset` in the platform audit log. Administrators can also
-  change their own password in the console.
+### Upgrade notes (0.2.0)
+
+| Topic | What to know |
+|---|---|
+| Single-tenant installations | **Nothing changes by default.** Storage stays `local` (`DATA_DIR/shares/`, byte for byte as in 0.1.x) and the mode stays single-tenant. No database step is needed beyond the automatic schema migration (new columns `files.storage_id`, `files.object_key` and the tables `storage_locations`, `storage_pending_deletes` and `storage_migrations`). |
+| New settings | Object storage: `storage_backend`, `storage_s3_*`, `storage_azure_*`, `storage_gcs_*`, `backup_remote_enabled` (all also `SENDORA_*`, secrets with `_FILE`). Multi-tenant: `SENDORA_MULTI_TENANT`, `SENDORA_BASE_DOMAIN`, `SENDORA_PLATFORM_SETUP_CODE`, `SENDORA_TENANT_IDLE_MINUTES`, `SENDORA_MAX_OPEN_TENANTS`, `SENDORA_TENANT_MAINTENANCE_HOURS`, `SENDORA_DEFAULT_MAX_USERS`, `SENDORA_DEFAULT_MAX_STORAGE_BYTES`, `SENDORA_PLATFORM_AUDIT_RETENTION_DAYS`, `SENDORA_PLATFORM_SMTP_*`, `SENDORA_PLATFORM_STORAGE_*`, `SENDORA_NEW_TENANT_STORAGE_OFFER`, `SENDORA_PLATFORM_MFA_REQUIRED`, `SENDORA_RESTART_MODE`. See [docs/configuration.md](docs/configuration.md). |
+| `sendora-db` | Now a link to `/sendora` in the image (`/usr/local/bin/sendora-db` and `/sendora-db`); commands and flags are unchanged. Outside the image use `sendora db <command>` or create the link yourself; a separately installed old `sendora-db` binary should be removed. |
+| Image size | 134 MB uncompressed (41.3 MiB compressed), up from 126 MB (39.5 MiB) in 0.1.5, because of the storage SDKs. |
+| Object storage | Optional. Keep a persistent volume (database, local backups, temporary upload data stay in `DATA_DIR`). Switching only affects new files; migrate earlier ones from Admin → Storage. Allow egress to the provider (443) in your NetworkPolicy. The database key is never uploaded: keep its separate backup. |
+| Multi-tenant mode | Optional. Needs wildcard DNS and a wildcard TLS certificate for `*.<base domain>`, an ingress that passes those hosts, and `SENDORA_TRUSTED_PROXIES`. Converting signs everyone out when `JWT_SECRET` was set. Run one replica. The master key now protects every tenant: keep a protected recovery copy. |
+| Before upgrading | Back up the volume and the key as for every release. Files moved to an object store and a converted (multi-tenant) data directory cannot be used by 0.1.x. |
 
 ## 0.1.5 (2026-11-18)
 

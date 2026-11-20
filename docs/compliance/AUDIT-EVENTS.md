@@ -2,7 +2,7 @@
 
 This catalogue lists every audit action the Sendora server writes, so that an auditor can judge coverage and a SIEM engineer can build rules. It was compiled from the code (every `logEvent`, `logShare`, `critical`/`auditCritical`, `auditAccessDenied` and `auditDecryptFailed` call in `internal/app`, plus the generic rules in `auditMiddleware`/`auditOutcome` and `classifyAction` in `internal/app/audit.go`). The chain itself is implemented in `internal/store/audit.go`.
 
-Applies to version 0.1.5; the `storage_*` and `backup_remote_*` events to 0.2.0 (in development).
+Applies to version 0.2.0 (in development); the `storage_*`, `backup_remote_*`, multi-tenant and platform events are new in 0.2.0.
 
 [Back to the compliance index](README.md) · wiki: [Audit log](https://github.com/mhenderik/sendora/wiki/Audit-Log)
 
@@ -237,9 +237,9 @@ Other administrator mutations (branding, backgrounds, themes, email templates an
 | `access_review_exported` | Before the access-review report is served | caller | `access_review` | `<csv or jsonl> <n> accounts` |
 
 `multitenant_conversion_scheduled`, `multitenant_conversion_cancelled` and
-`server_restart_requested` (single-tenant administrator, target `platform`) record
-the conversion scheduled in Admin → Multi-tenant; the conversion itself is
-`multitenant_conversion_completed` in the platform audit log.
+`restart_requested` (single-tenant administrator, target `platform`, detail
+`mode=exec|exit`) record the conversion scheduled in Admin → Multi-tenant; the
+conversion itself is `multitenant_conversion_completed` in the platform audit log.
 
 ### 4.7 Platform audit log (multi-tenant mode)
 
@@ -256,6 +256,20 @@ to that tenant's log with the role `platform_admin` (marked *both* below).
 | `platform_storage_changed`, `platform_storage_tested`, `platform_storage_test_failed` | Platform default storage saved or tested | platform administrator | `storage` | `<old> -> <new>; keys=...` or the location and error |
 | `tenant_storage_changed` (both) | The platform's storage decision for a tenant changed (offer, own storage allowed) | platform administrator | `tenant <slug> (<id>)` | `offer <old> -> <new>; own storage allowed <old> -> <new>` |
 | `tenant_network_policy_changed` (both) | Private network targets allowed or refused for a tenant (after a fresh confirmation) | platform administrator | `tenant <slug> (<id>)` | `allow_private_targets <old> -> <new>` |
+| `platform_setup` | First platform administrator created with the setup code | the new administrator | `admin <name>` | `first platform administrator created` |
+| `login_ok`, `login_failed`, `mfa_failed`, `mfa_enrolled`, `logout`, `stepup_failed` | Console sign-in, second step, enrolment, sign-out and failed confirmations | platform administrator (or `anonymous` for an unknown username) | `admin <name>` | `unknown username`, `wrong password` or the method |
+| `platform_admin_created`, `platform_admin_deleted`, `platform_admin_mfa_reset` | Another administrator added, removed or their authenticator reset (fresh confirmation) | platform administrator | `admin <name>` | empty |
+| `platform_settings_changed` | Platform settings saved | platform administrator | `settings` | `keys=<changed keys>` |
+| `platform_base_domain_changed` | Base domain changed in *Platform settings* (stored for the next start) | platform administrator | `settings` | `<old> -> <new> (applies after a restart)` |
+| `restart_requested` | *Restart now* in the console (fresh confirmation) | platform administrator | `platform` | `mode=exec` or `mode=exit` |
+| `multitenant_conversion_completed` | A scheduled conversion from Admin → Multi-tenant finished at start-up | system | `tenant <slug> (<id>)` | summary of the conversion |
+| `tenant_imported` (both), `tenant_import_aborted` | `sendora-db tenant-import` (or the conversion at start-up) finished, or was aborted | system | `tenant <slug> (<id>)` | `converted from a single-tenant data directory; originals archived in ...` or `copied from the single-tenant data directory ... (source unchanged)` |
+| `tenant_created` (both), `tenant_create_failed` | Tenant created | platform administrator | `tenant <slug> (<id>)` | quotas, storage offer, own storage allowed; or the error |
+| `tenant_renamed` | Display name changed | platform administrator | `tenant <slug> (<id>)` | `name=<new name>` |
+| `tenant_suspended`, `tenant_resumed` (both) | Tenant suspended or resumed | platform administrator | `tenant <slug> (<id>)` | empty |
+| `tenant_quota_changed` (both) | Maximum users or storage limit changed (re-authentication) | platform administrator | `tenant <slug> (<id>)` | `max_users <old>-><new> max_storage_bytes <old>-><new>` |
+| `tenant_domain_added`, `tenant_domain_verified` (both), `tenant_domain_verify_failed`, `tenant_domain_removed` (both), `tenant_primary_domain_changed` (both) | Custom domains managed and verified (`tenant_domain_added` also by `sendora-db tenant-import -custom-domain`) | platform administrator or `sendora-db` | `tenant <slug> (<id>)` | `domain=<name>` |
+| `tenant_delete_failed` | Deleting a tenant failed | platform administrator | `tenant <slug> (<id>)` | the error |
 | `tenant_deleted` | Tenant deleted | platform administrator | `tenant <slug> (<id>)` | number of objects removed from object storage; with *force*, the locations whose objects were **not** removed |
 
 ## 5. Rate-limited and sampled events

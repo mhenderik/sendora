@@ -30,6 +30,8 @@ What that means for you:
 - Always-on, tamper-evident audit log (hash chain, 90 days by default, optional IP addresses) with a read-only auditor role, CSV/JSONL export and an offline `sendora-db audit-verify` check, and an optional external-login-only mode with lockout protection.
 - Branding uploads (logo, favicon, backgrounds) that can each be deleted again, plus a choice of five bundled CC0 background photos (and an illustration), or no background at all, bundled/custom themes, and English, Dutch, German, French, and Spanish menus with per-account preferences.
 - SHA-256 upload checks and server-prepared download snapshots with browser-side verification.
+- Pluggable storage for share files (0.2.0): the local data directory (default), S3-compatible services, Azure Blob Storage or Google Cloud Storage. Files are encrypted before they leave the server; a background job migrates existing files, and database backups can be copied to the bucket. See [object storage](docs/STORAGE.md).
+- Optional multi-tenancy (0.2.0): one process serves many organisations on their own subdomains or custom domains, each with its own encrypted database, keys, users, settings and storage, managed from a platform console. A single-tenant installation can be converted from the admin screen. See [multi-tenant mode](docs/MULTI-TENANT.md).
 - Optional multi-factor authentication for local accounts: authenticator-app codes (TOTP) with one-time recovery codes, and passkeys or security keys (WebAuthn), set globally and overridable per user.
 
 ## Screenshots
@@ -53,7 +55,7 @@ The complete documentation is in the **[wiki](https://github.com/mhenderik/sendo
 | [Docker deployment](https://github.com/mhenderik/sendora/wiki/Docker-Deployment) | [Sharing and transfers](https://github.com/mhenderik/sendora/wiki/Sharing-and-Transfers) | [Testing](https://github.com/mhenderik/sendora/wiki/Testing) |
 | [Kubernetes deployment](https://github.com/mhenderik/sendora/wiki/Kubernetes-Deployment) | [Email and notifications](https://github.com/mhenderik/sendora/wiki/Email-and-Notifications) | [CI and releases](https://github.com/mhenderik/sendora/wiki/CI-and-Releases) |
 | [Build from source](https://github.com/mhenderik/sendora/wiki/Installation-From-Source) | [Upgrades and backups](https://github.com/mhenderik/sendora/wiki/Upgrades-and-Backups) | [How to extend](https://github.com/mhenderik/sendora/wiki/How-To-Extend) |
-| [Settings table](docs/configuration.md) | [Troubleshooting](https://github.com/mhenderik/sendora/wiki/Troubleshooting) · [Security notes](https://github.com/mhenderik/sendora/wiki/Security-Notes) | [Translations](https://github.com/mhenderik/sendora/wiki/Translations) |
+| [Settings table](docs/configuration.md) · [Storage backends](https://github.com/mhenderik/sendora/wiki/Storage-Backends) · [Multi-tenant](https://github.com/mhenderik/sendora/wiki/Multi-Tenant) | [Troubleshooting](https://github.com/mhenderik/sendora/wiki/Troubleshooting) · [Security notes](https://github.com/mhenderik/sendora/wiki/Security-Notes) | [Translations](https://github.com/mhenderik/sendora/wiki/Translations) |
 
 ## For auditors
 
@@ -62,6 +64,7 @@ Sendora has **not** been independently audited or penetration tested. The docume
 - [Compliance and audit documentation](docs/compliance/README.md): [security whitepaper](docs/compliance/SECURITY-WHITEPAPER.md), [shared responsibility matrix](docs/compliance/SHARED-RESPONSIBILITY.md) (ISO/IEC 27001, SOC 2), [data flows](docs/compliance/DATA-FLOW.md), [personal data](docs/compliance/PERSONAL-DATA.md), [audit events](docs/compliance/AUDIT-EVENTS.md), [vulnerability and dependency management](docs/compliance/VULNERABILITY-AND-DEPENDENCY-MANAGEMENT.md)
 - [Threat model](docs/THREAT-MODEL.md) and [file format specification](docs/FILE-FORMAT.md)
 - [Object storage](docs/STORAGE.md): S3-compatible, Azure Blob and Google Cloud Storage backends (files encrypted before upload), migration
+- [Multi-tenant mode](docs/MULTI-TENANT.md): key derivation, routing, platform console, tenant isolation and the SSRF guard
 - [Security policy](SECURITY.md), including how to verify release images
 
 ## Bundled background photos

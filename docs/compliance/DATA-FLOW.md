@@ -2,7 +2,7 @@
 
 This document shows which data moves between Sendora, its users and the systems around it, in which direction, over which protocol, and how each flow is encrypted and authenticated. It supports records of processing, data-protection impact assessments and network reviews. "Operator" means whoever runs the Sendora deployment.
 
-Applies to version 0.1.5; the optional object storage (flows 20–21) to 0.2.0 (in development).
+Applies to version 0.2.0 (in development); the optional object storage (flows 20–21) and multi-tenant mode (section 2.4) are new in 0.2.0.
 
 [Back to the compliance index](README.md)
 
@@ -105,13 +105,15 @@ Audit records may contain personal data (username, target labels, optional IP ad
 
 The object storage provider (flows 20–21) is a sub-processor of **encrypted** data only: it sees object sizes, times and access patterns, never contents, names or keys ([STORAGE.md](../STORAGE.md#4-object-layout-and-what-the-provider-can-see)). Workload identity also contacts the cloud's token service (STS, Entra ID, Google OAuth or the metadata server).
 
-The server makes no other outbound connections. The web interface loads nothing from third parties: its Content Security Policy limits scripts, styles, images, media and API calls to the Sendora origin (`'self'`, plus `data:`/`blob:` for images and media and inline style attributes). The setting `ui_use_unsplash` is passed to the interface but no code in 0.1.5 acts on it.
+The server makes no other outbound connections. The web interface loads nothing from third parties: its Content Security Policy limits scripts, styles, images, media and API calls to the Sendora origin (`'self'`, plus `data:`/`blob:` for images and media and inline style attributes). The setting `ui_use_unsplash` is passed to the interface but no code in 0.2.0 acts on it.
 
 ### 2.4 Multi-tenant mode (optional)
 
 - Requests are routed by host: `<slug>.<base domain>` or a verified custom domain to that tenant's own server and database (`DATA_DIR/tenants/<random id>/`), `admin.<base domain>` to the platform console (`DATA_DIR/platform.db`). No request of one tenant reads another tenant's database or directory.
 - The platform database holds tenant names, subdomains, custom domains, quotas, counts (users, stored bytes), the storage configuration, platform administrators (username, email, bcrypt hash, TOTP secret) and the platform audit log. It holds no tenant user, share or file data.
 - Outbound: DNS TXT lookups for custom-domain verification; email through the tenant's SMTP server or, when the tenant has none, the platform's default SMTP server (`SENDORA_PLATFORM_SMTP_*`).
+- Object storage per tenant (flows 20–21 per tenant): the tenant's own S3, Azure Blob or GCS account, or a storage offer of the platform (the platform bucket under `<prefix>tenants/<tenant id>/`, or the server's disk). Files are encrypted with the tenant's own file key before upload; the console sees only the kind and usage of a tenant's own storage. A new tenant has no storage until one is set up.
+- Targets a tenant's administrator configures (SMTP server, OIDC issuer, audit webhook and syslog, own storage endpoint) must not resolve to loopback, private, link-local, CGNAT or metadata addresses; the check runs when saved and on every connection (`internal/netguard`), unless the platform allows private targets for that tenant.
 - The console reads only counts from a tenant (when the tenant is open) and writes records into the tenant's audit log for platform actions affecting it.
 
 ## 3. Operator checklist for the flows
