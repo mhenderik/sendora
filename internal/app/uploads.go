@@ -251,6 +251,9 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 413, "storage quota exceeded")
 		return
 	}
+	if !s.tenantStorageAdmits(w, tx, total) {
+		return
+	}
 	if _, err = tx.Exec(`INSERT INTO upload_sessions(id,user_id,invite_id,quota_owner_id,share_id) VALUES(?,?,?,?,?)`, id, u.ID, inviteID, owner, shareID); err != nil {
 		jerr(w, 500, "upload metadata write failed")
 		return

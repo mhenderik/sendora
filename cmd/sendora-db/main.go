@@ -17,7 +17,7 @@ import (
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|verify-files|audit-verify|mfa-reset [flags]")
+		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|verify-files|audit-verify|mfa-reset|tenant-import [flags]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	source := flags.String("source", "", "database source path; stop the app before offline operations")
@@ -30,6 +30,12 @@ func run(args []string) error {
 	names := flags.Bool("names", false, "verify-files: also print share and file names (sensitive)")
 	all := flags.Bool("all", false, "verify-files: list every row, not only problems")
 	progress := flags.Bool("progress", false, "verify-files: report progress on stderr (default: only when stderr is a terminal)")
+	slug := flags.String("slug", "", "tenant-import: subdomain of the new tenant")
+	name := flags.String("name", "", "tenant-import: display name of the new tenant (default: the subdomain)")
+	sourceKeyFile := flags.String("source-key-file", "", "tenant-import: key of the single-tenant database when it differs from -key-file (the master key)")
+	abort := flags.Bool("abort", false, "tenant-import: undo an unfinished conversion")
+	tenant := flags.String("tenant", "", "multi-tenant: operate on this tenant's database (the key is derived from -key-file, the master key)")
+	legacyRoot := flags.Bool("legacy-root", false, "multi-tenant: the tenant was imported from a single-tenant installation; its files and audit chain use the master key (verify-files, audit-verify)")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -63,6 +69,9 @@ func run(args []string) error {
 		fmt.Println("Key created. Keep a separate protected recovery copy; losing the key makes the database unrecoverable.")
 		return nil
 	}
+	if args[0] == "tenant-import" {
+		return tenantImport(*dataDir, *keyFile, *sourceKeyFile, *slug, *name, *abort)
+	}
 	if *source == "" {
 		return errors.New("source is required")
 	}
@@ -82,6 +91,20 @@ func run(args []string) error {
 		key, err = store.ReadDatabaseKey(*keyFile)
 		if err != nil {
 			return err
+		}
+	}
+	// root: what the file and audit keys derive from (= the database key, except
+	// for a tenant imported from a single-tenant installation).
+	root := key
+	if *tenant != "" {
+		master := key
+		var err error
+		if key, err = store.TenantDBKey(master, *tenant); err != nil {
+			return err
+		}
+		root = key
+		if *legacyRoot {
+			root = master
 		}
 	}
 	switch args[0] {
@@ -114,7 +137,7 @@ func run(args []string) error {
 		if dir == "" {
 			dir = filepath.Dir(*source)
 		}
-		return verifyFiles(*source, dir, key, verifyFlags{json: *asJSON, names: *names, all: *all, progress: *progress})
+		return verifyFiles(*source, dir, key, verifyFlags{json: *asJSON, names: *names, all: *all, progress: *progress, root: root})
 	case "verify":
 		counts, err := store.VerifyDatabase(*source, key)
 		if err != nil {
@@ -122,7 +145,7 @@ func run(args []string) error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(counts)
 	case "audit-verify":
-		st, err := store.VerifyAuditDatabase(*source, key)
+		st, err := store.VerifyAuditDatabaseRoot(*source, key, root)
 		if err != nil {
 			return err
 		}
@@ -157,7 +180,10 @@ var (
 // progressEvery is how many files verify-files checks between progress lines.
 var progressEvery = 1000
 
-type verifyFlags struct{ json, names, all, progress bool }
+type verifyFlags struct {
+	json, names, all, progress bool
+	root                       []byte
+}
 
 // verifyFiles streams the verify-files report: by default only rows with a
 // problem and orphans, with -all every row, then a summary. With -json the
@@ -179,7 +205,7 @@ func verifyFiles(source, dataDir string, key []byte, f verifyFlags) error {
 			_, writeErr = fmt.Fprintln(out, line)
 		}
 	}
-	opt := store.VerifyOptions{Names: f.names}
+	opt := store.VerifyOptions{Names: f.names, Root: f.root}
 	opt.File = func(c store.FileCheck) {
 		if !f.all && !c.Problem() {
 			return

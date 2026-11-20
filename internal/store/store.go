@@ -19,6 +19,7 @@ type Store struct {
 	DataDir     string
 	Path        string
 	cipherKey   []byte
+	rootKey     []byte // file and audit keys are derived from this (= cipherKey except for imported tenants)
 	fileKey     []byte
 	settingsGen atomic.Uint64
 	auditMu     ctxMutex // serialises appends, purges and carrying the log
@@ -179,7 +180,16 @@ CREATE TABLE IF NOT EXISTS reverse_invites (
 // use OpenEncrypted; this helper never serves as a production encryption fallback.
 func Open(dataDir string) (*Store, error) { return openStore(dataDir, nil) }
 
-func openStore(dataDir string, key []byte) (*Store, error) {
+func openStore(dataDir string, key []byte) (*Store, error) { return openStoreRoot(dataDir, key, nil) }
+
+// openStoreRoot opens the store with key as the SQLCipher key. root (nil = key)
+// is the secret the file-encryption master key and the audit chain key are
+// derived from; only a tenant imported from a single-tenant installation has a
+// root that differs from its database key (see tenant.go).
+func openStoreRoot(dataDir string, key, root []byte) (*Store, error) {
+	if root == nil {
+		root = key
+	}
 	for _, d := range []string{"", "shares", "uploads", "backups", "branding", "backgrounds"} {
 		p := filepath.Join(dataDir, d)
 		if err := os.MkdirAll(p, 0o700); err != nil {
@@ -217,9 +227,9 @@ func openStore(dataDir string, key []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	s := &Store{DB: db, DataDir: dataDir, Path: p, cipherKey: append([]byte(nil), key...)}
+	s := &Store{DB: db, DataDir: dataDir, Path: p, cipherKey: append([]byte(nil), key...), rootKey: append([]byte(nil), root...)}
 	if len(key) == 32 {
-		if s.fileKey, err = filecrypt.MasterKey(key); err != nil {
+		if s.fileKey, err = filecrypt.MasterKey(root); err != nil {
 			db.Close()
 			return nil, err
 		}

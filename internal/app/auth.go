@@ -802,6 +802,9 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "unsupported UI language")
 		return
 	}
+	if !s.tenantUserAdmits(w) {
+		return
+	}
 	// Public registration always verifies ownership; legacy settings cannot bypass it.
 	verify := true
 	if verify {
@@ -1272,6 +1275,9 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := quotaChoice(b.QuotaBytes, b.QuotaInheritsDefault); !ok {
 		jerr(w, 400, "invalid quota choice")
+		return
+	}
+	if !s.tenantUserAdmits(w) {
 		return
 	}
 	h, _ := bcrypt.GenerateFromPassword([]byte(b.Password), hashCost)

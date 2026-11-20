@@ -98,6 +98,10 @@ type Server struct {
 
 	// rateWindow overrides the one-minute rate-limit window (tests only).
 	rateWindow time.Duration
+
+	// tenant is set when this server serves one tenant in multi-tenant mode
+	// (mt_tenant.go); nil in single-tenant mode.
+	tenant *tenantState
 }
 
 func lockStripe(locks *[64]sync.Mutex, key string) func() {
@@ -132,7 +136,9 @@ func (s *Server) emailBaseURL(r *http.Request) (string, bool) {
 }
 
 func loopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
+	// *.localhost names resolve to the loopback interface (RFC 6761), which is
+	// how tenants are reached in local multi-tenant testing.
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)
@@ -140,8 +146,25 @@ func loopbackHost(host string) bool {
 }
 
 func New(st *store.Store, static fs.FS, version string) *Server {
-	s := &Server{St: st, Static: static, Version: version, Started: time.Now(), BaseURL: strings.TrimRight(os.Getenv("APP_URL"), "/"), mailSlots: make(chan struct{}, 8), mailQueue: make(chan mailJob, 256), authSlots: make(chan struct{}, 16), oidcSlots: make(chan struct{}, oidcSlotCount), downloadMailWake: make(chan struct{}, 1), importExec: execSelf, importExit: os.Exit, importDone: make(chan struct{})}
-	sec, _ := JWTSecretFromEnv() // validated in main
+	return newServer(st, static, version, nil)
+}
+
+// newServer builds a server; tenant is nil in single-tenant mode. A tenant's
+// server takes its public URL from the platform instead of APP_URL, always
+// keeps its own random signing secret in its own database (never JWT_SECRET,
+// which all tenants would share) and has no first-run setup code (the
+// platform creates its first administrator).
+func newServer(st *store.Store, static fs.FS, version string, tenant *tenantState) *Server {
+	s := &Server{St: st, Static: static, Version: version, Started: time.Now(), BaseURL: strings.TrimRight(os.Getenv("APP_URL"), "/"), mailSlots: make(chan struct{}, 8), mailQueue: make(chan mailJob, 256), authSlots: make(chan struct{}, 16), oidcSlots: make(chan struct{}, oidcSlotCount), downloadMailWake: make(chan struct{}, 1), importExec: execSelf, importExit: os.Exit, importDone: make(chan struct{}), tenant: tenant}
+	sec := ""
+	if tenant != nil {
+		s.BaseURL = strings.TrimRight(tenant.opts.BaseURL, "/")
+		if err := s.initTenantSchema(); err != nil {
+			panic(err)
+		}
+	} else {
+		sec, _ = JWTSecretFromEnv() // validated in main
+	}
 	if sec == "" {
 		sec = st.Setting("jwt_secret")
 		if sec == "" {
@@ -164,7 +187,7 @@ func New(st *store.Store, static fs.FS, version string) *Server {
 	// the deployment's environment) has.
 	var users int
 	st.DB.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&users)
-	if users == 0 {
+	if users == 0 && tenant == nil {
 		s.setupCode = strings.ToUpper(strings.TrimSpace(os.Getenv("SENDORA_SETUP_CODE")))
 		if s.setupCode != "" && !validSetupCode(s.setupCode) {
 			log.Printf("SENDORA_SETUP_CODE ignored: it must be at least 16 characters and not a repeated or sequential pattern; using a generated code")
@@ -413,7 +436,8 @@ const spaCSP = "default-src 'self'; img-src 'self' data: blob:; media-src 'self'
 // spa serves embedded frontend with index.html fallback.
 func (s *Server) spa(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
-	if p == "" {
+	if p == "" || p == platformIndex {
+		// The platform console's entry page is only served on the console host.
 		p = "index.html"
 	}
 	if strings.HasPrefix(p, "api/") {

@@ -133,8 +133,17 @@ func readSmallPart(p *multipart.Part, max int64) ([]byte, bool) {
 
 // prepareImport streams an uploaded database, validates and re-keys it, and
 // reports what applying it would do. Nothing live is touched.
+// msgImportMultiTenant: database import is not available to tenants.
+const msgImportMultiTenant = "database import is not available in multi-tenant mode; ask the platform operator to restore a backup"
+
 func (s *Server) prepareImport(w http.ResponseWriter, r *http.Request) {
 	me := s.ctxUser(r)
+	if s.tenant != nil {
+		// The swap restarts the whole process; a tenant is restored by the
+		// platform operator instead (docs/MULTI-TENANT.md).
+		jerr(w, 409, msgImportMultiTenant)
+		return
+	}
 	if !s.St.IsEncrypted() {
 		jerr(w, 409, "database import requires an encrypted database")
 		return
@@ -358,6 +367,10 @@ func (s *Server) receiveImportFile(w http.ResponseWriter, part *multipart.Part, 
 // 202, then the process swaps the database and re-executes itself.
 func (s *Server) applyImport(w http.ResponseWriter, r *http.Request) {
 	me := s.ctxUser(r)
+	if s.tenant != nil {
+		jerr(w, 409, msgImportMultiTenant)
+		return
+	}
 	var b struct {
 		Token    string `json:"token"`
 		Confirm  string `json:"confirm"`

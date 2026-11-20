@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -41,17 +42,29 @@ func main() {
 		log.Fatal(err)
 	}
 	app.WarnPlainSecrets()
+	multiTenant := os.Getenv("SENDORA_MULTI_TENANT") == "true"
 	// A short signing secret could be guessed offline from any captured token.
+	// (Multi-tenant mode ignores JWT_SECRET: every tenant has its own secret.)
 	if sec, err := app.JWTSecretFromEnv(); err != nil {
 		log.Fatal(err)
-	} else if err := app.ValidateJWTSecret(sec); err != nil {
+	} else if err := app.ValidateJWTSecret(sec); err != nil && !multiTenant {
 		log.Fatal(err)
 	}
 	key, err := store.ReadDatabaseKey(os.Getenv("SENDORA_DB_KEY_FILE"))
 	if err != nil {
 		log.Fatal(err)
 	}
-	st, err := store.OpenEncryptedRecovering(env("DATA_DIR", "./data"), key, os.Getenv("SENDORA_DB_INITIALIZE") == "true", log.Printf)
+	dataDir := env("DATA_DIR", "./data")
+	if multiTenant {
+		runMultiTenant(dataDir, key)
+		return
+	}
+	// A converted (multi-tenant) data directory must not be opened as a fresh
+	// single-tenant instance by mistake.
+	if _, err := os.Stat(filepath.Join(dataDir, store.PlatformDBFile)); err == nil {
+		log.Fatal("this data directory belongs to a multi-tenant installation (platform.db exists); set SENDORA_MULTI_TENANT=true")
+	}
+	st, err := store.OpenEncryptedRecovering(dataDir, key, os.Getenv("SENDORA_DB_INITIALIZE") == "true", log.Printf)
 	// The store keeps its own copies; do not leave this one lying around.
 	clear(key)
 	if err != nil {

@@ -35,7 +35,7 @@ func (s *Server) RunJobs(ctx context.Context) {
 	}()
 	s.maintain()
 	t := time.NewTicker(10 * time.Minute)
-	lastBackup := time.Time{}
+	lastBackup := s.initialLastBackup()
 	done := make(chan struct{})
 	s.jobsDone.Store(&done)
 	go func() {

@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/mhenderik/sendora/internal/platform"
 )
 
 // Server configuration from the environment, typically a Kubernetes ConfigMap
@@ -52,6 +54,8 @@ var serverEnvNames = map[string]bool{
 	"SENDORA_SETUP_CODE": true, "SENDORA_FORCE_LOCAL_LOGIN": true, "SENDORA_DISABLE_IP_BANS": true,
 	"SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES": true, "SENDORA_DISABLE_ADMIN_IP_ALLOWLIST": true,
 	forwardTokenEnv: true, metricsTokenEnv: true,
+	// Multi-tenant mode (mt_host.go); the platform settings add their own names.
+	"SENDORA_MULTI_TENANT": true, "SENDORA_BASE_DOMAIN": true, "SENDORA_PLATFORM_SETUP_CODE": true,
 	// Retired switches of the former optional event log: accepted and ignored.
 	"SENDORA_LOGGING_ENABLED": true, "SENDORA_LOG_RETENTION_HOURS": true,
 }
@@ -62,6 +66,9 @@ var serverEnvNames = map[string]bool{
 func (s *Server) warnConfig(settingKeys []string) {
 	known := map[string]bool{}
 	for k := range serverEnvNames {
+		known[k] = true
+	}
+	for _, k := range platform.SettingEnvNames() {
 		known[k] = true
 	}
 	for _, k := range settingKeys {
@@ -177,7 +184,10 @@ func (s *Server) applyConfig() error {
 	if err := s.applyProviderConfig(); err != nil {
 		return err
 	}
-	s.warnConfig(keys)
+	// Every tenant would repeat the same warnings at each lazy open.
+	if s.tenant == nil || tenantConfigWarned.CompareAndSwap(false, true) {
+		s.warnConfig(keys)
+	}
 	return nil
 }
 

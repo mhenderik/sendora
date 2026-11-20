@@ -97,6 +97,10 @@ type VerifyOptions struct {
 	Orphan func(OrphanFile)
 	// Progress is called after each row with the rows done and the total.
 	Progress func(done, total int)
+	// Root, when set, is the secret the file master key is derived from
+	// instead of the database key (a tenant imported from a single-tenant
+	// installation, see tenant.go).
+	Root []byte
 }
 
 // DefaultVerifyWorkers is the number of files VerifyFilesStream checks at once.
@@ -124,7 +128,11 @@ func VerifyFiles(source, dataDir string, key []byte, names bool) (*FilesReport, 
 // of being collected, then orphans to opt.Orphan. It returns the summary.
 func VerifyFilesStream(source, dataDir string, key []byte, opt VerifyOptions) (FilesSummary, error) {
 	var sum FilesSummary
-	master, err := filecrypt.MasterKey(key)
+	root := key
+	if opt.Root != nil {
+		root = opt.Root
+	}
+	master, err := filecrypt.MasterKey(root)
 	if err != nil {
 		return sum, err
 	}

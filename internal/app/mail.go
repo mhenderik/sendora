@@ -31,7 +31,7 @@ func (s *Server) sendMail(to, subject, body string) error {
 	if err := s.smtpConfigured(); err != nil {
 		return err
 	}
-	host := s.St.Setting("smtp_host")
+	host := s.smtpSetting("smtp_host")
 	if host == "" {
 		return fmt.Errorf("smtp not configured")
 	}
@@ -39,9 +39,9 @@ func (s *Server) sendMail(to, subject, body string) error {
 	if err != nil {
 		return fmt.Errorf("bad recipient")
 	}
-	port := s.St.Setting("smtp_port")
-	user, pass := s.St.Setting("smtp_user"), s.St.Setting("smtp_pass")
-	from := s.St.Setting("smtp_from")
+	port := s.smtpSetting("smtp_port")
+	user, pass := s.smtpSetting("smtp_user"), s.smtpSetting("smtp_pass")
+	from := s.smtpSetting("smtp_from")
 	if from == "" {
 		from = user
 	}
@@ -51,7 +51,7 @@ func (s *Server) sendMail(to, subject, body string) error {
 	}
 	msg := mailMessageReplyTo(fa, addr, s.replyToAddress(), subject, body)
 	hp := net.JoinHostPort(host, port)
-	mode := s.St.Setting("smtp_tls")
+	mode := s.smtpSetting("smtp_tls")
 
 	var c *smtp.Client
 	dialer := &net.Dialer{Timeout: 15 * time.Second}
@@ -134,7 +134,7 @@ func mailMessage(from, to *mail.Address, subject, body string) string {
 
 // replyToAddress is the optional Reply-To of all outgoing mail (nil when unset or invalid).
 func (s *Server) replyToAddress() *mail.Address {
-	v := strings.TrimSpace(s.St.Setting("smtp_reply_to"))
+	v := strings.TrimSpace(s.smtpSetting("smtp_reply_to"))
 	if v == "" {
 		return nil
 	}
@@ -197,21 +197,21 @@ func mailMessageReplyTo(from, to, replyTo *mail.Address, subject, body string) s
 }
 
 func (s *Server) smtpConfigured() error {
-	if strings.TrimSpace(s.St.Setting("smtp_host")) == "" {
+	if strings.TrimSpace(s.smtpSetting("smtp_host")) == "" {
 		return fmt.Errorf("smtp not configured")
 	}
-	port, err := strconv.Atoi(s.St.Setting("smtp_port"))
+	port, err := strconv.Atoi(s.smtpSetting("smtp_port"))
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("invalid SMTP port")
 	}
-	from := s.St.Setting("smtp_from")
+	from := s.smtpSetting("smtp_from")
 	if from == "" {
-		from = s.St.Setting("smtp_user")
+		from = s.smtpSetting("smtp_user")
 	}
 	if _, err := mail.ParseAddress(from); err != nil {
 		return fmt.Errorf("invalid SMTP sender")
 	}
-	mode := s.St.Setting("smtp_tls")
+	mode := s.smtpSetting("smtp_tls")
 	if mode != "none" && mode != "tls" && mode != "starttls" {
 		return fmt.Errorf("invalid SMTP TLS mode")
 	}
