@@ -101,6 +101,13 @@ Audit records may contain personal data (username, target labels, optional IP ad
 
 The server makes no other outbound connections. The web interface loads nothing from third parties: its Content Security Policy limits scripts, styles, images, media and API calls to the Sendora origin (`'self'`, plus `data:`/`blob:` for images and media and inline style attributes). The setting `ui_use_unsplash` is passed to the interface but no code in 0.1.5 acts on it.
 
+### 2.4 Multi-tenant mode (optional)
+
+- Requests are routed by host: `<slug>.<base domain>` or a verified custom domain to that tenant's own server and database (`DATA_DIR/tenants/<random id>/`), `admin.<base domain>` to the platform console (`DATA_DIR/platform.db`). No request of one tenant reads another tenant's database or directory.
+- The platform database holds tenant names, subdomains, custom domains, quotas, counts (users, stored bytes), the storage configuration, platform administrators (username, email, bcrypt hash, TOTP secret) and the platform audit log. It holds no tenant user, share or file data.
+- Outbound: DNS TXT lookups for custom-domain verification; email through the tenant's SMTP server or, when the tenant has none, the platform's default SMTP server (`SENDORA_PLATFORM_SMTP_*`).
+- The console reads only counts from a tenant (when the tenant is open) and writes records into the tenant's audit log for platform actions affecting it.
+
 ## 3. Operator checklist for the flows
 
 - Terminate TLS for flows 1, 2 and (if external) 5; set `APP_URL` to the https origin and `SENDORA_TRUSTED_PROXIES` to the proxy addresses.

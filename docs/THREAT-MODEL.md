@@ -28,6 +28,8 @@ Status: written for 0.1.5 from the code and from independent code reviews. Sendo
 | Host operator | Root on the server or the container host |
 | Disk/backup thief | Has a copy of the volume or a backup, but not the key |
 | Network attacker | Between browser and server; Sendora expects TLS in front |
+| Platform administrator (multi-tenant mode, 0.2.0) | Signs in to the platform console (password + TOTP): creates, suspends and deletes tenants, sets quotas, domains and storage configuration. **Must not read any tenant's users, shares, files or audit details**; sees counts only |
+| Tenant administrator / user of another tenant | Full rights in their own tenant; must gain nothing in any other tenant or in the console |
 
 ## 3. Trust boundaries and assumptions
 
@@ -49,6 +51,32 @@ Status: written for 0.1.5 from the code and from independent code reviews. Sendo
 | Share files cannot escape their directory | `store.SharePath`, `validateUploadPath`, `validateArchivePath` | `archive_path_test.go` and others |
 | Downloads are verified | SHA-256 recorded at upload, checked before a verified download is served | integrity tests |
 | The audit log is append-only and tamper-evident | hash chain, checkpoints, `sendora-db audit-verify` | 0.1.5 audit tests |
+
+## 4a. Tenant isolation (multi-tenant mode)
+
+Multi-tenant mode is optional; these properties apply only with `SENDORA_MULTI_TENANT=true` (see [MULTI-TENANT.md](MULTI-TENANT.md)).
+
+| Property | Enforced in | Tested by |
+|---|---|---|
+| Each tenant has its own database key: `HKDF-SHA256(master, "sendora/v1/tenant-db/<random id>")`; the platform database uses a separate label; the master key itself encrypts nothing | `internal/store/tenant.go` | `TestKeyDerivationIsDomainSeparated`, `TestPlatformDatabaseIsEncryptedAndRoutes` |
+| Tokens, refresh tokens, reset/welcome links, MFA tickets and share links of tenant A are rejected by tenant B (separate database rows and secrets; user IDs overlap on purpose in the test) | one `*app.Server` and store per tenant (`internal/app/mt_host.go`) | `TestMTTenantIsolation` |
+| Files and audit chains of A cannot be decrypted or forged with B's keys; WebAuthn RP IDs differ | per-tenant root key (`store.openStoreRoot`) | `TestMTTenantIsolation` |
+| A request reaches a tenant only through its host; unknown hosts get an identical plain 404; `X-Forwarded-Host` only from trusted proxies | `TenantHost.ServeHTTP`, `requestHost` | `TestMTUnknownHostsArePlain404`, `TestMTForwardedHostOnlyFromTrustedProxies` |
+| The console API exists only on `admin.<base>`; tenant tokens are not accepted there; console cookies are host-only and useless on tenant hosts | `mt_console.go` | `TestMTSuspendedTenantAndConsoleSeparation`, `TestMTConsoleLifecycle` |
+| Platform administrators need TOTP; codes cannot be replayed; deleting a tenant or managing administrators needs a fresh code | `mt_console.go` | `TestMTConsoleLifecycle` |
+| The console shows counts only | `platformConsole.view` (no tenant tables are read) | `TestMTConsoleLifecycle` |
+| Quotas (users, storage) cannot be bypassed by another code path | trigger `tenant_user_limit`, upload admission | `TestMTQuotas` |
+| Suspended tenants are not served | `TenantHost.ServeHTTP` | `TestMTSuspendedTenantAndConsoleSeparation` |
+| Every platform action is in the tamper-evident platform audit log, and actions on a tenant in the tenant's log | `platform.Audit`, `RecordPlatformEvent` | `TestMTConsoleLifecycle`, `TestMTSuspendedTenantAndConsoleSeparation` |
+| The conversion of a single-tenant installation never loses data and can be resumed or aborted | `internal/platform/import.go` | `TestImportAbortAndResume`, `TestMTImportSingleTenant` |
+
+Residual risks of multi-tenant mode:
+- **One process**: a memory-safety or logic bug in the process could cross tenants; tenants share CPU, memory and the process's file descriptors. A busy tenant can slow others.
+- **The host operator holds the master key** and can decrypt every tenant offline. Platform administrators (console) cannot; the operator (shell, key file) can.
+- **One-time setup links**: without SMTP the console shows the first tenant administrator's set-password link once; whoever sees it could claim that account (it is recorded in both audit logs and the address is only verified by using the link). Configure the platform SMTP server to avoid this.
+- **Custom domains** are trusted after a DNS TXT check; a domain whose DNS is later taken over keeps routing to the tenant until it is removed in the console.
+- **Outbound requests chosen by tenant administrators** (SMTP host, OIDC issuer, audit webhook/syslog) may target private (RFC 1918) addresses, as in single-tenant mode (loopback, link-local and metadata addresses are refused). In a shared platform this lets a tenant administrator probe the platform's internal network; restrict egress with a network policy. These requests cannot reach another tenant: the process routes only by host name and answers a bare IP with 404.
+- **Imported tenants** keep the single-tenant key as their file/audit root (documented choice); if that key differs from the master key it is stored in the encrypted platform database.
 
 ## 5. Threats and residual risk
 

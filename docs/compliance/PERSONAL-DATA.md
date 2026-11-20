@@ -65,6 +65,19 @@ Not stored: raw IP addresses when `audit_log_ip` is off (the default), HTTP acce
 | Verified-download snapshots | After the transfer; leftovers at every start |
 | Share directories being deleted (`shares/.deleting-*`) | After the deletion commit; leftovers at start |
 
+## 3a. Multi-tenant mode: platform as processor
+
+In multi-tenant mode each tenant is the controller of the personal data in its own database and directory (the inventory above applies per tenant). The platform operator processes that data on the tenant's behalf (processor, GDPR art. 28) and needs a data processing agreement with each tenant. The platform itself stores only:
+
+| Data | Where | Purpose | Retention |
+|---|---|---|---|
+| Platform administrators: username, email, bcrypt hash, TOTP secret, sessions | `platform.db` | console access | until removed |
+| Tenant name, subdomain, custom domains, quotas, counts of users and stored bytes | `platform.db` | operating the platform | until the tenant is deleted |
+| Email address of the first tenant administrator | the tenant's database (not the platform's) and the platform audit log entry of the creation (username only) | first sign-in | tenant retention / platform audit retention |
+| Platform audit log (actor, action, target, client IP) | `platform.db` | accountability of platform administrators | `platform_audit_retention_days` (default 365) |
+
+Deleting a tenant removes its database, files and backups at once; its own bucket in an external object store (once supported) must be emptied separately. Platform administrators cannot read tenant users or shares through the console.
+
 ## 4. Data-subject rights
 
 | Right | Support in Sendora | Notes |

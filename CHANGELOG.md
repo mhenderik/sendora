@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.2.0 (in development)
+
+### Multi-tenancy
+
+- Optional multi-tenant mode (`SENDORA_MULTI_TENANT=true`, `SENDORA_BASE_DOMAIN`): one
+  process serves many organisations on `<slug>.<base domain>` or verified custom domains.
+  **Single-tenant mode stays the default and is unchanged**; existing installations are
+  not affected. See [docs/MULTI-TENANT.md](docs/MULTI-TENANT.md).
+- Each tenant has its own SQLCipher database, directory (shares, uploads, backups,
+  branding), users, settings, SMTP, sign-in providers and audit log, served by its own
+  server instance. The tenant's database key is derived from the master key with
+  HKDF-SHA256 and the tenant's random ID (`sendora/v1/tenant-db/<id>`); file keys, the audit
+  key, the token signing secret and all HMAC keys follow from it, so a token, cookie,
+  link or file of one tenant never verifies or decrypts in another.
+- Routing by host (`X-Forwarded-Host` only from trusted proxies); unknown hosts get a
+  plain 404, suspended tenants 503. Tenants open on the first request and close when idle
+  (LRU, `SENDORA_MAX_OPEN_TENANTS`); background jobs also run for idle tenants on a schedule.
+- Platform console on `admin.<base domain>` (separate page of the web build): platform
+  administrators with mandatory TOTP, first one via a one-time setup code in the log;
+  create, search, suspend, resume and delete tenants (delete needs a TOTP step-up), quotas
+  (maximum users, maximum storage), custom domains with DNS TXT verification, primary
+  domain, per-tenant storage configuration (hook for the storage backends), platform
+  settings (also via `SENDORA_*`), platform SMTP as default for tenants. The console sees
+  counts only, never tenant content. A tamper-evident platform audit log records every
+  action; actions affecting a tenant are also recorded in the tenant's own audit log.
+- `sendora-db tenant-import` converts a single-tenant `DATA_DIR` into a tenant: the
+  database is re-encrypted with the derived key, share and branding directories are
+  moved, backups re-encrypted, everything verified, the originals archived. Resumable
+  and abortable (`-abort`). Imported tenants keep the old key as the root for their file
+  and audit keys, so files stay decryptable and the audit chain verifiable without
+  rewriting. Offline commands accept `-tenant <id>` (and `-legacy-root`).
+- Safety: a single-tenant start refuses a multi-tenant `DATA_DIR` and vice versa; the
+  in-app database import is disabled for tenants.
+- New example manifest `deploy/kubernetes-multi-tenant.yaml` (wildcard Ingress and TLS
+  with cert-manager, ConfigMap).
+
 ## Unreleased
 
 ## 0.1.5 (2026-11-18)

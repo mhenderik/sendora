@@ -341,7 +341,10 @@ func (h *TenantHost) openTenant(id string) (*tenantEntry, error) {
 		st.Close()
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(h.jobsCtx)
+	h.mu.Lock()
+	parent := h.jobsCtx
+	h.mu.Unlock()
+	ctx, cancel := context.WithCancel(parent)
 	srv.RunJobs(ctx)
 	return &tenantEntry{id: id, srv: srv, handler: srv.Router(), cancel: cancel}, nil
 }
@@ -490,7 +493,7 @@ func (h *TenantHost) refreshOpenStats() {
 
 // platformMaintenance applies the platform audit retention.
 func (h *TenantHost) platformMaintenance() {
-	days := h.P.SettingInt("audit_retention_days", 365)
+	days := h.P.SettingInt("platform_audit_retention_days", 365)
 	if n, err := h.P.St.AuditPurge(time.Now().AddDate(0, 0, -int(days))); err != nil {
 		log.Printf("platform audit retention: %v", err)
 	} else if n > 0 {

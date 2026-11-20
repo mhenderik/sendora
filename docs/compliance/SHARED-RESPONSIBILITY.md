@@ -126,6 +126,20 @@ Legend: **Provided** = implemented in the application; **Operator** = customer r
 - **Patching:** update Sendora to the latest release; verify image signatures (0.1.5+).
 - **Access reviews as a process:** export the report regularly, review, act, keep the evidence.
 
+## 4a. Multi-tenant mode (optional, 0.2.0)
+
+When one installation serves several organisations, the **platform operator** runs Sendora for the tenants and the tenants act as controllers for their own users and shares.
+
+| Area | Sendora provides | Platform operator | Tenant |
+|---|---|---|---|
+| Isolation between tenants | separate encrypted database, directory, keys and secrets per tenant; isolation tests | runs one process per platform, protects the master key, keeps the image current | — |
+| Platform access | console with mandatory TOTP, step-up for destructive actions, platform audit log | manages platform administrators, reviews the platform audit log | — |
+| Tenant administration | each tenant's own admin screens, audit log, backups | sets quotas and domains; never needs tenant content | manages users, settings, SMTP, providers, retention |
+| DNS and TLS | DNS TXT verification of custom domains | wildcard certificate, ingress, custom-domain certificates | creates the DNS records for its custom domain |
+| Backups | per-tenant automatic backups; offline restore procedure | backs up the whole `DATA_DIR` and the master key, restores on request | downloads its own backups |
+| Email | per-tenant SMTP; platform SMTP as default | operates/contracts the default SMTP server | may configure its own SMTP |
+| Agreements | — | data processing agreement with each tenant (processor, art. 28 GDPR) | controller for its users' data |
+
 ## 5. Gaps (not provided by Sendora)
 
 | Gap | Consequence / mitigation by the operator |

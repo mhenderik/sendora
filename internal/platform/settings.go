@@ -23,7 +23,7 @@ var settingDefaults = []settingDef{
 	{"tenant_maintenance_hours", "system", "6"},
 	{"default_max_users", "system", "0"},
 	{"default_max_storage_bytes", "system", "0"},
-	{"audit_retention_days", "system", "365"},
+	{"platform_audit_retention_days", "system", "365"},
 	{"platform_smtp_host", "email", ""},
 	{"platform_smtp_port", "email", "587"},
 	{"platform_smtp_user", "email", ""},
@@ -74,7 +74,7 @@ func NormalizeSetting(key, v string) (string, error) {
 		return intRange(0, 1000000)
 	case "default_max_storage_bytes":
 		return intRange(0, 1<<60)
-	case "audit_retention_days":
+	case "platform_audit_retention_days":
 		return intRange(90, 36500)
 	case "platform_smtp_port":
 		return intRange(1, 65535)

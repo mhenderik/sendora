@@ -27,6 +27,24 @@ SMTP, registration, expiry/cleanup policy, share size limits, branding, themes, 
 
 `APP_URL` takes precedence over the administrator `application_url` setting. For a remote deployment, set one canonical origin such as **`https://files.example.com`** before sending emails or configuring OAuth. Do not rely on request `Host` or forwarded headers to supply the public origin. Token-bearing email links and OAuth callbacks require a configured trusted URL for non-loopback access; HTTP localhost URLs remain allowed for development.
 
+## Multi-tenant mode
+
+Optional (0.2.0): one process serves many tenants on `<slug>.<base domain>` and a platform console on `admin.<base domain>`. See [MULTI-TENANT.md](MULTI-TENANT.md) for the design; without `SENDORA_MULTI_TENANT=true` none of this applies.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SENDORA_MULTI_TENANT` | unset | `true` enables multi-tenant mode. `DATA_DIR` then holds `platform.db` and `tenants/<id>/`; `SENDORA_DB_KEY_FILE` is the master key from which every database key is derived. |
+| `SENDORA_BASE_DOMAIN` | required in multi-tenant mode | Platform host name, optionally with `:port` used only in generated URLs (`sendora.example.com`, `localhost:9090`). URLs are `https` except for `localhost` base domains. |
+| `SENDORA_PLATFORM_SETUP_CODE` | generated | Fixed one-time code for creating the first platform administrator. |
+| `SENDORA_TENANT_IDLE_MINUTES` | `15` | Close a tenant after this many minutes without requests (1–1440). |
+| `SENDORA_MAX_OPEN_TENANTS` | `50` | Maximum tenants open at once; the least recently used idle one is closed first (1–10000). |
+| `SENDORA_TENANT_MAINTENANCE_HOURS` | `6` | How often idle tenants are opened for their periodic jobs (1–168). |
+| `SENDORA_DEFAULT_MAX_USERS`, `SENDORA_DEFAULT_MAX_STORAGE_BYTES` | `0` | Quotas proposed for new tenants (0 = unlimited). |
+| `SENDORA_PLATFORM_AUDIT_RETENTION_DAYS` | `365` | Retention of the platform audit log (90–36500). (`SENDORA_AUDIT_RETENTION_DAYS` keeps setting the tenants' own audit retention.) |
+| `SENDORA_PLATFORM_SMTP_HOST`, `_PORT`, `_USER`, `_PASSWORD` / `_PASSWORD_FILE`, `_FROM`, `_TLS` | unset, `587`, …, `starttls` | Default SMTP server for tenants without their own. |
+
+In multi-tenant mode `APP_URL` and `JWT_SECRET` are ignored (each tenant's URL comes from its domain and each tenant has its own signing secret). The other `SENDORA_<SETTING>` variables apply to every tenant and are read-only in each tenant's admin screen. All platform settings except the base domain can also be changed in the platform console unless set by a variable.
+
 ## Settings from a ConfigMap or environment variables
 
 Every setting of **Admin → Settings** can also be set by the deployment, which suits Kubernetes ConfigMaps and GitOps:
