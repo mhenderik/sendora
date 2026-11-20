@@ -145,8 +145,8 @@ func main() {
 	// the same stop before it carries the audit log, swaps and re-execs.
 	gracefulStop := func() { srv.GracefulStop(10*time.Second, cancelJobs, hs.Shutdown, hs.Close) }
 	srv.SetImportStopper(gracefulStop)
-	// "Restart now" (Admin -> Multi-tenant): stop in order, then exit with a
-	// distinct code so the supervisor starts the server again.
+	// "Restart now" (Admin -> Multi-tenant): stop in order, then restart the
+	// process (restart.go), which runs the scheduled conversion.
 	restartRequested := make(chan struct{}, 1)
 	srv.SetRestarter(func() {
 		restartRequested <- struct{}{}
@@ -173,8 +173,7 @@ func main() {
 	}
 	select {
 	case <-restartRequested:
-		log.Printf("restarting (exit code %d) to run the scheduled multi-tenant conversion", app.ExitRestart)
-		os.Exit(app.ExitRestart)
+		restartProcess()
 	default:
 	}
 }

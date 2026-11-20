@@ -153,12 +153,23 @@ const saveNewOffer = () => run(async () => {
 })
 const pstore = reactive({ settings: null, set: {}, managed: [], description: '', test: null, testing: false })
 async function loadSettings() {
-  const d = await pconsole('/settings'); settings.value = d.settings; managed.value = d.managed
+  const d = await pconsole('/settings'); settings.value = d.settings; managed.value = d.managed; restartAvailable.value = !!d.restart_available
   mfa.required = d.settings.platform_mfa_required !== 'false'; mfa.code = ''
   newOffer.value = d.settings.new_tenant_storage_offer || 'none'; newOffer.code = ''
   const ps = await pconsole('/storage')
   Object.assign(pstore, { settings: { ...ps.settings }, set: ps.set || {}, managed: ps.managed || [], description: ps.description, savedBackend: ps.settings.storage_backend, test: null })
 }
+const restartCode = ref(''), restarting = ref(false), restartAvailable = ref(false)
+const restartServer = () => run(async () => {
+  if (!confirm(t('Restart the server now? Requests in progress finish first; everyone stays signed in.'))) return
+  await pconsole('/restart', { method: 'POST', body: reauth(restartCode.value) })
+  restartCode.value = ''; restarting.value = true
+  for (let i = 0; i < 120; i++) {
+    await new Promise(r => setTimeout(r, 2000))
+    try { const r = await fetch('/api/health', { cache: 'no-store' }); if (r.ok) break } catch {}
+  }
+  restarting.value = false; notice.value = t('The server was restarted.'); await load()
+})
 const saveMfa = () => run(async () => {
   if (!mfa.required && !confirm(t('Platform administrators will be able to sign in with only a password. Anyone who learns a password gets full control over all tenants. Continue?'))) return
   await pconsole('/settings', { method: 'PUT', body: { platform_mfa_required: mfa.required, ...reauth(mfa.code) } })
@@ -470,6 +481,15 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
           <label for="no-code">{{ reauthLabel }}</label>
           <input id="no-code" v-model="newOffer.code" :type="byPassword ? 'password' : 'text'" autocomplete="off" />
           <div class="actions"><button :disabled="busy || offerProblem || managed.includes('new_tenant_storage_offer') || newOffer.value === settings.new_tenant_storage_offer">{{ t('Save') }}</button></div>
+        </form>
+
+        <form v-if="tab === 'settings' && settings && restartAvailable" class="card" @submit.prevent="restartServer">
+          <h2>{{ t('Restart the server') }}</h2>
+          <p class="muted">{{ t('Stops the server in an orderly way (requests in progress finish, every tenant is closed) and starts it again with the same configuration.') }}</p>
+          <p v-if="restarting" class="notice" role="status" aria-live="polite">{{ t('Restarting…') }}</p>
+          <label for="rs-code">{{ reauthLabel }}</label>
+          <input id="rs-code" v-model="restartCode" :type="byPassword ? 'password' : 'text'" autocomplete="off" />
+          <div class="actions"><button class="secondary" :disabled="busy || restarting">{{ t('Restart now') }}</button></div>
         </form>
 
         <div v-if="tab === 'account'" class="card">

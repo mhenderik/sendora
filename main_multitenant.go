@@ -78,6 +78,12 @@ func runMultiTenant(dataDir string, key []byte, baseDomain string) {
 	jobsCtx, cancelJobs := context.WithCancel(ctx)
 	defer cancelJobs()
 	h.Start(jobsCtx)
+	// "Restart" (Platform settings): orderly stop, then restart (restart.go).
+	restartRequested := make(chan struct{}, 1)
+	h.SetRestarter(func() {
+		restartRequested <- struct{}{}
+		stop()
+	})
 	hs := &http.Server{
 		Addr:              net.JoinHostPort(env("HOST", "127.0.0.1"), env("PORT", "8080")),
 		Handler:           h,
@@ -105,5 +111,10 @@ func runMultiTenant(dataDir string, key []byte, baseDomain string) {
 	p.Audit(0, "system", "system_stop", "platform", "ok", "", "")
 	if err := p.Close(); err != nil {
 		log.Printf("closing the platform database: %v", err)
+	}
+	select {
+	case <-restartRequested:
+		restartProcess()
+	default:
 	}
 }

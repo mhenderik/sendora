@@ -57,6 +57,7 @@ var serverEnvNames = map[string]bool{
 	forwardTokenEnv: true, metricsTokenEnv: true,
 	// Multi-tenant mode (mt_host.go); the platform settings add their own names.
 	"SENDORA_MULTI_TENANT": true, "SENDORA_BASE_DOMAIN": true, "SENDORA_PLATFORM_SETUP_CODE": true,
+	"SENDORA_RESTART_MODE": true, "SENDORA_ALLOW_SELF_RESTART": true,
 	// Retired switches of the former optional event log: accepted and ignored.
 	"SENDORA_LOGGING_ENABLED": true, "SENDORA_LOG_RETENTION_HOURS": true,
 }

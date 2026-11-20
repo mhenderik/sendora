@@ -104,12 +104,27 @@ func TestConversionScheduleAndCancel(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("audit records: %d", n)
 	}
-	// Without a supervisor "Restart now" is refused with an explanation.
+	// "Restart now": refused where main registered no restarter, needs a
+	// recent sign-in (step-up), is audited and then restarts.
 	c.want(c.schedule(convBody), 200, "schedule again")
-	t.Setenv("SENDORA_ALLOW_SELF_RESTART", "")
-	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 	if r := c.do("POST", "/api/multitenant/restart", c.admin, nil); r.Code != 409 || !strings.Contains(r.S("error"), "restart the server") {
-		t.Fatalf("restart without supervisor: %d %s", r.Code, r.Body)
+		t.Fatalf("restart without a restarter: %d %s", r.Code, r.Body)
+	}
+	restarted := make(chan struct{}, 1)
+	c.s.SetRestarter(func() { restarted <- struct{}{} })
+	if r := c.do("POST", "/api/multitenant/restart", staleAdmin(t, c.env, "admin"), nil); r.Code != 401 && r.Code != 403 {
+		t.Fatalf("restart without re-authentication: %d %s", r.Code, r.Body)
+	}
+	c.want(c.do("POST", "/api/multitenant/restart", c.admin, nil), 202, "restart")
+	select {
+	case <-restarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("restarter not called")
+	}
+	var rn int
+	c.s.St.DB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='restart_requested'`).Scan(&rn)
+	if rn != 1 {
+		t.Fatalf("restart_requested records: %d", rn)
 	}
 	// Non-administrators cannot schedule.
 	user := c.mkUser(c.admin, "bob", false)
@@ -273,5 +288,25 @@ func TestResolveModePrecedence(t *testing.T) {
 	}
 	if _, b := ResolveMode("", "env.example.com", dir); b != "env.example.com" {
 		t.Fatal("SENDORA_BASE_DOMAIN must win over the persisted base domain")
+	}
+}
+
+// The platform console's restart needs a fresh confirmation and is audited.
+func TestConsoleRestart(t *testing.T) {
+	m := newMTEnv(t)
+	c, cookie, secret := m.consoleLogin()
+	c.want(c.do("POST", "/api/platform/restart", "", map[string]any{}, "Cookie", cookie), 409, "no restarter")
+	restarted := make(chan struct{}, 1)
+	m.h.SetRestarter(func() { restarted <- struct{}{} })
+	c.want(c.do("POST", "/api/platform/restart", "", map[string]any{"code": "000000"}, "Cookie", cookie), 403, "restart without re-auth")
+	c.want(c.do("POST", "/api/platform/restart", "", map[string]any{"code": m.nextCode(secret)}, "Cookie", cookie), 202, "restart")
+	select {
+	case <-restarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("restarter not called")
+	}
+	au := c.do("GET", "/api/platform/audit", "", nil, "Cookie", cookie)
+	if !strings.Contains(string(au.Body), `"action":"restart_requested"`) {
+		t.Fatal("console restart not audited")
 	}
 }

@@ -130,8 +130,11 @@ unchanged** (same layout, no migration needed).
   tenant import runs; the mode is persisted in `DATA_DIR/sendora-mode.json`
   (`SENDORA_MULTI_TENANT` > persisted mode > single-tenant) and the server starts
   multi-tenant. A failure is rolled back and the server starts single-tenant unchanged,
-  with the error shown in the UI. *Restart now* exits with code 75 when a supervisor is
-  likely (container PID 1, Kubernetes, `SENDORA_ALLOW_SELF_RESTART=true`).
+  with the error shown in the UI. The scheduled conversion is shown as a list with the
+  resulting addresses (also as a summary before confirming). *Restart now* (re-auth,
+  audited) is always available: an orderly stop, then the process re-executes itself
+  (`SENDORA_RESTART_MODE=exit`: exit code 75 for a supervisor); the page waits for the
+  new addresses and links to them. The platform console offers the same restart.
 - **Moving to another host**: `sendora-db tenant-import -from <old DATA_DIR>
   -source-key-file <old key> [-custom-domain <old host>]` copies a single-tenant
   installation into an existing multi-tenant environment (other tenants may exist) as a

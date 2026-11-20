@@ -145,6 +145,7 @@ func newPlatformConsole(h *TenantHost) *platformConsole {
 			r.Put("/storage", c.putPlatformStorage)
 			r.Post("/storage/test", c.testPlatformStorage)
 			r.Get("/settings", c.getSettings)
+			r.Post("/restart", c.restart)
 			r.Put("/settings", c.putSettings)
 			r.Get("/audit", c.audit)
 			r.Get("/audit/status", c.auditStatus)
@@ -1358,6 +1359,32 @@ func (c *platformConsole) putNetwork(w http.ResponseWriter, r *http.Request) {
 	jout(w, 200, map[string]any{"ok": true})
 }
 
+// ---------- restart ----------
+
+// restart: POST /api/platform/restart {code}: an orderly stop of every tenant
+// and the console, then the process restarts itself (RestartMode); needs a
+// fresh confirmation and is audited.
+func (c *platformConsole) restart(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Code string }
+	if decodeLoose(r, &b) != nil {
+		jerr(w, 400, "invalid request")
+		return
+	}
+	if c.h.restartFn == nil {
+		jerr(w, 409, "restarting is not available here; restart the server")
+		return
+	}
+	if !c.stepUp(w, r, b.Code) {
+		return
+	}
+	c.record(r, "restart_requested", "platform", "ok", "mode="+RestartMode())
+	jout(w, 202, map[string]any{"ok": true, "mode": RestartMode()})
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		c.h.restartFn()
+	}()
+}
+
 // ---------- settings ----------
 
 func (c *platformConsole) getSettings(w http.ResponseWriter, r *http.Request) {
@@ -1366,6 +1393,7 @@ func (c *platformConsole) getSettings(w http.ResponseWriter, r *http.Request) {
 		managed = append(managed, k)
 	}
 	jout(w, 200, map[string]any{"settings": c.h.P.Settings(), "managed": managed, "base_domain": c.h.baseHost + c.h.basePort,
+		"restart_available": c.h.restartFn != nil, "restart_mode": RestartMode(),
 		"max_open_tenants_now": len(c.h.OpenTenants())})
 }
 

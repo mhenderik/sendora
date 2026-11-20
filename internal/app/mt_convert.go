@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -151,10 +153,21 @@ func validateConversion(c *ConversionRequest) error {
 
 // ---------- admin endpoints (single-tenant only) ----------
 
-// supervisorLikely: a restart by exiting is only safe when something starts
-// the process again (container PID 1, Kubernetes, or explicitly allowed).
+// supervisorLikely: something starts the process again after it exits
+// (container PID 1, Kubernetes, or explicitly allowed).
 func supervisorLikely() bool {
 	return os.Getpid() == 1 || os.Getenv("KUBERNETES_SERVICE_HOST") != "" || os.Getenv("SENDORA_ALLOW_SELF_RESTART") == "true"
+}
+
+// RestartMode is how "Restart now" restarts: "exec" (the process replaces
+// itself with the same executable, arguments and environment after an orderly
+// stop) or "exit" (exit with ExitRestart for a supervisor:
+// SENDORA_RESTART_MODE=exit, or where exec is not available).
+func RestartMode() string {
+	if os.Getenv("SENDORA_RESTART_MODE") == "exit" || runtime.GOOS == "windows" {
+		return "exit"
+	}
+	return "exec"
 }
 
 // suggestedCustomDomain is the host of the current public URL, when it can
@@ -180,7 +193,8 @@ func (s *Server) mtConvStatus(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 404, "not found")
 		return
 	}
-	out := map[string]any{"suggested_custom_domain": s.suggestedCustomDomain(), "supervisor": supervisorLikely(), "password_min_length": consoleMinPassword,
+	out := map[string]any{"suggested_custom_domain": s.suggestedCustomDomain(), "supervisor": supervisorLikely(), "restart_mode": RestartMode(),
+		"restart_available": s.restartFn != nil, "password_min_length": consoleMinPassword,
 		"jwt_secret_set": os.Getenv("JWT_SECRET") != "" || os.Getenv("JWT_SECRET_FILE") != ""}
 	if c, err := readConversion(s.St.DataDir); err == nil {
 		c.AdminPasswordHash = ""
@@ -274,20 +288,25 @@ func (s *Server) mtConvCancel(w http.ResponseWriter, r *http.Request) {
 	jout(w, 200, map[string]any{"ok": true})
 }
 
-// mtConvRestart: POST /api/admin/multitenant/restart (administrators,
-// step-up): only when a supervisor will start the process again.
+// mtConvRestart: POST /api/multitenant/restart (administrators, step-up): an
+// orderly stop, then the process restarts itself (RestartMode) and runs the
+// scheduled conversion.
 func (s *Server) mtConvRestart(w http.ResponseWriter, r *http.Request) {
 	if s.tenant != nil || !ConversionPending(s.St.DataDir) {
 		jerr(w, 409, "no conversion is scheduled")
 		return
 	}
-	if !supervisorLikely() || s.restartFn == nil {
-		jerr(w, 409, "restart the server to run the conversion (no process supervisor detected)")
+	if s.restartFn == nil {
+		jerr(w, 409, "restart the server to run the conversion")
 		return
 	}
 	me := s.ctxUser(r)
-	s.logEvent(me.ID, me.Username, "server_restart_requested", "platform", "multi-tenant conversion")
-	jout(w, 202, map[string]any{"ok": true})
+	mode := RestartMode()
+	if mode == "exit" && !supervisorLikely() {
+		log.Printf("WARNING: restart requested with SENDORA_RESTART_MODE=exit but no supervisor detected; the server may stay stopped")
+	}
+	s.logEvent(me.ID, me.Username, "restart_requested", "platform", "multi-tenant conversion; mode="+mode)
+	jout(w, 202, map[string]any{"ok": true, "mode": mode})
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		s.restartFn()

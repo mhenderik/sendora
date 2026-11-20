@@ -34,9 +34,37 @@ async function cancel() {
   err.value = msg.value = ''
   try { await api('/multitenant', { method: 'DELETE' }); msg.value = t('The scheduled conversion was cancelled.'); await load() } catch (e) { err.value = e.message }
 }
+// The addresses after the conversion (http for localhost base domains).
+const urls = c => {
+  if (!c?.base_domain) return null
+  const host = c.base_domain.split(':')[0]
+  const scheme = host === 'localhost' || host.endsWith('.localhost') ? 'http' : 'https'
+  return { console: `${scheme}://admin.${c.base_domain}`, org: `${scheme}://${c.slug}.${c.base_domain}`, custom: c.custom_domain ? `https://${c.custom_domain}` : '' }
+}
+const preview = computed(() => ({ base_domain: f.base_domain, slug: f.slug, name: f.name || f.slug, admin_username: f.admin_username, admin_email: f.admin_email,
+  mfa_required: f.mfa_required, custom_domain: f.use_custom_domain ? f.custom_domain : '' }))
+const fmtLocal = v => { try { return new Date(v).toLocaleString() } catch { return v } }
+const restarting = ref(false), restarted = ref(null)
 async function restart() {
   err.value = msg.value = ''
-  try { await api('/multitenant/restart', { method: 'POST' }); msg.value = t('The server is restarting. Sign in again in a minute at the new addresses.') } catch (e) { err.value = e.message }
+  const target = urls(st.value.pending)
+  try {
+    await api('/multitenant/restart', { method: 'POST' })
+    restarting.value = true
+    // Poll /api/health (answered on every host, also after the conversion; the
+    // page's CSP only allows its own origin): first until the server went
+    // down for the restart, then until it answers again.
+    let down = false
+    for (let i = 0; i < 240; i++) {
+      await new Promise(r => setTimeout(r, 1000))
+      let up = false
+      try { up = (await fetch('/api/health', { cache: 'no-store' })).ok } catch {}
+      if (!up) { down = true; continue }
+      if (down || i >= 10) { restarted.value = target; break }
+    }
+    restarting.value = false
+    if (!restarted.value) err.value = t('The server did not come back yet. Check the server log, then open the new addresses.')
+  } catch (e) { err.value = e.message; restarting.value = false }
 }
 </script>
 <template>
@@ -48,13 +76,33 @@ async function restart() {
     <p v-if="msg" class="ok" role="status">{{ msg }}</p>
     <p v-if="err" class="err" role="alert">{{ err }}</p>
 
-    <template v-if="st.pending">
-      <p class="notice" role="status">{{ t('A conversion is scheduled by {by} on {at}: base domain {base}, first organisation {slug}, platform administrator {admin}. It runs at the next start of the server.', { by: st.pending.requested_by, at: st.pending.requested_at, base: st.pending.base_domain, slug: st.pending.slug, admin: st.pending.admin_username }) }}</p>
-      <p v-if="!st.supervisor" class="muted">{{ t('Restart the server (for example docker restart or a new pod) to run the conversion.') }}</p>
+    <div v-if="restarting" class="notice" role="status" aria-live="polite">{{ t('Restarting… the conversion runs now; this page waits for the new addresses.') }}</div>
+    <div v-else-if="restarted" class="card" role="status" aria-live="polite">
+      <p class="ok">{{ t('The conversion is complete.') }}</p>
+      <ul>
+        <li>{{ t('Platform console') }}: <a :href="restarted.console">{{ restarted.console }}</a></li>
+        <li>{{ t('Organisation') }}: <a :href="restarted.org + '/login'">{{ restarted.org }}</a></li>
+        <li v-if="restarted.custom">{{ t('Custom domain') }}: {{ restarted.custom }}</li>
+      </ul>
+    </div>
+    <template v-else-if="st.pending">
+      <h2>{{ t('Scheduled conversion') }}</h2>
+      <dl class="facts">
+        <dt>{{ t('Base domain') }}</dt><dd>{{ st.pending.base_domain }}</dd>
+        <dt>{{ t('First organisation') }}</dt><dd>{{ st.pending.name }} ({{ st.pending.slug }})</dd>
+        <dt>{{ t('Platform administrator') }}</dt><dd>{{ st.pending.admin_username }} &lt;{{ st.pending.admin_email }}&gt;</dd>
+        <dt>{{ t('Custom domain kept') }}</dt><dd>{{ st.pending.custom_domain ? t('Yes') + ': ' + st.pending.custom_domain : t('No') }}</dd>
+        <dt>{{ t('Authenticator required for platform administrators') }}</dt><dd>{{ st.pending.mfa_required ? t('Yes') : t('No') }}</dd>
+        <dt>{{ t('Scheduled by') }}</dt><dd>{{ st.pending.requested_by }}, {{ fmtLocal(st.pending.requested_at) }}</dd>
+        <dt>{{ t('Platform console') }}</dt><dd><code>{{ urls(st.pending).console }}</code></dd>
+        <dt>{{ t('Organisation') }}</dt><dd><code>{{ urls(st.pending).org }}</code></dd>
+      </dl>
+      <p class="muted">{{ t('The conversion runs at the next start of the server. Restart now stops the server in an orderly way and starts it again.') }}</p>
       <div class="actions">
-        <button v-if="st.supervisor" @click="restart">{{ t('Restart now') }}</button>
+        <button v-if="st.restart_available" @click="restart">{{ t('Restart now') }}</button>
         <button class="secondary" @click="cancel">{{ t('Cancel the conversion') }}</button>
       </div>
+      <p v-if="!st.restart_available" class="muted">{{ t('Restart the server (for example docker restart or a new pod) to run the conversion.') }}</p>
     </template>
 
     <form v-else @submit.prevent="schedule">
@@ -89,6 +137,18 @@ async function restart() {
       <label for="mt-pass">{{ t('Password') }}</label><input id="mt-pass" v-model="f.admin_password" type="password" autocomplete="new-password" minlength="12" required />
       <PasswordHints :password="f.admin_password" :policy="pwPolicy" />
       <label class="check"><input type="checkbox" v-model="f.mfa_required" /> {{ t('Platform administrators must use an authenticator app') }}</label>
+      <template v-if="f.base_domain && f.slug">
+        <h2>{{ t('Summary') }}</h2>
+        <dl class="facts">
+          <dt>{{ t('Base domain') }}</dt><dd>{{ preview.base_domain }}</dd>
+          <dt>{{ t('First organisation') }}</dt><dd>{{ preview.name }} ({{ preview.slug }})</dd>
+          <dt>{{ t('Platform administrator') }}</dt><dd>{{ preview.admin_username }}<template v-if="preview.admin_email"> &lt;{{ preview.admin_email }}&gt;</template></dd>
+          <dt>{{ t('Custom domain kept') }}</dt><dd>{{ preview.custom_domain ? t('Yes') + ': ' + preview.custom_domain : t('No') }}</dd>
+          <dt>{{ t('Authenticator required for platform administrators') }}</dt><dd>{{ preview.mfa_required ? t('Yes') : t('No') }}</dd>
+          <dt>{{ t('Platform console') }}</dt><dd><code>{{ urls(preview).console }}</code></dd>
+          <dt>{{ t('Organisation') }}</dt><dd><code>{{ urls(preview).org }}</code></dd>
+        </dl>
+      </template>
       <label class="check"><input type="checkbox" v-model="confirmed" /> {{ t('I have read the requirements; schedule the conversion for the next start') }}</label>
       <div class="actions"><button :disabled="busy || !ready">{{ t('Schedule the conversion') }}</button></div>
     </form>

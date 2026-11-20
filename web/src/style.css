@@ -100,11 +100,15 @@ button.small{padding:5px 14px;font-size:13px}
 /* Fields in a row align at the top (labels on one line, hints below their input); a button next to inputs aligns with the inputs. */
 .row>.row-end{flex:0 0 auto;align-self:flex-end}
 .row>div>p{margin:6px 0 0}
+/* Rows of many short fields whose labels may wrap: reserve two label lines so the inputs stay level. */
+.row.labels-2>div>label:first-child{min-height:3.2em;min-height:2lh;display:flex;align-items:flex-end}
 /* Section headings inside forms and cards get consistent space above them. */
 form>h2:not(:first-child),form>h3:not(:first-child),.card>h2:not(:first-child),.card>h3:not(:first-child){margin-top:24px}
 h3{margin:0 0 10px}
 .pw-hints{margin:6px 0 0;font-size:13px}.pw-hints p{margin:4px 0}.pw-count{color:var(--muted)}.pw-count.ok,.pw-list .ok{color:var(--ok)}
 .pw-list{list-style:none;margin:4px 0;padding:0;display:flex;flex-wrap:wrap;gap:4px 14px}.pw-list .todo{color:var(--muted)}
+dl.facts{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:10px 0 14px}dl.facts dt{color:var(--muted)}dl.facts dd{margin:0;overflow-wrap:anywhere}
+@media (max-width:560px){dl.facts{grid-template-columns:1fr;gap:2px}dl.facts dd{margin-bottom:8px}}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .actions{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap;align-items:center}
 .err{color:var(--danger);margin:10px 0}.ok{color:var(--ok);margin:10px 0}.muted{color:var(--muted)}

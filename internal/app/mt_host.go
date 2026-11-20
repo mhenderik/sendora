@@ -64,6 +64,8 @@ type TenantHost struct {
 	shutdown bool
 
 	now func() time.Time
+	// restartFn is set by main: orderly stop, then restart (Platform settings).
+	restartFn func()
 	// openBackend opens object storage backends (storage.Open; tests replace it).
 	openBackend func(context.Context, storage.Config) (storage.Backend, error)
 }
@@ -869,3 +871,6 @@ func (h *TenantHost) deleteTenantData(id string) error {
 	}
 	return nil
 }
+
+// SetRestarter registers how main restarts the process (Platform settings).
+func (h *TenantHost) SetRestarter(fn func()) { h.restartFn = fn }

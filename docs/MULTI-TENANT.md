@@ -232,10 +232,17 @@ in again when `JWT_SECRET` is set, and that the originals stay in
 Confirming needs re-authentication and writes `DATA_DIR/multitenant-pending.json`
 (0600; the password only as a bcrypt hash) plus the audit record
 `multitenant_conversion_scheduled`; *Cancel* removes it
-(`multitenant_conversion_cancelled`). *Restart now* exits with code 75 for the
-supervisor to start the server again, but only when one is likely (PID 1 in a
-container, `KUBERNETES_SERVICE_HOST`, or `SENDORA_ALLOW_SELF_RESTART=true`);
-otherwise the page asks to restart the server.
+(`multitenant_conversion_cancelled`). Once scheduled, the page lists the details
+(base domain, first organisation, platform administrator, custom domain, MFA,
+who scheduled it and when) and the resulting addresses. *Restart now* (re-auth,
+audited as `restart_requested`) stops the server like a shutdown — no new
+requests, requests in progress finish, jobs end, the database is closed — and
+then the process replaces itself with the same executable, arguments and
+environment (Unix `exec`), so no supervisor is needed. With
+`SENDORA_RESTART_MODE=exit` (or where exec is unavailable) it exits with code
+75 for a supervisor instead. The page shows *Restarting…*, waits for the new
+console address to answer and then links to the console and the organisation.
+The platform console offers the same restart under *Platform settings*.
 
 At the next start (unless `SENDORA_MULTI_TENANT=false`), before anything is
 opened: a full verified encrypted copy of the database
