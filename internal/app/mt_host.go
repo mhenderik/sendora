@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -305,11 +306,20 @@ func (h *TenantHost) release(e *tenantEntry, idleNow bool) {
 // The settings are validated when saved; the clamps keep a tampered or
 // out-of-range value from overflowing the conversions.
 func (h *TenantHost) maxOpen() int {
-	return int(h.P.SettingIntRange("max_open_tenants", 50, 1, 10000))
+	return boundedInt(h.P.SettingIntRange("max_open_tenants", 50, 1, 10000), 50)
 }
 
 func (h *TenantHost) idle() time.Duration {
 	return time.Duration(h.P.SettingIntRange("tenant_idle_minutes", 15, 1, 1440)) * time.Minute
+}
+
+// boundedInt converts a (clamped) setting value to int; the bounds check sits
+// next to the conversion so it is also evident to code scanning.
+func boundedInt(n int64, def int) int {
+	if n < 0 || n > math.MaxInt32 {
+		return def
+	}
+	return int(n)
 }
 
 func (h *TenantHost) maintenanceInterval() time.Duration {
@@ -511,7 +521,7 @@ func (h *TenantHost) refreshOpenStats() {
 // platformMaintenance applies the platform audit retention.
 func (h *TenantHost) platformMaintenance() {
 	days := h.P.SettingIntRange("platform_audit_retention_days", 365, 90, 36500)
-	if n, err := h.P.St.AuditPurge(time.Now().AddDate(0, 0, -int(days))); err != nil {
+	if n, err := h.P.St.AuditPurge(time.Now().AddDate(0, 0, -boundedInt(days, 365))); err != nil {
 		log.Printf("platform audit retention: %v", err)
 	} else if n > 0 {
 		h.P.Audit(0, "system", "audit_purged", "platform", "ok", fmt.Sprintf("%d records older than %d days", n, days), "")
