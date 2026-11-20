@@ -54,7 +54,7 @@ The offline tool is part of the main binary: `sendora db <command>` or `sendora-
 
 A single-tenant installation can also be converted from **Admin → Multi-tenant** (MULTI-TENANT.md §7.1); the conversion stores the mode in `DATA_DIR/sendora-mode.json`, so `SENDORA_MULTI_TENANT` and `SENDORA_BASE_DOMAIN` are then optional (when set, they win; `SENDORA_MULTI_TENANT=false` keeps or forces single-tenant mode).
 
-In multi-tenant mode `APP_URL` and `JWT_SECRET` are ignored (each tenant's URL comes from its domain and each tenant has its own signing secret). The other `SENDORA_<SETTING>` variables apply to every tenant and are read-only in each tenant's admin screen. All platform settings except the base domain can also be changed in the platform console unless set by a variable.
+In multi-tenant mode `APP_URL` and `JWT_SECRET` are ignored (each tenant's URL comes from its domain and each tenant has its own signing secret). The other `SENDORA_<SETTING>` variables apply to every tenant and are read-only in each tenant's admin screen. All platform settings can also be changed in the platform console unless set by a variable; a changed base domain is stored in the data directory and applies after a restart.
 
 ## Settings from a ConfigMap or environment variables
 
