@@ -121,6 +121,17 @@ unchanged** (same layout, no migration needed).
   and abortable (`-abort`). Imported tenants keep the old key as the root for their file
   and audit keys, so files stay decryptable and the audit chain verifiable without
   rewriting. Offline commands accept `-tenant <id>` (and `-legacy-root`).
+- **Conversion wizard** (Admin → Multi-tenant, single-tenant administrators): base
+  domain, first organisation (this installation), first platform administrator, MFA
+  requirement and the current address as a custom domain (existing links keep
+  working). Confirming needs re-authentication and schedules the conversion
+  (`DATA_DIR/multitenant-pending.json`, 0600, password only as a bcrypt hash; audited;
+  cancellable). At the next start a verified database backup is made and the tested
+  tenant import runs; the mode is persisted in `DATA_DIR/sendora-mode.json`
+  (`SENDORA_MULTI_TENANT` > persisted mode > single-tenant) and the server starts
+  multi-tenant. A failure is rolled back and the server starts single-tenant unchanged,
+  with the error shown in the UI. *Restart now* exits with code 75 when a supervisor is
+  likely (container PID 1, Kubernetes, `SENDORA_ALLOW_SELF_RESTART=true`).
 - Safety: a single-tenant start refuses a multi-tenant `DATA_DIR` and vice versa; the
   in-app database import is disabled for tenants.
 - New example manifest `deploy/kubernetes-multi-tenant.yaml` (wildcard Ingress and TLS

@@ -213,6 +213,43 @@ Quota changes apply immediately to an open tenant.
 
 ## 7. Converting a single-tenant installation (tenant-import)
 
+### 7.1 From the web UI (Admin → Multi-tenant)
+
+A single-tenant administrator can schedule the conversion in **Admin →
+Multi-tenant**: base domain, subdomain and name of the first organisation (the
+current installation), the first platform administrator (username, email,
+password screened like console passwords), whether platform administrators must
+use an authenticator, and optionally the current address (preselected from
+`APP_URL`/`application_url`) as a verified custom domain of the organisation, so
+existing share links keep working (they redirect to the organisation's primary
+address). The page lists the requirements first: wildcard DNS and TLS for
+`*.<base domain>`, an ingress that passes those host names, that everyone signs
+in again when `JWT_SECRET` is set, and that the originals stay in
+`pre-tenant-import-<time>/`.
+
+Confirming needs re-authentication and writes `DATA_DIR/multitenant-pending.json`
+(0600; the password only as a bcrypt hash) plus the audit record
+`multitenant_conversion_scheduled`; *Cancel* removes it
+(`multitenant_conversion_cancelled`). *Restart now* exits with code 75 for the
+supervisor to start the server again, but only when one is likely (PID 1 in a
+container, `KUBERNETES_SERVICE_HOST`, or `SENDORA_ALLOW_SELF_RESTART=true`);
+otherwise the page asks to restart the server.
+
+At the next start (unless `SENDORA_MULTI_TENANT=false`), before anything is
+opened: a full verified encrypted copy of the database
+(`pre-multitenant-backup-<time>.db`), then the conversion below (verified,
+resumable), the platform administrator, the MFA setting, the custom domain and
+local storage for the organisation; the mode and base domain are stored in
+`DATA_DIR/sendora-mode.json` and the server starts in multi-tenant mode
+(`multitenant_conversion_completed` in the platform audit log). The mode is
+decided as `SENDORA_MULTI_TENANT` > `sendora-mode.json` > single-tenant, and
+`SENDORA_BASE_DOMAIN` overrides the stored base domain. If the conversion fails,
+it is aborted, the new platform database is moved to `failed-conversion-<time>/`,
+the request is renamed to `multitenant-pending.json.failed`, the error is logged
+and shown in Admin → Multi-tenant, and the server starts single-tenant unchanged.
+
+### 7.2 Offline
+
 ```sh
 # stop the server first
 sendora-db tenant-import -data-dir /data -slug acme -name "Acme" \

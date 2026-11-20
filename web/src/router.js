@@ -34,6 +34,7 @@ const routes = [
       { path: 'languages', component: () => import('./views/admin/Languages.vue') },
       { path: 'backups', component: () => import('./views/admin/Backups.vue') },
       { path: 'storage', component: () => import('./views/admin/Storage.vue') },
+      { path: 'multitenant', component: () => import('./views/admin/MultiTenant.vue') },
       { path: 'logs', component: () => import('./views/Audit.vue') }
     ]
   },

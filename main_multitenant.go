@@ -19,7 +19,7 @@ import (
 
 // runMultiTenant serves all tenants and the platform console from one process
 // (SENDORA_MULTI_TENANT=true, docs/MULTI-TENANT.md).
-func runMultiTenant(dataDir string, key []byte) {
+func runMultiTenant(dataDir string, key []byte, baseDomain string) {
 	for _, name := range []string{"JWT_SECRET", "JWT_SECRET_FILE", "APP_URL"} {
 		if os.Getenv(name) != "" {
 			log.Printf("WARNING: %s is ignored in multi-tenant mode (every tenant has its own signing secret and URL)", name)
@@ -64,7 +64,7 @@ func runMultiTenant(dataDir string, key []byte) {
 		log.Fatal(err)
 	}
 	h, err := app.NewTenantHost(app.MultiTenantConfig{
-		Platform: p, BaseDomain: os.Getenv("SENDORA_BASE_DOMAIN"), Static: static, Version: version,
+		Platform: p, BaseDomain: baseDomain, Static: static, Version: version,
 		TrustedProxies: proxies, ForceLocalLogin: os.Getenv("SENDORA_FORCE_LOCAL_LOGIN") == "true", Managed: managed,
 	})
 	if err != nil {

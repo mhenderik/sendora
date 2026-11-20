@@ -394,6 +394,11 @@ func (c *platformConsole) bootstrap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *platformConsole) checkPassword(pw, username string) string {
+	return platformPasswordProblem(pw, username)
+}
+
+// platformPasswordProblem screens a platform administrator's password ("" = ok).
+func platformPasswordProblem(pw, username string) string {
 	switch {
 	case len(pw) < consoleMinPassword:
 		return fmt.Sprintf("the password must have at least %d characters", consoleMinPassword)

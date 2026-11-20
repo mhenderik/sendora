@@ -236,6 +236,11 @@ Other administrator mutations (branding, backgrounds, themes, email templates an
 | `audit_exported` | After the `attempted` record and the size check, before the export is streamed | caller (administrator or auditor) | `audit_log` | `<csv or jsonl> <n> records` plus the filters used (`q=`, `category=`, `action=`, `actor=`, `outcome=`, `from=`, `to=`; values max. 40 characters) |
 | `access_review_exported` | Before the access-review report is served | caller | `access_review` | `<csv or jsonl> <n> accounts` |
 
+`multitenant_conversion_scheduled`, `multitenant_conversion_cancelled` and
+`server_restart_requested` (single-tenant administrator, target `platform`) record
+the conversion scheduled in Admin → Multi-tenant; the conversion itself is
+`multitenant_conversion_completed` in the platform audit log.
+
 ### 4.7 Platform audit log (multi-tenant mode)
 
 The platform console writes to its own tamper-evident log (`platform.db`, same

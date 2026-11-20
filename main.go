@@ -69,21 +69,33 @@ func main() {
 		log.Fatal(err)
 	}
 	app.WarnPlainSecrets()
-	multiTenant := os.Getenv("SENDORA_MULTI_TENANT") == "true"
+	dataDir := env("DATA_DIR", "./data")
+	// SENDORA_MULTI_TENANT (true/false) > the mode persisted by a conversion > single-tenant.
+	multiTenant, baseDomain := app.ResolveMode(os.Getenv("SENDORA_MULTI_TENANT"), os.Getenv("SENDORA_BASE_DOMAIN"), dataDir)
+	convert := !multiTenant && os.Getenv("SENDORA_MULTI_TENANT") != "false" && app.ConversionPending(dataDir)
 	// A short signing secret could be guessed offline from any captured token.
 	// (Multi-tenant mode ignores JWT_SECRET: every tenant has its own secret.)
 	if sec, err := app.JWTSecretFromEnv(); err != nil {
 		log.Fatal(err)
-	} else if err := app.ValidateJWTSecret(sec); err != nil && !multiTenant {
+	} else if err := app.ValidateJWTSecret(sec); err != nil && !multiTenant && !convert {
 		log.Fatal(err)
 	}
 	key, err := store.ReadDatabaseKey(os.Getenv("SENDORA_DB_KEY_FILE"))
 	if err != nil {
 		log.Fatal(err)
 	}
-	dataDir := env("DATA_DIR", "./data")
+	if convert {
+		// A conversion scheduled in Admin -> Multi-tenant (internal/app/mt_convert.go).
+		// On failure everything is put back and the server starts single-tenant.
+		if base, err := app.ConvertPending(dataDir, key, log.Printf); err == nil {
+			multiTenant, baseDomain = true, base
+			if b := os.Getenv("SENDORA_BASE_DOMAIN"); b != "" {
+				baseDomain = b
+			}
+		}
+	}
 	if multiTenant {
-		runMultiTenant(dataDir, key)
+		runMultiTenant(dataDir, key, baseDomain)
 		return
 	}
 	// A converted (multi-tenant) data directory must not be opened as a fresh
@@ -133,6 +145,13 @@ func main() {
 	// the same stop before it carries the audit log, swaps and re-execs.
 	gracefulStop := func() { srv.GracefulStop(10*time.Second, cancelJobs, hs.Shutdown, hs.Close) }
 	srv.SetImportStopper(gracefulStop)
+	// "Restart now" (Admin -> Multi-tenant): stop in order, then exit with a
+	// distinct code so the supervisor starts the server again.
+	restartRequested := make(chan struct{}, 1)
+	srv.SetRestarter(func() {
+		restartRequested <- struct{}{}
+		stop()
+	})
 	stopped := make(chan struct{})
 	go func() {
 		<-ctx.Done()
@@ -151,5 +170,11 @@ func main() {
 	<-stopped
 	if err := st.Close(); err != nil {
 		log.Printf("closing the database: %v", err)
+	}
+	select {
+	case <-restartRequested:
+		log.Printf("restarting (exit code %d) to run the scheduled multi-tenant conversion", app.ExitRestart)
+		os.Exit(app.ExitRestart)
+	default:
 	}
 }

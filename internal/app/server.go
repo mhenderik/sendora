@@ -77,6 +77,7 @@ type Server struct {
 	importMaxBytes  int64         // 0 = 4 GiB
 	importTTL       time.Duration // 0 = 15 minutes
 	importStop      func()        // set by main: stop HTTP server and background jobs
+	restartFn       func()        // set by main: stop and exit with ExitRestart (mt_convert.go)
 	importExec      func() error  // re-exec of this process
 	importExit      func(int)
 	importDone      chan struct{}
@@ -432,6 +433,12 @@ func (s *Server) Router() http.Handler {
 				r.With(s.stepUp, s.critical("storage_migration_requested", "storage")).Post("/storage/migrate", s.storageMigrateStart)
 				r.With(s.stepUp).Post("/storage/migrate/cancel", s.storageMigrateCancel)
 				r.With(s.stepUp, s.critical("db_import_applied", "backup")).Post("/backups/import/apply", s.applyImport)
+
+				// Conversion to multi-tenant mode (single-tenant only, mt_convert.go).
+				r.Get("/multitenant", s.mtConvStatus)
+				r.With(s.stepUp, s.critical("multitenant_conversion_requested", "platform")).Post("/multitenant", s.mtConvSchedule)
+				r.With(s.stepUp, s.critical("multitenant_conversion_cancel_requested", "platform")).Delete("/multitenant", s.mtConvCancel)
+				r.With(s.stepUp).Post("/multitenant/restart", s.mtConvRestart)
 			})
 		})
 	})
@@ -558,6 +565,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		"ui_use_unsplash":                s.St.SettingBool("ui_use_unsplash"),
 		"ui_slideshow_seconds":           s.St.SettingInt("ui_slideshow_seconds", 30),
 		"background":                     s.backgroundID(),
+		"multi_tenant":                   s.tenant != nil,
 		"allow_preview":                  s.St.SettingBool("allow_preview"),
 		"local_login_enabled":            s.localLoginEnabled(),
 		"mfa_policy":                     s.mfaGlobal(),
