@@ -206,9 +206,10 @@ setting). See [Upgrade notes](#upgrade-notes-020) at the end of this section.
 - Form rows align their fields at the top (hints below the input), buttons next to inputs
   line up, settings rows keep inputs level when labels wrap, and headings inside forms
   get consistent spacing.
-- New admin pages Storage and Multi-tenant and the platform console. Their texts are in
-  English and Dutch; German, French and Spanish show the English text for them until
-  translated.
+- New admin pages Storage and Multi-tenant and the platform console.
+- **Complete German, French and Spanish translations**: every interface text and server
+  message (942 interface keys) now exists in all five bundled languages; before, German,
+  French and Spanish covered only a small part of the interface.
 
 ### Build and packaging
 
