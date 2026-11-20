@@ -289,6 +289,41 @@ sendora-db tenant-import -data-dir /data -slug acme -name "Acme" \
   add the old host name as a custom domain and make it primary) so existing
   share links keep working.
 
+### 7.3 Moving an installation to another (multi-tenant) host
+
+`tenant-import -from` imports a single-tenant installation into an existing
+multi-tenant environment on another host — also one that already has tenants —
+by **copying** it. The source is only read (it may be mounted read-only; even
+its database is read from a private copy), so the old installation can keep
+running until DNS is switched.
+
+1. On the old host, stop Sendora (or take a consistent volume snapshot) so the
+   copy is consistent.
+2. Copy the old `DATA_DIR` and its database key to the new host, for example
+   `rsync -a old:/data/ /srv/import/acme/` and the key file with mode 0600 — or
+   mount the old volume read-only on the new host.
+3. On the new host, stop the multi-tenant server and run:
+
+   ```sh
+   sendora-db tenant-import -data-dir /data -key-file /run/secrets/master.key \
+       -from /srv/import/acme -source-key-file /srv/import/acme.key \
+       -slug acme -name "Acme" [-custom-domain files.acme.example]
+   ```
+
+   The database is re-encrypted with the new tenant's key, shares, uploads,
+   branding and backgrounds are copied, backups re-encrypted, and the database,
+   the audit chain and every share file are verified. The old key stays the
+   tenant's file and audit root (no file is rewritten). It is resumable after an
+   interruption (run the command again) and `-abort` removes the partial tenant
+   (the source is untouched either way). `-custom-domain` adds the old host name
+   as a verified custom domain, so existing links keep working once DNS points
+   to the new host. The imported tenant keeps local storage
+   (*Local disk on the server*); change it in the console if needed.
+4. Start the multi-tenant server, check the tenant (`sendora-db verify-files` and
+   `audit-verify` with `-tenant <id> -legacy-root`), then switch DNS for the old
+   host name (and `<slug>.<base domain>`) to the new environment.
+5. Remove the copied source and its key from the new host when you are done.
+
 Offline commands on a tenant database take `-tenant <id>` (the key is derived
 from `-key-file`), plus `-legacy-root` for an imported tenant:
 `sendora-db audit-verify -source /data/tenants/<id>/sendora.db -tenant <id>`.

@@ -1153,6 +1153,10 @@ func (c *platformConsole) putStorage(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Offer         string `json:"offer"`
 		TenantManaged bool   `json:"tenant_managed"`
+		// MaxStorageBytes is the storage limit for platform-provided storage
+		// (the max_storage_bytes quota; nil = unchanged).
+		MaxStorageBytes *int64 `json:"max_storage_bytes"`
+		Code            string `json:"code"`
 	}
 	if json.NewDecoder(r.Body).Decode(&b) != nil {
 		jerr(w, 400, "invalid request")
@@ -1161,6 +1165,15 @@ func (c *platformConsole) putStorage(w http.ResponseWriter, r *http.Request) {
 	prev, err := c.h.P.Storage(t.ID)
 	if err != nil {
 		jerr(w, 404, "not found")
+		return
+	}
+	limitChange := b.MaxStorageBytes != nil && *b.MaxStorageBytes != t.MaxStorageBytes
+	if limitChange && *b.MaxStorageBytes < 0 {
+		jerr(w, 400, "the storage limit cannot be negative")
+		return
+	}
+	// One save, one fresh confirmation for the storage limit.
+	if limitChange && !c.stepUp(w, r, b.Code) {
 		return
 	}
 	if b.Offer != prev.Offer {
@@ -1176,6 +1189,13 @@ func (c *platformConsole) putStorage(w http.ResponseWriter, r *http.Request) {
 	detail := fmt.Sprintf("offer %s -> %s; own storage allowed %t -> %t", prev.Offer, b.Offer, prev.TenantManaged, b.TenantManaged)
 	c.record(r, "tenant_storage_changed", tenantTarget(t), "ok", detail)
 	c.tenantEvent(t, r, "tenant_storage_changed", detail)
+	if limitChange {
+		if err := c.h.SetTenantQuotas(consoleFrom(r).admin.Username, t.ID, t.MaxUsers, *b.MaxStorageBytes); err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		c.record(r, "tenant_quota_changed", tenantTarget(t), "ok", fmt.Sprintf("max_storage_bytes %d->%d (storage limit)", t.MaxStorageBytes, *b.MaxStorageBytes))
+	}
 	c.h.reopen(t.ID)
 	t, _ = c.h.P.Tenant(t.ID)
 	v, _ := c.storageView(t)

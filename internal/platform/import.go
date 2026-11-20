@@ -55,6 +55,9 @@ type importJournal struct {
 	Name     string `json:"name"`
 	Phase    string `json:"phase"`
 	Started  string `json:"started"`
+	// From is the single-tenant data directory of a copy import (another
+	// installation, possibly mounted read-only); empty for an in-place conversion.
+	From string `json:"from,omitempty"`
 }
 
 // ImportOptions configures ImportSingleTenant.
@@ -64,7 +67,11 @@ type ImportOptions struct {
 	SourceKey []byte
 	// Abort reverts an unfinished conversion instead of continuing it.
 	Abort bool
-	Logf  func(string, ...any)
+	// From imports the single-tenant data directory at this path by COPYING
+	// it (for a move to another host): the source is only read, never
+	// changed; the platform may already have other tenants.
+	From string
+	Logf func(string, ...any)
 }
 
 // ImportResult describes a finished conversion.
@@ -147,18 +154,36 @@ func (p *Platform) ImportSingleTenant(opt ImportOptions) (*ImportResult, error) 
 		}
 		return p.abortImport(j, logf)
 	}
-	srcDB, err := store.DBPath(p.DataDir)
+	from := opt.From
+	if j != nil && j.From != "" {
+		from = j.From
+	}
+	srcBase := p.DataDir
+	if from != "" {
+		abs, err := filepath.Abs(from)
+		if err != nil {
+			return nil, err
+		}
+		if same, _ := filepath.Abs(p.DataDir); same == abs {
+			return nil, errors.New("-from must be another data directory than the platform's")
+		}
+		srcBase, from = abs, abs
+	}
+	srcDB, err := store.DBPath(srcBase)
 	if err != nil {
 		return nil, err
 	}
 	if j == nil {
 		if _, err := os.Stat(srcDB); err != nil {
-			return nil, errors.New("no single-tenant database (" + store.DBFile + ") in the data directory: nothing to convert")
+			return nil, errors.New("no single-tenant database (" + store.DBFile + ") in " + srcBase + ": nothing to convert")
 		}
-		if _, err := os.Stat(filepath.Join(p.DataDir, store.ImportMarker)); err == nil {
+		if _, err := os.Stat(filepath.Join(srcBase, store.PlatformDBFile)); err == nil && from != "" {
+			return nil, errors.New(from + " is a multi-tenant data directory, not a single-tenant one")
+		}
+		if _, err := os.Stat(filepath.Join(srcBase, store.ImportMarker)); err == nil {
 			return nil, errors.New("an interrupted database import must be completed first: start the server once in single-tenant mode")
 		}
-		if !store.DatabaseReadable(srcDB, srcKey) {
+		if !sourceReadable(p.DataDir, srcDB, srcKey, from != "") {
 			return nil, errors.New("the single-tenant database cannot be read with the source key")
 		}
 		if !ValidSlug(opt.Slug) {
@@ -167,7 +192,7 @@ func (p *Platform) ImportSingleTenant(opt ImportOptions) (*ImportResult, error) 
 		if _, err := p.TenantBySlug(opt.Slug); err == nil {
 			return nil, ErrSlugTaken
 		}
-		j = &importJournal{TenantID: NewTenantID(), Slug: opt.Slug, Name: opt.Name, Phase: phaseRegistered, Started: now()}
+		j = &importJournal{TenantID: NewTenantID(), Slug: opt.Slug, Name: opt.Name, Phase: phaseRegistered, Started: now(), From: from}
 		if j.Name == "" {
 			j.Name = opt.Slug
 		}
@@ -208,11 +233,32 @@ func (p *Platform) ImportSingleTenant(opt ImportOptions) (*ImportResult, error) 
 	defer clear(dbKey)
 	defer clear(root)
 	dstDB := filepath.Join(dir, store.DBFile)
+	// A copy import reads the source database from a private copy, so the
+	// source is never opened for writing (it may be mounted read-only).
+	staged := filepath.Join(dir, ".import-source")
+	if from != "" {
+		srcDB = filepath.Join(staged, store.DBFile)
+	}
 
 	if j.Phase == phaseRegistered {
 		for _, s := range []string{"", "-wal", "-shm"} {
 			if err := os.Remove(dstDB + s); err != nil && !os.IsNotExist(err) {
 				return nil, err
+			}
+		}
+		if from != "" {
+			os.RemoveAll(staged)
+			if err := os.MkdirAll(staged, 0o700); err != nil {
+				return nil, err
+			}
+			orig, err := store.DBPath(srcBase)
+			if err != nil {
+				return nil, err
+			}
+			for _, s := range []string{"", "-wal"} {
+				if err := copyFile(orig+s, srcDB+s); err != nil && !os.IsNotExist(err) {
+					return nil, fmt.Errorf("copying the source database: %w", err)
+				}
 			}
 		}
 		logf("tenant-import: re-encrypting the database with the tenant key")
@@ -227,11 +273,17 @@ func (p *Platform) ImportSingleTenant(opt ImportOptions) (*ImportResult, error) 
 	res := &ImportResult{TenantID: t.ID, Slug: t.Slug}
 	if j.Phase == phaseDatabase {
 		for _, d := range movedDirs {
+			if from != "" {
+				if err := copyTree(filepath.Join(srcBase, d), filepath.Join(dir, d)); err != nil {
+					return nil, fmt.Errorf("copying %s: %w", d, err)
+				}
+				continue
+			}
 			if err := moveDir(filepath.Join(p.DataDir, d), filepath.Join(dir, d)); err != nil {
 				return nil, fmt.Errorf("moving %s: %w", d, err)
 			}
 		}
-		n, err := copyBackups(filepath.Join(p.DataDir, "backups"), filepath.Join(dir, "backups"), srcKey, dbKey)
+		n, err := copyBackups(filepath.Join(srcBase, "backups"), filepath.Join(dir, "backups"), srcKey, dbKey)
 		if err != nil {
 			return nil, fmt.Errorf("backups: %w", err)
 		}
@@ -277,18 +329,27 @@ func (p *Platform) ImportSingleTenant(opt ImportOptions) (*ImportResult, error) 
 			return nil, err
 		}
 	}
-	// Finalise: archive the originals, activate the tenant.
-	archive := filepath.Join(p.DataDir, "pre-tenant-import-"+time.Now().UTC().Format("20060102-150405"))
-	if err := os.MkdirAll(archive, 0o700); err != nil {
-		return nil, err
-	}
-	for _, s := range []string{"-wal", "-shm", store.PreImportSuffix, ""} {
-		if err := os.Rename(srcDB+s, filepath.Join(archive, store.DBFile+s)); err != nil && !os.IsNotExist(err) {
+	// Finalise: archive the originals (in place) or drop the private copy of
+	// the source database (copy import: the source stays as it is), activate
+	// the tenant.
+	archive := ""
+	if from != "" {
+		if err := os.RemoveAll(staged); err != nil {
 			return nil, err
 		}
-	}
-	if err := os.Rename(filepath.Join(p.DataDir, "backups"), filepath.Join(archive, "backups")); err != nil && !os.IsNotExist(err) {
-		return nil, err
+	} else {
+		archive = filepath.Join(p.DataDir, "pre-tenant-import-"+time.Now().UTC().Format("20060102-150405"))
+		if err := os.MkdirAll(archive, 0o700); err != nil {
+			return nil, err
+		}
+		for _, s := range []string{"-wal", "-shm", store.PreImportSuffix, ""} {
+			if err := os.Rename(srcDB+s, filepath.Join(archive, store.DBFile+s)); err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
+		}
+		if err := os.Rename(filepath.Join(p.DataDir, "backups"), filepath.Join(archive, "backups")); err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
 	}
 	if ents, err := os.ReadDir(filepath.Join(dir, "backups")); err == nil {
 		res.Backups = len(ents)
@@ -296,13 +357,26 @@ func (p *Platform) ImportSingleTenant(opt ImportOptions) (*ImportResult, error) 
 	if _, err := p.St.DB.Exec(`UPDATE tenants SET status='active' WHERE id=? AND status='importing'`, t.ID); err != nil {
 		return nil, err
 	}
+	// The imported installation keeps storing new files where it did: its
+	// directory (unless the platform already decided otherwise).
+	if sc, err := p.Storage(t.ID); err == nil && sc.Offer == OfferNone {
+		p.SetStorage(t.ID, OfferLocal, sc.TenantManaged)
+	}
 	p.reloadDomains()
-	p.Audit(0, "system", "tenant_imported", "tenant "+t.Slug+" ("+t.ID+")", "ok", "converted from a single-tenant data directory; originals archived in "+filepath.Base(archive), "")
+	if from != "" {
+		p.Audit(0, "system", "tenant_imported", "tenant "+t.Slug+" ("+t.ID+")", "ok", "copied from the single-tenant data directory "+from+" (source unchanged)", "")
+	} else {
+		p.Audit(0, "system", "tenant_imported", "tenant "+t.Slug+" ("+t.ID+")", "ok", "converted from a single-tenant data directory; originals archived in "+filepath.Base(archive), "")
+	}
 	if err := os.Remove(p.journalPath()); err != nil {
 		return nil, err
 	}
 	res.Archive = archive
-	logf("tenant-import: done. The original database and backups are in %s; remove that directory once you have checked the tenant.", archive)
+	if from != "" {
+		logf("tenant-import: done. %s was copied into tenant %s and left unchanged.", from, t.Slug)
+	} else {
+		logf("tenant-import: done. The original database and backups are in %s; remove that directory once you have checked the tenant.", archive)
+	}
 	return res, nil
 }
 
@@ -311,6 +385,59 @@ func rootOr(root, key []byte) []byte {
 		return root
 	}
 	return key
+}
+
+// sourceReadable checks the source key; a copy import checks a private copy,
+// so a read-only source directory is never opened by SQLite.
+func sourceReadable(dataDir, srcDB string, key []byte, copyFirst bool) bool {
+	if !copyFirst {
+		return store.DatabaseReadable(srcDB, key)
+	}
+	tmp, err := os.MkdirTemp(dataDir, ".import-check-")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(tmp)
+	for _, s := range []string{"", "-wal"} {
+		if err := copyFile(srcDB+s, filepath.Join(tmp, store.DBFile+s)); err != nil && !os.IsNotExist(err) {
+			return false
+		}
+	}
+	return store.DatabaseReadable(filepath.Join(tmp, store.DBFile), key)
+}
+
+// copyTree copies the directory src into dst (files 0600, directories 0700).
+// A missing src is fine; files already copied with the same size are kept
+// (resume).
+func copyTree(src, dst string) error {
+	if _, err := os.Lstat(src); os.IsNotExist(err) {
+		return os.MkdirAll(dst, 0o700)
+	}
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil || !filepath.IsLocal(rel) && rel != "." {
+			return fmt.Errorf("unexpected path %s", path)
+		}
+		to := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(to, 0o700)
+		}
+		if !d.Type().IsRegular() {
+			return nil // no symlinks or devices from a foreign directory
+		}
+		if fi, err := os.Stat(to); err == nil {
+			if si, err := d.Info(); err == nil && si.Size() == fi.Size() {
+				return nil
+			}
+			if err := os.Remove(to); err != nil {
+				return err
+			}
+		}
+		return copyFile(path, to)
+	})
 }
 
 // moveDir renames src to dst. A missing src is fine (already moved, or never
@@ -415,6 +542,9 @@ func (p *Platform) abortImport(j *importJournal, logf func(string, ...any)) (*Im
 		return nil, err
 	}
 	for _, d := range movedDirs {
+		if j.From != "" {
+			break // a copy import moved nothing: the source is untouched
+		}
 		from, to := filepath.Join(dir, d), filepath.Join(p.DataDir, d)
 		if _, err := os.Lstat(from); os.IsNotExist(err) {
 			continue

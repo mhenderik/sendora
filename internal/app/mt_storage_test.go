@@ -674,6 +674,12 @@ func TestMTStorageLimitForProvidedStorage(t *testing.T) {
 	q := "/api/platform/tenants/" + tl.ID + "/quotas"
 	c.want(c.do("PUT", q, "", map[string]any{"max_users": 0, "max_storage_bytes": 50}, "Cookie", cookie), 403, "limit without re-auth")
 	c.want(c.do("PUT", q, "", map[string]any{"max_users": 0, "max_storage_bytes": 50, "code": m.nextCode(secret)}, "Cookie", cookie), 200, "limit")
+	// The Storage card saves the limit together with the offer (one re-auth).
+	sp := "/api/platform/tenants/" + tl.ID + "/storage"
+	c.want(c.do("PUT", sp, "", map[string]any{"offer": "local", "tenant_managed": true, "max_storage_bytes": 60}, "Cookie", cookie), 403, "limit on the Storage card without re-auth")
+	c.want(c.do("PUT", sp, "", map[string]any{"offer": "local", "tenant_managed": true, "max_storage_bytes": 50, "code": m.nextCode(secret)}, "Cookie", cookie), 200, "same limit: no change")
+	c.want(c.do("PUT", sp, "", map[string]any{"offer": "local", "tenant_managed": true, "max_storage_bytes": 60, "code": m.nextCode(secret)}, "Cookie", cookie), 200, "limit on the Storage card")
+	c.want(c.do("PUT", sp, "", map[string]any{"offer": "local", "tenant_managed": true, "max_storage_bytes": 50, "code": m.nextCode(secret)}, "Cookie", cookie), 200, "back to 50")
 	// Changing only the user quota needs no re-auth and keeps the limit.
 	c.want(c.do("PUT", q, "", map[string]any{"max_users": 7}, "Cookie", cookie), 200, "users only")
 	if tn, _ := m.p.Tenant(tl.ID); tn.MaxStorageBytes != 50 || tn.MaxUsers != 7 {

@@ -132,6 +132,12 @@ unchanged** (same layout, no migration needed).
   multi-tenant. A failure is rolled back and the server starts single-tenant unchanged,
   with the error shown in the UI. *Restart now* exits with code 75 when a supervisor is
   likely (container PID 1, Kubernetes, `SENDORA_ALLOW_SELF_RESTART=true`).
+- **Moving to another host**: `sendora-db tenant-import -from <old DATA_DIR>
+  -source-key-file <old key> [-custom-domain <old host>]` copies a single-tenant
+  installation into an existing multi-tenant environment (other tenants may exist) as a
+  new tenant; the source is only read (also when mounted read-only), the old key stays
+  the tenant's root, files and the audit chain are verified, and it is resumable and
+  abortable. The storage limit is set directly on the tenant's Storage card.
 - Safety: a single-tenant start refuses a multi-tenant `DATA_DIR` and vice versa; the
   in-app database import is disabled for tenants.
 - New example manifest `deploy/kubernetes-multi-tenant.yaml` (wildcard Ingress and TLS

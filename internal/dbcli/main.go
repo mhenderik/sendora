@@ -37,6 +37,8 @@ func run(args []string) error {
 	slug := flags.String("slug", "", "tenant-import: subdomain of the new tenant")
 	name := flags.String("name", "", "tenant-import: display name of the new tenant (default: the subdomain)")
 	sourceKeyFile := flags.String("source-key-file", "", "tenant-import: key of the single-tenant database when it differs from -key-file (the master key)")
+	from := flags.String("from", "", "tenant-import: copy the single-tenant DATA_DIR at this path into -data-dir (another host; the source is only read)")
+	customDomain := flags.String("custom-domain", "", "tenant-import: the old host name, added as a verified custom domain of the new tenant (existing links keep working)")
 	abort := flags.Bool("abort", false, "tenant-import: undo an unfinished conversion")
 	tenant := flags.String("tenant", "", "multi-tenant: operate on this tenant's database (the key is derived from -key-file, the master key)")
 	legacyRoot := flags.Bool("legacy-root", false, "multi-tenant: the tenant was imported from a single-tenant installation; its files and audit chain use the master key (verify-files, audit-verify)")
@@ -75,7 +77,7 @@ func run(args []string) error {
 		return nil
 	}
 	if args[0] == "tenant-import" {
-		return tenantImport(*dataDir, *keyFile, *sourceKeyFile, *slug, *name, *abort)
+		return tenantImport(*dataDir, *keyFile, *sourceKeyFile, *slug, *name, *abort, *from, *customDomain)
 	}
 	if args[0] == "platform-admin-reset" {
 		return platformAdminReset(*dataDir, *keyFile, *user, *resetMFA, *resetPassword)
