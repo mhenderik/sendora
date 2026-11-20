@@ -6,9 +6,9 @@ file to add or replace a language at runtime, without rebuilding.
 
 | Folder | Language | Interface (`sendora-ui-<code>.json`) | Email (`sendora-email-<code>.json`) |
 |---|---|---|---|
-| `de/` | Deutsch (completes the built-in German) | all texts | built in |
-| `fr/` | Français (completes the built-in French) | all texts | built in |
-| `es/` | Español (completes the built-in Spanish) | all texts | built in |
+| `de/` | Deutsch (alternative to the built-in German, which is complete since 0.2.0) | all texts | built in |
+| `fr/` | Français (alternative to the built-in French, which is complete since 0.2.0) | all texts | built in |
+| `es/` | Español (alternative to the built-in Spanish, which is complete since 0.2.0) | all texts | built in |
 | `it/` | Italiano | all texts | all 8 events |
 | `pt-br/` | Português (Brasil) | all texts | all 8 events |
 | `pl/` | Polski | all texts | all 8 events |

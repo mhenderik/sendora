@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/mhenderik/sendora/internal/netguard"
 	"github.com/mhenderik/sendora/internal/store"
 )
 
@@ -270,14 +271,19 @@ type forwardConfig struct {
 	syslog    string
 	syslogTLS bool
 	webhook   string
+	// strict: targets a guarded tenant's administrator configured; their
+	// connections also refuse private networks (internal/netguard).
+	strictSyslog, strictWebhook bool
 }
 
 func (s *Server) forwardConfig() forwardConfig {
 	return forwardConfig{
-		stdout:    s.St.SettingBool("audit_forward_stdout"),
-		syslog:    strings.TrimSpace(s.St.Setting("audit_forward_syslog")),
-		syslogTLS: !strings.EqualFold(s.St.Setting("audit_forward_syslog_tls"), "false"),
-		webhook:   strings.TrimSpace(s.St.Setting("audit_forward_webhook_url")),
+		stdout:        s.St.SettingBool("audit_forward_stdout"),
+		syslog:        strings.TrimSpace(s.St.Setting("audit_forward_syslog")),
+		syslogTLS:     !strings.EqualFold(s.St.Setting("audit_forward_syslog_tls"), "false"),
+		webhook:       strings.TrimSpace(s.St.Setting("audit_forward_webhook_url")),
+		strictSyslog:  s.guardTargets() && !s.isManagedSetting("audit_forward_syslog"),
+		strictWebhook: s.guardTargets() && !s.isManagedSetting("audit_forward_webhook_url"),
 	}
 }
 
@@ -365,14 +371,21 @@ func newForwardSink(kind, key string, cfg forwardConfig, st *forwardStats) (*for
 		if err != nil {
 			return nil, errForwardInvalid
 		}
-		sl := &syslogSink{addr: addr, tls: cfg.syslogTLS, roots: forwardRootCAs}
+		sl := &syslogSink{addr: addr, tls: cfg.syslogTLS, roots: forwardRootCAs, control: forwardDialControl}
+		if cfg.strictSyslog {
+			sl.control = netguard.Control
+		}
 		k.deliver, k.closeFn = sl.deliver, sl.close
 	case sinkWebhook:
 		u, err := validateForwardWebhook(cfg.webhook)
 		if err != nil {
 			return nil, errForwardInvalid
 		}
-		wh := &webhookSink{url: u, client: newForwardHTTPClient()}
+		control := forwardDialControl
+		if cfg.strictWebhook {
+			control = netguard.Control
+		}
+		wh := &webhookSink{url: u, client: newForwardHTTPClient(control)}
 		k.deliver, k.closeFn = wh.deliver, wh.client.CloseIdleConnections
 	}
 	return k, nil
@@ -526,10 +539,11 @@ func deliverStdout(_ context.Context, items []forwardItem) error {
 }
 
 type syslogSink struct {
-	addr  string
-	tls   bool
-	roots *x509.CertPool
-	conn  net.Conn // used only by the sink's worker
+	addr    string
+	tls     bool
+	roots   *x509.CertPool
+	control func(network, address string, c syscall.RawConn) error
+	conn    net.Conn // used only by the sink's worker
 }
 
 func (sl *syslogSink) close() {
@@ -546,10 +560,10 @@ func (sl *syslogSink) deliver(ctx context.Context, items []forwardItem) error {
 		var err error
 		if sl.tls {
 			host, _, _ := net.SplitHostPort(sl.addr)
-			d := &tls.Dialer{NetDialer: forwardDialer(), Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, RootCAs: sl.roots}}
+			d := &tls.Dialer{NetDialer: forwardDialer(sl.control), Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, RootCAs: sl.roots}}
 			sl.conn, err = d.DialContext(dctx, "tcp", sl.addr)
 		} else {
-			sl.conn, err = forwardDialer().DialContext(dctx, "tcp", sl.addr)
+			sl.conn, err = forwardDialer(sl.control).DialContext(dctx, "tcp", sl.addr)
 		}
 		if err != nil {
 			sl.conn = nil
@@ -724,14 +738,17 @@ func forwardDialControl(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
-func forwardDialer() *net.Dialer {
-	return &net.Dialer{Timeout: forwardTimeout, Control: forwardDialControl}
+func forwardDialer(control func(network, address string, c syscall.RawConn) error) *net.Dialer {
+	if control == nil {
+		control = forwardDialControl
+	}
+	return &net.Dialer{Timeout: forwardTimeout, Control: control}
 }
 
-func newForwardHTTPClient() *http.Client {
+func newForwardHTTPClient(control func(network, address string, c syscall.RawConn) error) *http.Client {
 	tr := &http.Transport{
 		Proxy:                 nil, // the guard must see the real destination
-		DialContext:           forwardDialer().DialContext,
+		DialContext:           forwardDialer(control).DialContext,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: forwardRootCAs},
 		TLSHandshakeTimeout:   forwardTimeout,
 		ResponseHeaderTimeout: forwardTimeout,

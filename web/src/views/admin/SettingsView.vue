@@ -24,6 +24,7 @@ async function save() {
   try {
     const body = { ...s.value, default_storage_quota_bytes: String(gbToBytes(quotaGB.value)) }
     for (const k of SECURITY_KEYS) delete body[k] // saved on the Security tab
+    for (const k of Object.keys(body)) if (k.startsWith('storage_') || k.startsWith('backup_remote_')) delete body[k] // saved on the Storage tab
     await api('/settings', { method: 'PUT', body }); await loadBoot(); await load(); msg.value = t('Saved')
     return true
   } catch (e) { err.value = e.message; return false }
@@ -42,7 +43,7 @@ async function test() { try { if (!await save()) return; await api('/email-templ
     </div>
     <label>{{ t('Default storage quota (GB)') }}</label><input :disabled="m('default_storage_quota_bytes')" v-model="quotaGB" type="text" inputmode="decimal" pattern="[0-9]+([.,][0-9]{1,9})?" maxlength="64" required />
     <p class="muted">{{ t('Changes apply to all users following the default. Personal overrides stay unchanged.') }}</p>
-    <div class="row"><div v-for="[k, l] in nums" :key="k"><label>{{ t(l) }}</label><input :disabled="m(k)" v-model="s[k]" type="number" min="0" /></div></div>
+    <div class="row labels-2"><div v-for="[k, l] in nums" :key="k"><label>{{ t(l) }}</label><input :disabled="m(k)" v-model="s[k]" type="number" min="0" /></div></div>
     <label v-for="[k, l] in flags" :key="k" class="check"><input :disabled="m(k)" type="checkbox" :checked="s[k] === 'true'" @change="s[k] = String($event.target.checked)" /> {{ t(l) }}</label>
     <p class="muted">{{ t('Public registration always requires email verification and working SMTP.') }}</p>
     <p v-if="s.allow_self_registration === 'true' && !s.smtp_host" class="err">{{ t('Self registration is on but outgoing email (SMTP) is not configured, so the Create account option stays hidden.') }}</p>

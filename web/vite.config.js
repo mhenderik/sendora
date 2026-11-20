@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 // Publishes the list of translatable texts next to the build, so the server can
 // validate imported translation files without keeping its own copy of the keys.
@@ -16,5 +17,10 @@ const i18nKeys = () => ({
 export default defineConfig({
   plugins: [vue(), i18nKeys()],
   server: { proxy: { '/api': 'http://localhost:8080' } },
-  build: { outDir: 'dist', emptyOutDir: true }
+  build: {
+    outDir: 'dist', emptyOutDir: true,
+    // platform.html is the platform console of multi-tenant mode; the server
+    // serves it only on admin.<base domain>.
+    rollupOptions: { input: { main: fileURLToPath(new URL('./index.html', import.meta.url)), platform: fileURLToPath(new URL('./platform.html', import.meta.url)) } }
+  }
 })

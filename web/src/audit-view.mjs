@@ -47,19 +47,22 @@ export const needsClamp = (offset, count, total) => offset > 0 && count === 0 &&
 // Action names the server writes (the action filter matches exactly). The page adds the
 // actions it has seen on the loaded page.
 export const KNOWN_ACTIONS = [
-  'access_denied', 'audit_exported', 'audit_purge_failed', 'audit_purged', 'audit_viewed',
-  'backup_created', 'backup_deleted', 'db_import_applied', 'db_import_prepared', 'download_started',
-  'file_decrypt_failed', 'invite_accepted', 'invite_created', 'invite_revoked', 'ip_banned', 'ip_unbanned',
-  'key_fingerprint_changed', 'login_failed', 'login_lockout', 'login_ok', 'logout', 'mfa_enrolled',
-  'mfa_failed', 'mfa_login_ok', 'mfa_policy_changed', 'mfa_removed', 'mfa_reset', 'mfa_reset_confirmed',
-  'mfa_reset_requested', 'password_changed', 'password_expired', 'password_expiry_warning_sent', 'password_reset',
-  'password_rotation_exempt_changed', 'provider_created', 'provider_deleted',
-  'provider_updated', 'session_reuse_detected', 'settings_changed', 'share_created', 'share_deleted',
-  'share_edited', 'share_expired_manual', 'share_expiry_changed', 'share_extended', 'share_file_removed',
-  'share_files_added', 'share_limit_changed', 'share_preview', 'system_start', 'system_stop',
-  'ui_language_deleted', 'ui_language_imported', 'user_created', 'user_deleted', 'user_email_changed',
-  'user_force_reset', 'user_password_reset_sent', 'user_role_changed', 'user_unlocked', 'user_updated',
-  'user_welcome',
+  'access_denied', 'audit_exported', 'audit_purge_failed', 'audit_purged', 'audit_viewed', 'backup_created',
+  'backup_deleted', 'backup_remote_copied', 'backup_remote_failed', 'backup_remote_pruned',
+  'db_import_applied', 'db_import_prepared', 'download_started', 'file_decrypt_failed', 'invite_accepted',
+  'invite_created', 'invite_revoked', 'ip_banned', 'ip_unbanned', 'key_fingerprint_changed', 'login_failed',
+  'login_lockout', 'login_ok', 'logout', 'mfa_enrolled', 'mfa_failed', 'mfa_login_ok', 'mfa_policy_changed',
+  'mfa_removed', 'mfa_reset', 'mfa_reset_confirmed', 'mfa_reset_requested', 'password_changed',
+  'password_expired', 'password_expiry_warning_sent', 'password_reset', 'password_rotation_exempt_changed',
+  'provider_created', 'provider_deleted', 'provider_updated', 'session_reuse_detected', 'settings_changed',
+  'share_created', 'share_deleted', 'share_edited', 'share_expired_manual', 'share_expiry_changed',
+  'share_extended', 'share_file_removed', 'share_files_added', 'share_limit_changed', 'share_preview',
+  'storage_backend_changed', 'storage_connection_test_failed', 'storage_connection_tested',
+  'storage_migration_cancel_requested', 'storage_migration_cancelled', 'storage_migration_failed',
+  'storage_migration_finished', 'storage_migration_requested', 'storage_migration_started', 'system_start',
+  'system_stop', 'ui_language_deleted', 'ui_language_imported', 'user_created', 'user_deleted',
+  'user_email_changed', 'user_force_reset', 'user_password_reset_sent', 'user_role_changed', 'user_unlocked',
+  'user_updated', 'user_welcome',
 ]
 export function actionSuggestions(records = [], known = KNOWN_ACTIONS) {
   const set = new Set(known)

@@ -1,5 +1,7 @@
-// sendora-db performs explicit offline exports. It never replaces a live DB.
-package main
+// Package dbcli is the offline database tool, "sendora db ..." (also started
+// as "sendora-db ..." through a link named sendora-db to the sendora binary).
+// It performs explicit offline exports and checks; it never replaces a live DB.
+package dbcli
 
 import (
 	"bufio"
@@ -17,19 +19,30 @@ import (
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|verify-files|audit-verify|mfa-reset [flags]")
+		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|verify-files|audit-verify|mfa-reset|tenant-import|storage-migrate|platform-admin-reset [flags]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	source := flags.String("source", "", "database source path; stop the app before offline operations")
 	destination := flags.String("destination", "", "new output path (must not exist)")
 	keyFile := flags.String("key-file", os.Getenv("SENDORA_DB_KEY_FILE"), "external 32-byte key file")
 	plaintext := flags.Bool("plaintext", false, "explicit legacy plaintext verification")
-	user := flags.String("user", "", "username for mfa-reset")
+	user := flags.String("user", "", "username for mfa-reset and platform-admin-reset")
+	resetMFA := flags.Bool("mfa", false, "platform-admin-reset: remove the administrator's authenticator")
+	resetPassword := flags.Bool("password", false, "platform-admin-reset: set a temporary password that must be changed at the next sign-in")
 	dataDir := flags.String("data-dir", "", "data directory holding shares/ (verify-files; default: directory of -source)")
 	asJSON := flags.Bool("json", false, "verify-files and audit-verify: machine-readable output")
 	names := flags.Bool("names", false, "verify-files: also print share and file names (sensitive)")
 	all := flags.Bool("all", false, "verify-files: list every row, not only problems")
 	progress := flags.Bool("progress", false, "verify-files: report progress on stderr (default: only when stderr is a terminal)")
+	slug := flags.String("slug", "", "tenant-import: subdomain of the new tenant")
+	name := flags.String("name", "", "tenant-import: display name of the new tenant (default: the subdomain)")
+	sourceKeyFile := flags.String("source-key-file", "", "tenant-import: key of the single-tenant database when it differs from -key-file (the master key)")
+	from := flags.String("from", "", "tenant-import: copy the single-tenant DATA_DIR at this path into -data-dir (another host; the source is only read)")
+	customDomain := flags.String("custom-domain", "", "tenant-import: the old host name, added as a verified custom domain of the new tenant (existing links keep working)")
+	abort := flags.Bool("abort", false, "tenant-import: undo an unfinished conversion")
+	tenant := flags.String("tenant", "", "multi-tenant: operate on this tenant's database (the key is derived from -key-file, the master key)")
+	legacyRoot := flags.Bool("legacy-root", false, "multi-tenant: the tenant was imported from a single-tenant installation; its files and audit chain use the master key (verify-files, audit-verify)")
+	dryRun := flags.Bool("dry-run", false, "storage-migrate: only report how many files would be copied")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -63,6 +76,12 @@ func run(args []string) error {
 		fmt.Println("Key created. Keep a separate protected recovery copy; losing the key makes the database unrecoverable.")
 		return nil
 	}
+	if args[0] == "tenant-import" {
+		return tenantImport(*dataDir, *keyFile, *sourceKeyFile, *slug, *name, *abort, *from, *customDomain)
+	}
+	if args[0] == "platform-admin-reset" {
+		return platformAdminReset(*dataDir, *keyFile, *user, *resetMFA, *resetPassword)
+	}
 	if *source == "" {
 		return errors.New("source is required")
 	}
@@ -82,6 +101,30 @@ func run(args []string) error {
 		key, err = store.ReadDatabaseKey(*keyFile)
 		if err != nil {
 			return err
+		}
+	}
+	// root: what the file and audit keys derive from (= the database key, except
+	// for a tenant imported from a single-tenant installation).
+	root := key
+	var master []byte
+	if *tenant != "" {
+		master = key
+		var err error
+		if key, err = store.TenantDBKey(master, *tenant); err != nil {
+			return err
+		}
+		root = key
+		if *legacyRoot {
+			root = master
+			// A tenant copied from another installation (tenant-import -from)
+			// keeps that installation's key as its root: pass it as -source-key-file.
+			if *sourceKeyFile != "" {
+				old, err := store.ReadDatabaseKey(*sourceKeyFile)
+				if err != nil {
+					return fmt.Errorf("source key: %w", err)
+				}
+				root = old
+			}
 		}
 	}
 	switch args[0] {
@@ -109,12 +152,18 @@ func run(args []string) error {
 			return err
 		}
 		fmt.Println("All multi-factor factors and sessions of the user were removed. Stop the application before running this offline step.")
+	case "storage-migrate":
+		dir := *dataDir
+		if dir == "" {
+			dir = filepath.Dir(*source)
+		}
+		return storageMigrate(*source, dir, key, *dryRun, tenantContext{id: *tenant, master: master, root: root})
 	case "verify-files":
 		dir := *dataDir
 		if dir == "" {
 			dir = filepath.Dir(*source)
 		}
-		return verifyFiles(*source, dir, key, verifyFlags{json: *asJSON, names: *names, all: *all, progress: *progress})
+		return verifyFiles(*source, dir, key, verifyFlags{json: *asJSON, names: *names, all: *all, progress: *progress, root: root})
 	case "verify":
 		counts, err := store.VerifyDatabase(*source, key)
 		if err != nil {
@@ -122,7 +171,7 @@ func run(args []string) error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(counts)
 	case "audit-verify":
-		st, err := store.VerifyAuditDatabase(*source, key)
+		st, err := store.VerifyAuditDatabaseRoot(*source, key, root)
 		if err != nil {
 			return err
 		}
@@ -157,7 +206,10 @@ var (
 // progressEvery is how many files verify-files checks between progress lines.
 var progressEvery = 1000
 
-type verifyFlags struct{ json, names, all, progress bool }
+type verifyFlags struct {
+	json, names, all, progress bool
+	root                       []byte
+}
 
 // verifyFiles streams the verify-files report: by default only rows with a
 // problem and orphans, with -all every row, then a summary. With -json the
@@ -179,7 +231,7 @@ func verifyFiles(source, dataDir string, key []byte, f verifyFlags) error {
 			_, writeErr = fmt.Fprintln(out, line)
 		}
 	}
-	opt := store.VerifyOptions{Names: f.names}
+	opt := store.VerifyOptions{Names: f.names, Root: f.root}
 	opt.File = func(c store.FileCheck) {
 		if !f.all && !c.Problem() {
 			return
@@ -247,9 +299,12 @@ func verifyFiles(source, dataDir string, key []byte, f verifyFlags) error {
 	return nil
 }
 
-func main() {
-	if err := run(os.Args[1:]); err != nil {
+// Main runs one sendora-db command (args without the program name) and
+// returns the process exit code.
+func Main(args []string) int {
+	if err := run(args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

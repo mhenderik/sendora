@@ -258,6 +258,7 @@ func (s *Server) eraseAccount(w http.ResponseWriter, id int64) bool {
 		jerr(w, 500, "erasure failed")
 		return false
 	}
+	s.kickDeletes() // remote objects of the erased shares (queued by the delete)
 	for _, dir := range dirs {
 		if err := os.RemoveAll(dir); err != nil {
 			jerr(w, 500, "account erased but file cleanup failed")

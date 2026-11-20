@@ -30,6 +30,8 @@ type env struct {
 	s   *Server
 	ts  *httptest.Server
 	jar map[string]string
+	// host, when set, is sent as the Host header (multi-tenant tests).
+	host string
 }
 
 func init() {
@@ -86,6 +88,9 @@ func (e *env) do(method, path, token string, body any, hdr ...string) resp {
 		rd = bytes.NewReader(j)
 	}
 	req, _ := http.NewRequest(method, e.ts.URL+path, rd)
+	if e.host != "" {
+		req.Host = e.host
+	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

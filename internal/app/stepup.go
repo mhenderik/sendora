@@ -149,7 +149,7 @@ func (s *Server) accountSecurityBootstrap(out map[string]any) {
 
 // securitySettingKey reports the settings whose change needs a step-up.
 func securitySettingKey(k string) bool {
-	for _, p := range []string{"mfa_", "audit_", "ip_ban_", "account_password_", "admin_"} {
+	for _, p := range []string{"mfa_", "audit_", "ip_ban_", "account_password_", "admin_", "storage_", "backup_remote_"} {
 		if strings.HasPrefix(k, p) {
 			return true
 		}

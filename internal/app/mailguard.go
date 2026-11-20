@@ -49,8 +49,14 @@ func (s *Server) queueMail(to, subject, key string, data map[string]any) {
 	s.mailOnce.Do(func() {
 		for i := 0; i < 4; i++ {
 			go func() {
-				for job := range s.mailQueue {
-					s.sendTemplate(job.to, job.subject, job.key, job.data)
+				stop := s.mailStopped() // nil (never) except for a tenant's server
+				for {
+					select {
+					case job := <-s.mailQueue:
+						s.sendTemplate(job.to, job.subject, job.key, job.data)
+					case <-stop:
+						return
+					}
 				}
 			}()
 		}

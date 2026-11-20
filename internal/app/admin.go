@@ -18,12 +18,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mhenderik/sendora/internal/storage"
 	"github.com/mhenderik/sendora/internal/store"
 )
 
 // ---------- settings ----------
 
-var secretKeys = map[string]bool{"smtp_pass": true}
+var secretKeys = map[string]bool{"smtp_pass": true,
+	"storage_s3_secret_key": true, "storage_azure_account_key": true, "storage_azure_sas_token": true, "storage_gcs_credentials_json": true}
 
 const msgSMTPPasswordAgain = "enter the SMTP password again when changing the server, port, user or security"
 
@@ -57,6 +59,12 @@ func (s *Server) normalizeSetting(k, str string) (string, error) {
 		if _, err := store.ParseQuotaBytes(str); err != nil {
 			return "", fmt.Errorf("invalid default storage quota")
 		}
+	}
+	if norm, owned, err := storage.NormalizeSetting(k, str); owned {
+		if err != nil {
+			return "", err
+		}
+		return norm, nil
 	}
 	if owned, err := validateShareSetting(k, str); owned && err != nil {
 		return "", err
@@ -229,6 +237,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if !s.guardSettingsUpdate(w, r, updates) { // step-up, admin network list, terms (stepup.go)
 		return
 	}
+	if !s.validateStorageUpdate(w, r, updates) { // complete and reachable (storage.go)
+		return
+	}
+	if !s.validateTargetUpdates(w, r, updates) { // multi-tenant SSRF guard (mt_tenant.go)
+		return
+	}
 	olds := make(map[string]string, len(updates))
 	for k := range updates {
 		olds[k] = s.St.Setting(k)
@@ -260,6 +274,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if np, ok := updates["mfa_policy"]; ok {
 		s.logEvent(me.ID, me.Username, "mfa_policy_changed", "settings", "policy="+np)
+	}
+	if v, ok := updates["storage_backend"]; ok && v != olds["storage_backend"] {
+		s.logEvent(me.ID, me.Username, "storage_backend_changed", "settings", auditValue(olds["storage_backend"])+" -> "+auditValue(v)+" ("+s.storageFromSettings().Describe()+")")
 	}
 	jout(w, 200, map[string]any{"ok": true})
 }
@@ -403,9 +420,14 @@ func (s *Server) uploadBranding(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.clearBranding(kind)
 	name := kind + ext
-	os.WriteFile(filepath.Join(s.St.DataDir, "branding", name), data, 0o600)
+	p, err := localJoin(filepath.Join(s.St.DataDir, "branding"), name)
+	if err != nil {
+		jerr(w, 400, "invalid branding name")
+		return
+	}
+	s.clearBranding(kind)
+	os.WriteFile(p, data, 0o600)
 	s.St.DB.Exec(`UPDATE settings SET value=? WHERE key=?`, name, "ui_"+kind)
 	jout(w, 200, map[string]any{"ok": true})
 }
@@ -427,7 +449,14 @@ func (s *Server) deleteBranding(w http.ResponseWriter, r *http.Request) {
 	jout(w, 200, map[string]any{"ok": true})
 }
 
-func serveImage(w http.ResponseWriter, r *http.Request, p string) {
+// serveImage serves the image name (a single file name) from the trusted
+// directory dir.
+func serveImage(w http.ResponseWriter, r *http.Request, dir, name string) {
+	p, err := localJoin(dir, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
 	ext := strings.ToLower(filepath.Ext(p))
 	ct, ok := imgMime[ext]
 	f, err := os.Open(p)
@@ -455,7 +484,7 @@ func (s *Server) serveBranding(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	serveImage(w, r, filepath.Join(s.St.DataDir, "branding", filepath.Base(name)))
+	serveImage(w, r, filepath.Join(s.St.DataDir, "branding"), filepath.Base(name))
 }
 
 func (s *Server) listBackgrounds(w http.ResponseWriter, r *http.Request) {
@@ -480,11 +509,14 @@ func (s *Server) uploadBackground(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveBackground(w http.ResponseWriter, r *http.Request) {
-	serveImage(w, r, filepath.Join(s.St.DataDir, "backgrounds", filepath.Base(chi.URLParam(r, "file"))))
+	serveImage(w, r, filepath.Join(s.St.DataDir, "backgrounds"), filepath.Base(chi.URLParam(r, "file")))
 }
 
 func (s *Server) deleteBackground(w http.ResponseWriter, r *http.Request) {
-	os.Remove(filepath.Join(s.St.DataDir, "backgrounds", filepath.Base(chi.URLParam(r, "file"))))
+	// Unsafe names cannot exist in the folder; answer as before without touching disk.
+	if p, err := localJoin(filepath.Join(s.St.DataDir, "backgrounds"), filepath.Base(chi.URLParam(r, "file"))); err == nil {
+		os.Remove(p)
+	}
 	jout(w, 200, map[string]any{"ok": true})
 }
 

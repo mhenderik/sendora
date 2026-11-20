@@ -59,6 +59,8 @@ function dismissExpiry() {
 }
 // Re-checked when a required password change is completed (same account, flag cleared)
 // and after any password change (password_changed_at moves on).
+// Multi-tenant mode: the organisation has no storage yet (administrators see a banner).
+const storageMissing = ref(false)
 watch(() => [session.user?.id, !!session.user?.must_change_password, session.user?.password_changed_at], async ([id]) => {
   app.version = ''
   mfaPrompt.value = false
@@ -68,6 +70,7 @@ watch(() => [session.user?.id, !!session.user?.must_change_password, session.use
     const d = await api('/users/me')
     if (session.user?.id !== id) return
     app.version = d.version || ''
+    storageMissing.value = d.storage_ready === false
     termsState.pending = !!d.terms_pending
     mfaPrompt.value = shouldPromptMFA({ user: d.user, hasPassword: d.has_password, boot: app.boot, dismissed: mfaDismissed(id) })
     if (shouldShowExpiryBanner({ days: d.password_expires_in_days, mustChange: !!d.user?.must_change_password, dismissedDay: expiryDismissedDay(id) })) {
@@ -183,6 +186,10 @@ watch(() => [app.boot?.idle_logout_minutes, app.boot?.admin_idle_logout_minutes]
     <StepUpDialog />
     <TermsDialog v-if="session.user && !session.user.is_guest" />
     <main><p v-if="languageError" class="err" role="alert">{{ languageError }}</p>
+      <div v-if="storageMissing && session.user?.admin" class="card notice storage-missing" role="alert">
+        <strong>{{ t('Storage is not set up yet.') }}</strong> {{ t('Set up storage first under Admin → Storage. Until then, files cannot be uploaded or shared.') }}
+        <router-link to="/admin/storage">{{ t('Set up storage') }}</router-link>
+      </div>
       <div v-if="pwExpiry && session.user" class="card pw-expiry" role="status">
         <span>{{ pwExpiry.days > 0 ? t('Your password expires in {n} days.', { n: pwExpiry.days }) : t('Your password expires today.') }}</span>
         <router-link to="/profile" @click="dismissExpiry">{{ t('Change password') }}</router-link>

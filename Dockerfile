@@ -46,26 +46,25 @@ RUN /tmp/sqlcipher-source/configure --disable-tcl --with-tempstore=yes \
 
 FROM sqlcipher AS build
 WORKDIR /src
-ARG VERSION=0.1.5
+ARG VERSION=0.2.0
 COPY go.mod go.sum ./
 # go.mod replaces mattn/go-sqlite3 with this SQLCipher linkage fork.
 COPY third_party/ ./third_party/
 RUN go mod download
 COPY . .
 COPY --from=web /web/dist ./web/dist
-RUN CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /sendora . \
-    && CGO_ENABLED=1 go build -trimpath -ldflags "-s -w" -o /sendora-db ./cmd/sendora-db
-# The engine is exactly 4.20.0 and both programs link it, not a system SQLite.
+# One binary: the offline database tool is "sendora db ..." and, through the
+# sendora-db link installed below, "sendora-db ...".
+RUN CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /sendora .
+# The engine is exactly 4.20.0 and the program links it, not a system SQLite.
 # (The runtime image has no sqlcipher shell; Sendora checks the version again
 # at every start and logs it.)
 RUN sqlcipher :memory: 'PRAGMA cipher_version;' | grep '^4\.20\.0 ' \
-    && for bin in /sendora /sendora-db; do \
-         ldd "$bin" | grep -q 'libsqlcipher\.so\.0 => /usr/local/lib/libsqlcipher\.so\.0' \
-         && ! ldd "$bin" | grep -q 'libsqlite3' || exit 1; \
-       done
+    && ldd /sendora | grep -q 'libsqlcipher\.so\.0 => /usr/local/lib/libsqlcipher\.so\.0' \
+    && ! ldd /sendora | grep -q 'libsqlite3'
 
 FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
-ARG VERSION=0.1.5
+ARG VERSION=0.2.0
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="Sendora" \
       org.opencontainers.image.description="Self-hosted file sharing with an encrypted SQLCipher database" \
@@ -76,10 +75,13 @@ LABEL org.opencontainers.image.title="Sendora" \
       org.opencontainers.image.revision="${REVISION}"
 # libssl3t64 is trixie's name for the OpenSSL 3 runtime library (libcrypto).
 # No setuid/setgid programs: nothing in the container can gain privileges.
+# sendora-db is a link to /sendora (the same program started under another
+# name), so "docker exec <container> sendora-db ..." keeps working.
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata libssl3t64 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 app && useradd --uid 10001 --gid 10001 --no-create-home app \
     && mkdir /data && chown app:app /data \
+    && ln -s /sendora /usr/local/bin/sendora-db && ln -s /sendora /sendora-db \
     && find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
     && test -z "$(find / -xdev -type f -perm /6000)"
 COPY --from=sqlcipher /usr/local/lib/libsqlcipher.so* /usr/local/lib/
@@ -94,5 +96,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD ["/sendora", "healthcheck"]
 COPY LICENSE /usr/share/licenses/sendora/LICENSE
 COPY --from=build /sendora /sendora
-COPY --from=build /sendora-db /usr/local/bin/sendora-db
 ENTRYPOINT ["/sendora"]

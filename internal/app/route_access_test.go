@@ -234,6 +234,14 @@ var routeTable = []routeSpec{
 	rs("DELETE /api/backups/{name}", polAdmin).withSoft("fixture has no such backup", 404),
 	rs("POST /api/backups/import", polAdmin),
 	rs("POST /api/backups/import/apply", polAdmin),
+	rs("GET /api/storage", polAdmin),
+	rs("POST /api/storage/test", polAdmin),
+	rs("POST /api/storage/migrate", polAdmin).withSoft("every file is already in the current location", 409),
+	rs("POST /api/storage/migrate/cancel", polAdmin).withSoft("no migration is running", 409),
+	rs("GET /api/multitenant", polAdmin),
+	rs("POST /api/multitenant", polAdmin).withSoft("fixture sends no conversion request", 400),
+	rs("DELETE /api/multitenant", polAdmin),
+	rs("POST /api/multitenant/restart", polAdmin).withSoft("no conversion is scheduled", 409),
 }
 
 // allows reports whether the principal is meant to get past the access checks.

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mhenderik/sendora/internal/netguard"
 	"golang.org/x/oauth2"
 )
 
@@ -66,8 +67,11 @@ func providerDialControl(network, address string, _ syscall.RawConn) error {
 	return nil
 }
 
-func newProviderHTTPClient() *http.Client {
-	dialer := &net.Dialer{Timeout: oidcHTTPTimeout, Control: providerDialControl}
+func newProviderHTTPClient() *http.Client { return newProviderHTTPClientControl(providerDialControl) }
+
+// newProviderHTTPClientControl builds the provider client with a dial check.
+func newProviderHTTPClientControl(control func(network, address string, c syscall.RawConn) error) *http.Client {
+	dialer := &net.Dialer{Timeout: oidcHTTPTimeout, Control: control}
 	// No proxy: the guard must see the real destination, not a proxy's address.
 	tr := &http.Transport{
 		DialContext:           dialer.DialContext,
@@ -89,6 +93,22 @@ func newProviderHTTPClient() *http.Client {
 }
 
 var providerClient = sync.OnceValue(newProviderHTTPClient)
+
+// providerClientStrict is the client for providers a tenant's administrator
+// configured in multi-tenant mode: private networks are refused as well
+// (internal/netguard).
+var providerClientStrict = sync.OnceValue(func() *http.Client { return newProviderHTTPClientControl(netguard.Control) })
+
+// providerContextFor is providerContext with the client the provider needs:
+// the strict one for a provider a guarded tenant's administrator configured,
+// the standard one otherwise (single-tenant mode, providers from the server
+// configuration).
+func (s *Server) providerContextFor(parent context.Context, p *Provider) (context.Context, context.CancelFunc) {
+	if s.guardTargets() && !p.Managed && parent.Value(oauth2.HTTPClient) == nil {
+		parent = context.WithValue(parent, oauth2.HTTPClient, providerClientStrict())
+	}
+	return providerContext(parent)
+}
 
 // providerContext bounds an OIDC flow and routes its discovery, key and token
 // requests through the guarded client (go-oidc and oauth2 both read the client

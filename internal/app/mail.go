@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"github.com/mhenderik/sendora/internal/netguard"
 	"github.com/mhenderik/sendora/internal/store"
 	"io"
 	"log"
@@ -27,34 +28,62 @@ func cleanHeader(s string) string {
 	return strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
 }
 
+// parseMailAddress parses one RFC 5322 address and rejects any CR, LF or NUL
+// in the input or the parsed result, so neither can reach a header or an SMTP
+// command.
+func parseMailAddress(s string) (*mail.Address, error) {
+	if strings.ContainsAny(s, "\r\n\x00") {
+		return nil, fmt.Errorf("invalid address")
+	}
+	a, err := mail.ParseAddress(s)
+	if err != nil {
+		return nil, err
+	}
+	if strings.ContainsAny(a.Address, "\r\n\x00") || strings.ContainsAny(a.Name, "\r\n\x00") {
+		return nil, fmt.Errorf("invalid address")
+	}
+	return a, nil
+}
+
+// headerAddress renders an address for a header line: names are RFC 2047
+// encoded by mail.Address.String, and any CR/LF is removed as a last guard.
+func headerAddress(a *mail.Address) string {
+	return cleanHeader(a.String())
+}
+
 func (s *Server) sendMail(to, subject, body string) error {
 	if err := s.smtpConfigured(); err != nil {
 		return err
 	}
-	host := s.St.Setting("smtp_host")
+	host := s.smtpSetting("smtp_host")
 	if host == "" {
 		return fmt.Errorf("smtp not configured")
 	}
-	addr, err := mail.ParseAddress(to)
+	addr, err := parseMailAddress(to)
 	if err != nil {
 		return fmt.Errorf("bad recipient")
 	}
-	port := s.St.Setting("smtp_port")
-	user, pass := s.St.Setting("smtp_user"), s.St.Setting("smtp_pass")
-	from := s.St.Setting("smtp_from")
+	port := s.smtpSetting("smtp_port")
+	user, pass := s.smtpSetting("smtp_user"), s.smtpSetting("smtp_pass")
+	from := s.smtpSetting("smtp_from")
 	if from == "" {
 		from = user
 	}
-	fa, err := mail.ParseAddress(from)
+	fa, err := parseMailAddress(from)
 	if err != nil {
 		return fmt.Errorf("bad from address")
 	}
 	msg := mailMessageReplyTo(fa, addr, s.replyToAddress(), subject, body)
 	hp := net.JoinHostPort(host, port)
-	mode := s.St.Setting("smtp_tls")
+	mode := s.smtpSetting("smtp_tls")
 
 	var c *smtp.Client
 	dialer := &net.Dialer{Timeout: 15 * time.Second}
+	// A tenant's own SMTP server (not the platform default) must not be on the
+	// platform's network (multi-tenant SSRF guard, checked after DNS).
+	if s.guardTargets() && strings.TrimSpace(s.St.Setting("smtp_host")) != "" {
+		dialer.Control = netguard.Control
+	}
 	cfg := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
 	if mode == "tls" {
 		conn, err := tls.DialWithDialer(dialer, "tcp", hp, cfg)
@@ -101,6 +130,11 @@ func (s *Server) sendMail(to, subject, body string) error {
 	if err != nil {
 		return err
 	}
+	// Every header value in msg is CR/LF-free and every address was validated by
+	// parseMailAddress (see mailMessageReplyTo). A remaining CodeQL
+	// go/email-injection finding here is inherent: the recipient and the body
+	// text (share message, names) are user-supplied by design; the body is
+	// quoted-printable encoded after the header block and cannot add headers.
 	if _, err := wc.Write([]byte(msg)); err != nil {
 		return err
 	}
@@ -134,11 +168,11 @@ func mailMessage(from, to *mail.Address, subject, body string) string {
 
 // replyToAddress is the optional Reply-To of all outgoing mail (nil when unset or invalid).
 func (s *Server) replyToAddress() *mail.Address {
-	v := strings.TrimSpace(s.St.Setting("smtp_reply_to"))
+	v := strings.TrimSpace(s.smtpSetting("smtp_reply_to"))
 	if v == "" {
 		return nil
 	}
-	a, err := mail.ParseAddress(v)
+	a, err := parseMailAddress(v)
 	if err != nil {
 		return nil
 	}
@@ -189,29 +223,32 @@ func mailMessageReplyTo(from, to, replyTo *mail.Address, subject, body string) s
 	if at := strings.LastIndexByte(from.Address, '@'); at >= 0 && at+1 < len(from.Address) {
 		domain = from.Address[at+1:]
 	}
+	// Every header value is made CR/LF-free here, whatever the callers checked:
+	// addresses via headerAddress, the subject is cleaned and RFC 2047 encoded.
+	domain = strings.NewReplacer("\r", "", "\n", "", " ", "", "<", "", ">", "").Replace(domain)
 	replyHeader := ""
 	if replyTo != nil {
-		replyHeader = "Reply-To: " + replyTo.String() + "\r\n"
+		replyHeader = "Reply-To: " + headerAddress(replyTo) + "\r\n"
 	}
-	return fmt.Sprintf("From: %s\r\n%sTo: %s\r\nSubject: %s\r\nDate: %s\r\nMessage-ID: <%s@%s>\r\nAuto-Submitted: auto-generated\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n%s", from.String(), replyHeader, to.String(), mime.QEncoding.Encode("UTF-8", cleanHeader(subject)), time.Now().Format(time.RFC1123Z), randHex(16), domain, encoded.String())
+	return fmt.Sprintf("From: %s\r\n%sTo: %s\r\nSubject: %s\r\nDate: %s\r\nMessage-ID: <%s@%s>\r\nAuto-Submitted: auto-generated\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n%s", headerAddress(from), replyHeader, headerAddress(to), mime.QEncoding.Encode("UTF-8", cleanHeader(subject)), time.Now().Format(time.RFC1123Z), randHex(16), domain, encoded.String())
 }
 
 func (s *Server) smtpConfigured() error {
-	if strings.TrimSpace(s.St.Setting("smtp_host")) == "" {
+	if strings.TrimSpace(s.smtpSetting("smtp_host")) == "" {
 		return fmt.Errorf("smtp not configured")
 	}
-	port, err := strconv.Atoi(s.St.Setting("smtp_port"))
+	port, err := strconv.Atoi(s.smtpSetting("smtp_port"))
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("invalid SMTP port")
 	}
-	from := s.St.Setting("smtp_from")
+	from := s.smtpSetting("smtp_from")
 	if from == "" {
-		from = s.St.Setting("smtp_user")
+		from = s.smtpSetting("smtp_user")
 	}
 	if _, err := mail.ParseAddress(from); err != nil {
 		return fmt.Errorf("invalid SMTP sender")
 	}
-	mode := s.St.Setting("smtp_tls")
+	mode := s.smtpSetting("smtp_tls")
 	if mode != "none" && mode != "tls" && mode != "starttls" {
 		return fmt.Errorf("invalid SMTP TLS mode")
 	}

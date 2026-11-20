@@ -166,6 +166,12 @@ var (
 // comparison of the rest happens here. Any failure answers false (fail open)
 // with a logged warning: an unreachable service must not block a password change.
 func (s *Server) passwordBreached(ctx context.Context, pw string) bool {
+	// SHA-1 is mandated by the HIBP k-anonymity range API (it indexes breached
+	// passwords by SHA-1); no other algorithm can be queried. This digest is
+	// never stored or used for authentication: password storage uses bcrypt.
+	// Only the first 5 hex characters (20 bits) leave the server, and the
+	// remaining suffix is compared locally against the padded response.
+	// (Intentional; see CodeQL go/weak-sensitive-data-hashing.)
 	sum := sha1.Sum([]byte(pw))
 	hash := strings.ToUpper(hex.EncodeToString(sum[:]))
 	prefix, rest := hash[:5], hash[5:]

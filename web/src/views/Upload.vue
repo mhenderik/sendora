@@ -25,9 +25,15 @@ const doneByPath = computed(() => {
 })
 const doneOf = item => doneByPath.value[item.entry.path] || 0
 const available = ref(null)
+// Multi-tenant mode: an organisation without storage cannot accept uploads yet.
+const storageReady = ref(true)
 onMounted(async () => {
   if (guest.value) return
-  try { available.value = (await api('/users/me')).storage_available_bytes ?? null } catch {}
+  try {
+    const me = await api('/users/me')
+    available.value = me.storage_available_bytes ?? null
+    storageReady.value = me.storage_ready !== false
+  } catch {}
 })
 const overQuota = computed(() => available.value != null && total.value > available.value)
 const overMax = computed(() => !!maxMB.value && total.value > maxMB.value * 1024 * 1024)
@@ -85,7 +91,12 @@ function again() { result.value = null; form.value.name = form.value.description
 </script>
 
 <template>
-  <div v-if="result" class="card">
+  <div v-if="!storageReady" class="card" role="status">
+    <h1>{{ t('Upload') }}</h1>
+    <p class="notice">{{ session.user?.admin ? t('Set up storage first under Admin → Storage. Until then, files cannot be uploaded or shared.') : t('Uploading is not available yet: your organisation has not set up storage. Please ask an administrator.') }}</p>
+    <div v-if="session.user?.admin" class="actions"><router-link class="button" to="/admin/storage">{{ t('Set up storage') }}</router-link></div>
+  </div>
+  <div v-else-if="result" class="card">
     <h1>{{ t('Share created') }}</h1>
     <input v-if="!guest" :value="result.url" readonly @focus="$event.target.select()" />
     <QrCode v-if="!guest" :value="result.url" />

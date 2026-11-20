@@ -76,7 +76,7 @@ docker run -d --name sendora -p 127.0.0.1:8080:8080 \
   -e SENDORA_DB_KEY_FILE=/run/secrets/database.key \
   -e SENDORA_DB_INITIALIZE=true \
   -e APP_URL=http://localhost:8080 \
-  ghcr.io/mhenderik/sendora:0.1.5
+  ghcr.io/mhenderik/sendora:0.2.0
 ```
 
 ### Windows (PowerShell)
@@ -90,7 +90,7 @@ docker run -d --name sendora -p 127.0.0.1:8080:8080 `
   -e SENDORA_DB_KEY_FILE=/run/secrets/database.key `
   -e SENDORA_DB_INITIALIZE=true `
   -e APP_URL=http://localhost:8080 `
-  ghcr.io/mhenderik/sendora:0.1.5
+  ghcr.io/mhenderik/sendora:0.2.0
 docker logs sendora | Select-String "setup code"
 ```
 
@@ -113,7 +113,7 @@ docker run -d --name sendora --restart unless-stopped -p 127.0.0.1:8080:8080 \
   -v "$PWD/database.key:/run/secrets/database.key:ro" \
   -e SENDORA_DB_KEY_FILE=/run/secrets/database.key \
   -e APP_URL=http://localhost:8080 \
-  ghcr.io/mhenderik/sendora:0.1.5
+  ghcr.io/mhenderik/sendora:0.2.0
 ```
 
 Windows (PowerShell):
@@ -125,7 +125,7 @@ docker run -d --name sendora --restart unless-stopped -p 127.0.0.1:8080:8080 `
   -v sendora-key:/run/secrets:ro `
   -e SENDORA_DB_KEY_FILE=/run/secrets/database.key `
   -e APP_URL=http://localhost:8080 `
-  ghcr.io/mhenderik/sendora:0.1.5
+  ghcr.io/mhenderik/sendora:0.2.0
 ```
 
 Any admin setting can be added as `-e SENDORA_<SETTING>=value` (see [Configuration](configuration.md#settings-from-a-configmap-or-environment-variables)). To stop: `docker rm -f sendora`; your data stays in `data/` (on Windows: in the `sendora-data` volume).

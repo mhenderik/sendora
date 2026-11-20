@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
@@ -39,6 +40,9 @@ type FileInfo struct {
 	diskPath  string
 	enc       bool
 	encID     string // hex file id (format v2); empty for plain and v1 files
+	storageID int64  // storage location (0 = local data directory)
+	objectKey string // key in a remote location
+	longID    string
 }
 
 type Share struct {
@@ -100,7 +104,7 @@ func (s *Server) shareByID(id int64) (*Share, error) {
 }
 
 func (s *Server) shareFiles(shareID int64) []FileInfo {
-	rows, err := s.St.DB.Query(`SELECT f.id,f.name,f.full_path,f.size,f.type,f.disk_path,f.sha256,f.integrity,f.enc,f.enc_id,s.long_id FROM files f JOIN shares s ON s.id=f.share_id WHERE f.share_id=? ORDER BY f.full_path,f.id`, shareID)
+	rows, err := s.St.DB.Query(`SELECT f.id,f.name,f.full_path,f.size,f.type,f.disk_path,f.sha256,f.integrity,f.enc,f.enc_id,s.long_id,f.storage_id,f.object_key FROM files f JOIN shares s ON s.id=f.share_id WHERE f.share_id=? ORDER BY f.full_path,f.id`, shareID)
 	out := []FileInfo{}
 	if err != nil {
 		return out
@@ -109,8 +113,14 @@ func (s *Server) shareFiles(shareID int64) []FileInfo {
 	for rows.Next() {
 		var f FileInfo
 		var lid string
-		if rows.Scan(&f.ID, &f.Name, &f.FullPath, &f.Size, &f.Type, &f.diskPath, &f.SHA256, &f.Integrity, &f.enc, &f.encID, &lid) != nil {
+		if rows.Scan(&f.ID, &f.Name, &f.FullPath, &f.Size, &f.Type, &f.diskPath, &f.SHA256, &f.Integrity, &f.enc, &f.encID, &lid, &f.storageID, &f.objectKey) != nil {
 			return nil
+		}
+		f.longID = lid
+		if f.storageID != store.LocalLocation {
+			f.diskPath = "" // in an object store (openRemoteFile)
+			out = append(out, f)
+			continue
 		}
 		// The recorded directory is never trusted: only the base name is used, under
 		// this server's DataDir/shares/<validated long id>. An unsafe record leaves
@@ -619,8 +629,16 @@ func (s *Server) previewShareFile(w http.ResponseWriter, r *http.Request) {
 			jerr(w, 415, "preview not supported for this file type")
 			return
 		}
-		in, modTime, err := s.openStoredFile(f)
+		in, modTime, err := s.openStoredFile(r.Context(), f)
 		if err != nil {
+			if f.storageID != store.LocalLocation && errors.Is(err, errIntegrity) {
+				integrityError(w, err)
+				return
+			}
+			if !os.IsNotExist(err) && f.storageID != store.LocalLocation {
+				jerr(w, 503, "file storage temporarily unavailable")
+				return
+			}
 			jerr(w, 404, "file missing")
 			return
 		}
@@ -662,7 +680,10 @@ func (s *Server) previewShareFile(w http.ResponseWriter, r *http.Request) {
 
 // openStoredFile opens a share file for reading plaintext: encrypted files are
 // decrypted on the fly and stay seekable, so Range requests keep working.
-func (s *Server) openStoredFile(f FileInfo) (io.ReadSeekCloser, time.Time, error) {
+func (s *Server) openStoredFile(ctx context.Context, f FileInfo) (io.ReadSeekCloser, time.Time, error) {
+	if f.storageID != store.LocalLocation {
+		return s.openRemoteFile(ctx, f)
+	}
 	file, err := openDownloadFile(f.diskPath)
 	if err != nil {
 		return nil, time.Time{}, err
@@ -1291,6 +1312,7 @@ func (s *Server) removeShareIf(id int64, condition string, args ...any) (bool, e
 	for _, sid := range sessions {
 		os.RemoveAll(s.uploadDir(sid))
 	}
+	s.kickDeletes() // remote objects of the share's files (queued by the delete)
 	return n == 1, nil
 }
 

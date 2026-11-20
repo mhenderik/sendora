@@ -8,6 +8,9 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/mhenderik/sendora/internal/platform"
+	"github.com/mhenderik/sendora/internal/storage"
 )
 
 // Server configuration from the environment, typically a Kubernetes ConfigMap
@@ -52,6 +55,9 @@ var serverEnvNames = map[string]bool{
 	"SENDORA_SETUP_CODE": true, "SENDORA_FORCE_LOCAL_LOGIN": true, "SENDORA_DISABLE_IP_BANS": true,
 	"SENDORA_VERIFIED_DOWNLOAD_MAX_BYTES": true, "SENDORA_DISABLE_ADMIN_IP_ALLOWLIST": true,
 	forwardTokenEnv: true, metricsTokenEnv: true,
+	// Multi-tenant mode (mt_host.go); the platform settings add their own names.
+	"SENDORA_MULTI_TENANT": true, "SENDORA_BASE_DOMAIN": true, "SENDORA_PLATFORM_SETUP_CODE": true,
+	"SENDORA_RESTART_MODE": true, "SENDORA_ALLOW_SELF_RESTART": true,
 	// Retired switches of the former optional event log: accepted and ignored.
 	"SENDORA_LOGGING_ENABLED": true, "SENDORA_LOG_RETENTION_HOURS": true,
 }
@@ -62,6 +68,9 @@ var serverEnvNames = map[string]bool{
 func (s *Server) warnConfig(settingKeys []string) {
 	known := map[string]bool{}
 	for k := range serverEnvNames {
+		known[k] = true
+	}
+	for _, k := range platform.SettingEnvNames() {
 		known[k] = true
 	}
 	for _, k := range settingKeys {
@@ -140,6 +149,11 @@ func (s *Server) applyConfig() error {
 	}
 	rows.Close()
 	for _, key := range keys {
+		// Multi-tenant mode: the platform decides where tenants' files go
+		// (SENDORA_PLATFORM_STORAGE_*); SENDORA_STORAGE_* does not apply to tenants.
+		if s.tenant != nil && storage.IsSetting(key) && key != "backup_remote_enabled" {
+			continue
+		}
 		names := append([]string{settingEnvName(key)}, configAliases[key]...)
 		for _, name := range names {
 			v, ok, err := readConfigValue(name)
@@ -177,7 +191,10 @@ func (s *Server) applyConfig() error {
 	if err := s.applyProviderConfig(); err != nil {
 		return err
 	}
-	s.warnConfig(keys)
+	// Every tenant would repeat the same warnings at each lazy open.
+	if s.tenant == nil || tenantConfigWarned.CompareAndSwap(false, true) {
+		s.warnConfig(keys)
+	}
 	return nil
 }
 

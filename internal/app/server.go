@@ -77,6 +77,7 @@ type Server struct {
 	importMaxBytes  int64         // 0 = 4 GiB
 	importTTL       time.Duration // 0 = 15 minutes
 	importStop      func()        // set by main: stop HTTP server and background jobs
+	restartFn       func()        // set by main: stop and exit with ExitRestart (mt_convert.go)
 	importExec      func() error  // re-exec of this process
 	importExit      func(int)
 	importDone      chan struct{}
@@ -98,6 +99,12 @@ type Server struct {
 
 	// rateWindow overrides the one-minute rate-limit window (tests only).
 	rateWindow time.Duration
+
+	// tenant is set when this server serves one tenant in multi-tenant mode
+	// (mt_tenant.go); nil in single-tenant mode.
+	tenant *tenantState
+	// Object storage: current location, deletion queue, migration (storage.go).
+	stor storageState
 }
 
 func lockStripe(locks *[64]sync.Mutex, key string) func() {
@@ -132,7 +139,9 @@ func (s *Server) emailBaseURL(r *http.Request) (string, bool) {
 }
 
 func loopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
+	// *.localhost names resolve to the loopback interface (RFC 6761), which is
+	// how tenants are reached in local multi-tenant testing.
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)
@@ -140,8 +149,25 @@ func loopbackHost(host string) bool {
 }
 
 func New(st *store.Store, static fs.FS, version string) *Server {
-	s := &Server{St: st, Static: static, Version: version, Started: time.Now(), BaseURL: strings.TrimRight(os.Getenv("APP_URL"), "/"), mailSlots: make(chan struct{}, 8), mailQueue: make(chan mailJob, 256), authSlots: make(chan struct{}, 16), oidcSlots: make(chan struct{}, oidcSlotCount), downloadMailWake: make(chan struct{}, 1), importExec: execSelf, importExit: os.Exit, importDone: make(chan struct{})}
-	sec, _ := JWTSecretFromEnv() // validated in main
+	return newServer(st, static, version, nil)
+}
+
+// newServer builds a server; tenant is nil in single-tenant mode. A tenant's
+// server takes its public URL from the platform instead of APP_URL, always
+// keeps its own random signing secret in its own database (never JWT_SECRET,
+// which all tenants would share) and has no first-run setup code (the
+// platform creates its first administrator).
+func newServer(st *store.Store, static fs.FS, version string, tenant *tenantState) *Server {
+	s := &Server{St: st, Static: static, Version: version, Started: time.Now(), BaseURL: strings.TrimRight(os.Getenv("APP_URL"), "/"), mailSlots: make(chan struct{}, 8), mailQueue: make(chan mailJob, 256), authSlots: make(chan struct{}, 16), oidcSlots: make(chan struct{}, oidcSlotCount), downloadMailWake: make(chan struct{}, 1), importExec: execSelf, importExit: os.Exit, importDone: make(chan struct{}), tenant: tenant}
+	sec := ""
+	if tenant != nil {
+		s.BaseURL = strings.TrimRight(tenant.opts.BaseURL, "/")
+		if err := s.initTenantSchema(); err != nil {
+			panic(err)
+		}
+	} else {
+		sec, _ = JWTSecretFromEnv() // validated in main
+	}
 	if sec == "" {
 		sec = st.Setting("jwt_secret")
 		if sec == "" {
@@ -158,13 +184,16 @@ func New(st *store.Store, static fs.FS, version string) *Server {
 	if err := s.applyConfig(); err != nil {
 		panic(fmt.Errorf("configuration: %w", err))
 	}
+	if err := s.initStorage(); err != nil {
+		panic(fmt.Errorf("configuration: %w", err))
+	}
 	s.loadIPBans()
 	// A fresh instance must not be claimed by whoever reaches it first: setup
 	// needs a one-time code that only someone with access to the server log (or
 	// the deployment's environment) has.
 	var users int
 	st.DB.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&users)
-	if users == 0 {
+	if users == 0 && tenant == nil {
 		s.setupCode = strings.ToUpper(strings.TrimSpace(os.Getenv("SENDORA_SETUP_CODE")))
 		if s.setupCode != "" && !validSetupCode(s.setupCode) {
 			log.Printf("SENDORA_SETUP_CODE ignored: it must be at least 16 characters and not a repeated or sequential pattern; using a generated code")
@@ -398,7 +427,18 @@ func (s *Server) Router() http.Handler {
 				r.With(s.stepUp, s.critical("backup_downloaded", "backup", s.backupDownloadInfo)).Get("/backups/{name}", s.downloadBackup)
 				r.With(s.stepUp, s.critical("backup_deleted", "backup")).Delete("/backups/{name}", s.deleteBackup)
 				r.With(s.critical("db_import_prepared", "backup")).Post("/backups/import", s.prepareImport)
+
+				r.Get("/storage", s.storageStatus)
+				r.With(s.stepUp).Post("/storage/test", s.storageTest)
+				r.With(s.stepUp, s.critical("storage_migration_requested", "storage")).Post("/storage/migrate", s.storageMigrateStart)
+				r.With(s.stepUp).Post("/storage/migrate/cancel", s.storageMigrateCancel)
 				r.With(s.stepUp, s.critical("db_import_applied", "backup")).Post("/backups/import/apply", s.applyImport)
+
+				// Conversion to multi-tenant mode (single-tenant only, mt_convert.go).
+				r.Get("/multitenant", s.mtConvStatus)
+				r.With(s.stepUp, s.critical("multitenant_conversion_requested", "platform")).Post("/multitenant", s.mtConvSchedule)
+				r.With(s.stepUp, s.critical("multitenant_conversion_cancel_requested", "platform")).Delete("/multitenant", s.mtConvCancel)
+				r.With(s.stepUp).Post("/multitenant/restart", s.mtConvRestart)
 			})
 		})
 	})
@@ -413,7 +453,8 @@ const spaCSP = "default-src 'self'; img-src 'self' data: blob:; media-src 'self'
 // spa serves embedded frontend with index.html fallback.
 func (s *Server) spa(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
-	if p == "" {
+	if p == "" || p == platformIndex {
+		// The platform console's entry page is only served on the console host.
 		p = "index.html"
 	}
 	if strings.HasPrefix(p, "api/") {
@@ -524,6 +565,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		"ui_use_unsplash":                s.St.SettingBool("ui_use_unsplash"),
 		"ui_slideshow_seconds":           s.St.SettingInt("ui_slideshow_seconds", 30),
 		"background":                     s.backgroundID(),
+		"multi_tenant":                   s.tenant != nil,
 		"allow_preview":                  s.St.SettingBool("allow_preview"),
 		"local_login_enabled":            s.localLoginEnabled(),
 		"mfa_policy":                     s.mfaGlobal(),

@@ -145,7 +145,13 @@ func auditMAC(dbKey []byte) func([]byte) []byte {
 // AuditMAC exposes the chain's HMAC as a closure; the key itself never leaves
 // the store package.
 func (s *Store) AuditMAC() func([]byte) []byte {
-	s.auditOnce.Do(func() { s.auditMacFn = auditMAC(s.cipherKey) })
+	s.auditOnce.Do(func() {
+		root := s.rootKey
+		if root == nil {
+			root = s.cipherKey
+		}
+		s.auditMacFn = auditMAC(root)
+	})
 	return s.auditMacFn
 }
 
@@ -185,8 +191,21 @@ var auditGuardTriggers = []string{"audit_log_guard_update", "audit_log_guard_del
 // and its settings, and adds the auditor flag. It is additive and idempotent;
 // it never needs the database key (MACs are only computed when writing).
 func (s *Store) migrateAudit() error {
-	for _, q := range []string{
-		`CREATE TABLE IF NOT EXISTS audit_log (
+	for _, q := range append(append([]string{}, auditSchema...),
+		`DROP TABLE IF EXISTS event_log`,
+		`DELETE FROM settings WHERE key IN ('logging_enabled','log_retention_hours')`,
+	) {
+		if _, err := s.DB.Exec(q); err != nil {
+			return err
+		}
+	}
+	return s.migrateAuditSettings()
+}
+
+// auditSchema creates the chain's tables, indexes and guard triggers. The
+// platform database of multi-tenant mode (platform.go) uses the same schema.
+var auditSchema = []string{
+	`CREATE TABLE IF NOT EXISTS audit_log (
 			seq INTEGER PRIMARY KEY AUTOINCREMENT,
 			ts TEXT NOT NULL,
 			category TEXT NOT NULL,
@@ -200,33 +219,29 @@ func (s *Store) migrateAudit() error {
 			ip TEXT NOT NULL DEFAULT '',
 			prev_hash TEXT NOT NULL,
 			hash TEXT NOT NULL)`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts)`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_log_category ON audit_log(category)`,
-		// Filtered pages are read newest first by seq.
-		`CREATE INDEX IF NOT EXISTS idx_audit_log_category_seq ON audit_log(category, seq)`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_log_action_seq ON audit_log(action, seq)`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_name)`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_log_outcome_seq ON audit_log(outcome, seq)`,
-		`CREATE TABLE IF NOT EXISTS audit_checkpoint (
+	`CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts)`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_log_category ON audit_log(category)`,
+	// Filtered pages are read newest first by seq.
+	`CREATE INDEX IF NOT EXISTS idx_audit_log_category_seq ON audit_log(category, seq)`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_log_action_seq ON audit_log(action, seq)`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_name)`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_log_outcome_seq ON audit_log(outcome, seq)`,
+	`CREATE TABLE IF NOT EXISTS audit_checkpoint (
 			id INTEGER PRIMARY KEY CHECK (id=1),
 			last_deleted_seq INTEGER NOT NULL DEFAULT 0,
 			last_deleted_hash TEXT NOT NULL DEFAULT '',
 			mac TEXT NOT NULL DEFAULT '')`,
-		`INSERT OR IGNORE INTO audit_checkpoint(id,last_deleted_seq,last_deleted_hash,mac) VALUES(1,0,'','')`,
-		`CREATE TABLE IF NOT EXISTS audit_guard (
+	`INSERT OR IGNORE INTO audit_checkpoint(id,last_deleted_seq,last_deleted_hash,mac) VALUES(1,0,'','')`,
+	`CREATE TABLE IF NOT EXISTS audit_guard (
 			id INTEGER PRIMARY KEY CHECK (id=1),
 			gen INTEGER NOT NULL DEFAULT 0)`,
-		`INSERT OR IGNORE INTO audit_guard(id,gen) VALUES(1,0)`,
-		`CREATE TRIGGER IF NOT EXISTS audit_log_guard_update AFTER UPDATE ON audit_log BEGIN UPDATE audit_guard SET gen=gen+1 WHERE id=1; END`,
-		`CREATE TRIGGER IF NOT EXISTS audit_log_guard_delete AFTER DELETE ON audit_log BEGIN UPDATE audit_guard SET gen=gen+1 WHERE id=1; END`,
-		`CREATE TRIGGER IF NOT EXISTS audit_log_guard_insert AFTER INSERT ON audit_log WHEN EXISTS(SELECT 1 FROM audit_log WHERE seq>NEW.seq) BEGIN UPDATE audit_guard SET gen=gen+1 WHERE id=1; END`,
-		`DROP TABLE IF EXISTS event_log`,
-		`DELETE FROM settings WHERE key IN ('logging_enabled','log_retention_hours')`,
-	} {
-		if _, err := s.DB.Exec(q); err != nil {
-			return err
-		}
-	}
+	`INSERT OR IGNORE INTO audit_guard(id,gen) VALUES(1,0)`,
+	`CREATE TRIGGER IF NOT EXISTS audit_log_guard_update AFTER UPDATE ON audit_log BEGIN UPDATE audit_guard SET gen=gen+1 WHERE id=1; END`,
+	`CREATE TRIGGER IF NOT EXISTS audit_log_guard_delete AFTER DELETE ON audit_log BEGIN UPDATE audit_guard SET gen=gen+1 WHERE id=1; END`,
+	`CREATE TRIGGER IF NOT EXISTS audit_log_guard_insert AFTER INSERT ON audit_log WHEN EXISTS(SELECT 1 FROM audit_log WHERE seq>NEW.seq) BEGIN UPDATE audit_guard SET gen=gen+1 WHERE id=1; END`,
+}
+
+func (s *Store) migrateAuditSettings() error {
 	// The retention minimum is 90 days. A shorter stored value (from before the
 	// minimum existed) is raised, so nobody can wipe recent evidence with it.
 	res, err := s.DB.Exec(`UPDATE settings SET value=? WHERE key='audit_retention_days' AND CAST(value AS INTEGER) < ?`, strconv.Itoa(AuditRetentionMinDays), AuditRetentionMinDays)
@@ -629,6 +644,12 @@ func (s *Store) AuditVerifyIncremental(ctx context.Context) (AuditStatus, error)
 // VerifyAuditDatabase opens a database read-only (no migrations) and verifies
 // its audit chain. A database from before the audit log has an empty chain.
 func VerifyAuditDatabase(path string, key []byte) (AuditStatus, error) {
+	return VerifyAuditDatabaseRoot(path, key, key)
+}
+
+// VerifyAuditDatabaseRoot is VerifyAuditDatabase for a database whose audit
+// key is derived from root instead of the database key (an imported tenant).
+func VerifyAuditDatabaseRoot(path string, key, root []byte) (AuditStatus, error) {
 	db, err := openCipherDB(path, key, true)
 	if err != nil {
 		return AuditStatus{}, err
@@ -649,7 +670,7 @@ func VerifyAuditDatabase(path string, key []byte) (AuditStatus, error) {
 	var st AuditStatus
 	err = readSnapshot(ctx, db, func(q auditRowReader) error {
 		var e error
-		st, e = verifyChain(ctx, q, auditMAC(key), 0)
+		st, e = verifyChain(ctx, q, auditMAC(root), 0)
 		return e
 	})
 	return st, err

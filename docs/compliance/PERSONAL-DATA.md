@@ -2,7 +2,7 @@
 
 This inventory lists the personal data Sendora stores, why, where, how it is protected, how long it is kept and how it is deleted, so that a controller can prepare its record of processing activities (GDPR art. 30), a DPIA, and answers to data-subject requests. The operator of a Sendora deployment is the controller; this document describes what the software does, not the operator's legal assessment. The "legal basis" column is only a hint.
 
-Applies to version 0.1.5.
+Applies to version 0.2.0 (in development); object storage and multi-tenant mode are optional.
 
 [Back to the compliance index](README.md)
 
@@ -13,7 +13,9 @@ Applies to version 0.1.5.
 | Database `DATA_DIR/sendora.db` (all tables below) | SQLCipher (AES-256), key from `SENDORA_DB_KEY_FILE` |
 | Share files `DATA_DIR/shares/<link id>/<index>_<file name>` | File contents AES-256-GCM (since 0.1.2); **directory and file names are not encrypted** |
 | Upload staging `DATA_DIR/uploads/` and download snapshots `DATA_DIR/.verified-download-*` | Not encrypted; short-lived (see section 3) |
+| Share files in an object store (optional: S3-compatible, Azure Blob, GCS) `<prefix>files/<32 random hex>` | Encrypted before upload (AES-256-GCM, format v2); object names are random and reveal no names or link IDs. The provider sees sizes and times (sub-processor of encrypted data, see [STORAGE.md](../STORAGE.md)) |
 | Database backups `DATA_DIR/backups/` | SQLCipher, same key |
+| Remote backup copies `<prefix>backups/` (optional, `backup_remote_enabled`) | SQLCipher, same key; pruned with `backup_keep`; copies kept by provider versioning or soft delete remain until their retention ends |
 | Forwarded audit records (stdout, syslog, webhook) | Whatever the receiving system provides |
 | Process log (stdout/stderr) | Operational messages; no HTTP access log. Error texts from external systems (for example SMTP replies) are logged as received |
 | Outgoing email | Leaves Sendora's control at the SMTP server |
@@ -64,6 +66,19 @@ Not stored: raw IP addresses when `audit_log_ip` is off (the default), HTTP acce
 | Upload parts (`uploads/<session>/<index>.part`) | On completion or abort; stale sessions after 24 h |
 | Verified-download snapshots | After the transfer; leftovers at every start |
 | Share directories being deleted (`shares/.deleting-*`) | After the deletion commit; leftovers at start |
+
+## 3a. Multi-tenant mode: platform as processor
+
+In multi-tenant mode each tenant is the controller of the personal data in its own database and directory (the inventory above applies per tenant). The platform operator processes that data on the tenant's behalf (processor, GDPR art. 28) and needs a data processing agreement with each tenant. The platform itself stores only:
+
+| Data | Where | Purpose | Retention |
+|---|---|---|---|
+| Platform administrators: username, email, bcrypt hash, TOTP secret, sessions | `platform.db` | console access | until removed |
+| Tenant name, subdomain, custom domains, quotas, counts of users and stored bytes | `platform.db` | operating the platform | until the tenant is deleted |
+| Email address of the first tenant administrator | the tenant's database (not the platform's) and the platform audit log entry of the creation (username only) | first sign-in | tenant retention / platform audit retention |
+| Platform audit log (actor, action, target, client IP) | `platform.db` | accountability of platform administrators | `platform_audit_retention_days` (default 365) |
+
+Deleting a tenant removes its database, files and backups at once, everything under its prefix in the platform bucket, and Sendora's objects (`files/`, `backups/`, `probe/`) in storage the tenant configured itself (with the tenant's own credentials; refused when objects cannot be removed unless the platform administrator forces it, which lists what was left in the audit record). Copies kept by provider versioning or soft delete remain until their retention ends. Platform administrators cannot read tenant users or shares through the console, and see only the kind and usage of a tenant's own storage.
 
 ## 4. Data-subject rights
 
