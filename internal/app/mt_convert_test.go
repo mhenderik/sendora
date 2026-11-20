@@ -244,8 +244,15 @@ func TestConversionFailureRollsBack(t *testing.T) {
 	if le, _ := stat.J()["last_error"].(map[string]any); le == nil || le["stage"] != "tenant import" {
 		t.Fatalf("error not shown: %s", stat.Body)
 	}
-	if r := e.do("GET", "/api/shares/"+c.lid+"/download/notes.txt", "", nil); r.Code != 200 || string(r.Body) != "more" {
-		t.Fatalf("share after rollback: %d %q", r.Code, r.Body)
+	// The untouched file downloads; the one corrupted on purpose stays blocked.
+	ok := 0
+	for name, want := range map[string]string{"report.txt": "single tenant data", "notes.txt": "more"} {
+		if r := e.do("GET", "/api/shares/"+c.lid+"/download/"+name, "", nil); r.Code == 200 && string(r.Body) == want {
+			ok++
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("share after rollback: %d of 2 files readable, want 1", ok)
 	}
 }
 
