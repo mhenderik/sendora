@@ -10,7 +10,7 @@ Environment variables and runtime settings.
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | HTTP bind address; Docker sets `0.0.0.0` inside the container. |
 | `PORT` | `8080` | HTTP listening port; Docker also defaults to 8080. |
-| `DATA_DIR` | `./data` | Database and storage root; Docker sets `/data`. |
+| `DATA_DIR` | `./data` | Database and storage root; Docker sets `/data`. Share files live here too unless an object store is configured (see *Object storage*). |
 | `SENDORA_DB_KEY_FILE` | required, no default | Path to the external regular file containing exactly 32 raw key bytes. Owner must be root or the current process UID; no group-write or world permissions. Group-read is allowed for projected `fsGroup` secrets. Never put the key value in an environment variable or command-line argument. |
 | `SENDORA_DB_INITIALIZE` | `false` | Explicit `true` permits a new encrypted database only. Disable after private first startup; existing plaintext is never automatically migrated. |
 | `APP_URL` | unset | Canonical application URL used for generated links, email links, OAuth callbacks, origin checks, and secure-cookie decisions. |
@@ -59,6 +59,7 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_AUTO_CLEAN_FILES` | `true` | `auto_clean_files` |
 | `SENDORA_BACKUP_KEEP` | `7` | `backup_keep` |
 | `SENDORA_BACKUPS_ENABLED` | `true` | `backups_enabled` |
+| `SENDORA_BACKUP_REMOTE_ENABLED` | `false` | `backup_remote_enabled`: also upload automatic backups to the object store (see *Object storage*) |
 | `SENDORA_CLEAN_FILES_DAYS` | `7` | `clean_files_days` |
 | `SENDORA_DEFAULT_EXPIRY_TIME` | `7` | `default_expiry_time` |
 | `SENDORA_DEFAULT_LANGUAGE` | `en` | `default_language` |
@@ -100,6 +101,7 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_SMTP_REPLY_TO` | empty | `smtp_reply_to` |
 | `SENDORA_SMTP_TLS` | `starttls` | `smtp_tls` |
 | `SENDORA_SMTP_USER` | empty | `smtp_user` |
+| `SENDORA_STORAGE_*` | see *Object storage* | `storage_*` |
 | `SENDORA_TERMS_ACCEPTANCE_REQUIRED` | `false` | `terms_acceptance_required` (needs `terms_url` and `terms_version`) |
 | `SENDORA_TERMS_URL` | empty | `terms_url` (https) |
 | `SENDORA_TERMS_VERSION` | empty | `terms_version` |
@@ -108,6 +110,42 @@ Every setting of **Admin → Settings** can also be set by the deployment, which
 | `SENDORA_UI_DEFAULT_BACKGROUND` | `true` | `ui_default_background` |
 | `SENDORA_UI_SLIDESHOW_SECONDS` | `30` | `ui_slideshow_seconds` |
 | `SENDORA_UI_USE_UNSPLASH` | `false` | `ui_use_unsplash` |
+
+### Object storage
+
+Share files are stored in the local data directory unless another backend is selected. All storage settings are under **Admin → Storage** and follow the rules above (variable wins and makes the field read-only; `_FILE` for secrets). The background, credentials, migration and recommended bucket settings are in [STORAGE.md](STORAGE.md).
+
+| Variable | Default | Admin setting |
+|---|---|---|
+| `SENDORA_STORAGE_BACKEND` | `local` | `storage_backend`: `local`, `s3`, `azure` or `gcs` (where **new** files go; existing files stay where they are until migrated) |
+| `SENDORA_STORAGE_S3_ENDPOINT` | empty (AWS S3) | `storage_s3_endpoint`: `https://…`; `http://` only for loopback/private addresses and internal host names |
+| `SENDORA_STORAGE_S3_REGION` | `us-east-1` | `storage_s3_region` (required; `auto` for R2) |
+| `SENDORA_STORAGE_S3_BUCKET` | empty | `storage_s3_bucket` (S3 bucket naming rules) |
+| `SENDORA_STORAGE_S3_PREFIX` | `sendora/` | `storage_s3_prefix` (letters, digits, `.`, `_`, `-`, `/`; normalized to end with `/`) |
+| `SENDORA_STORAGE_S3_PATH_STYLE` | `false` | `storage_s3_path_style` (`true` for MinIO and most S3-compatible services) |
+| `SENDORA_STORAGE_S3_AUTH` | `static` | `storage_s3_auth`: `static` (access key + secret key) or `default` (AWS default chain: environment, IRSA/web identity, EKS Pod Identity, ECS, instance profile) |
+| `SENDORA_STORAGE_S3_ACCESS_KEY` | empty | `storage_s3_access_key` |
+| `SENDORA_STORAGE_S3_SECRET_KEY` (use `_FILE`) | empty | `storage_s3_secret_key` (secret, write-only) |
+| `SENDORA_STORAGE_AZURE_ACCOUNT` | empty | `storage_azure_account` (3–24 lowercase letters and digits) |
+| `SENDORA_STORAGE_AZURE_CONTAINER` | empty | `storage_azure_container` |
+| `SENDORA_STORAGE_AZURE_ENDPOINT` | empty (`https://<account>.blob.core.windows.net/`) | `storage_azure_endpoint` (sovereign clouds, Azurite) |
+| `SENDORA_STORAGE_AZURE_PREFIX` | `sendora/` | `storage_azure_prefix` |
+| `SENDORA_STORAGE_AZURE_AUTH` | `shared_key` | `storage_azure_auth`: `shared_key`, `sas` or `identity` (DefaultAzureCredential: workload identity, managed identity, environment, Azure CLI) |
+| `SENDORA_STORAGE_AZURE_ACCOUNT_KEY` (use `_FILE`) | empty | `storage_azure_account_key` (secret, write-only) |
+| `SENDORA_STORAGE_AZURE_SAS_TOKEN` (use `_FILE`) | empty | `storage_azure_sas_token` (secret, write-only) |
+| `SENDORA_STORAGE_GCS_BUCKET` | empty | `storage_gcs_bucket` |
+| `SENDORA_STORAGE_GCS_ENDPOINT` | empty (`https://storage.googleapis.com`) | `storage_gcs_endpoint` (emulators only) |
+| `SENDORA_STORAGE_GCS_PREFIX` | `sendora/` | `storage_gcs_prefix` |
+| `SENDORA_STORAGE_GCS_AUTH` | `service_account` | `storage_gcs_auth`: `service_account`, `default` (Application Default Credentials, GKE workload identity) or `none` (only with a custom endpoint, for emulators) |
+| `SENDORA_STORAGE_GCS_CREDENTIALS_JSON` (use `_FILE`) | empty | `storage_gcs_credentials_json` (secret, write-only) |
+| `SENDORA_BACKUP_REMOTE_ENABLED` | `false` | `backup_remote_enabled` (needs a non-local backend; `backup_keep` also applies to the remote copies) |
+
+- Only the settings of the selected backend are used; the others may stay filled in (their stored secrets are kept).
+- An incomplete or invalid configuration of the selected backend (for example `s3` without a bucket, `static` without keys) **stops the server** at start. Reachability is not checked at start.
+- Saving a changed remote configuration in the screen first runs a **connection test** (write, read and delete a probe object); when it fails nothing is saved. *Test connection* runs the same test with the values in the form without saving them.
+- Changing `storage_*` or `backup_remote_*` settings and testing a connection need a **step-up** re-authentication; changes are audited (`settings_changed`, `storage_backend_changed`, `storage_connection_tested` / `storage_connection_test_failed`), secrets by name only.
+- When a secret is stored, changing the endpoint, the account or the access key it belongs to requires **entering the secret again** (as for the SMTP password), so stored credentials cannot be redirected to another server.
+- Migration of existing files: Admin → Storage → *Migrate files*, or `sendora-db storage-migrate -source <db> -data-dir <dir> -key-file <key> [-dry-run]` (same `SENDORA_STORAGE_*` variables as the server).
 
 ### Forwarding the audit log
 
@@ -136,7 +174,7 @@ Forwarding never blocks or fails a request: each destination has an in-memory qu
 - **Password screening.** Account passwords (setup, registration, profile, reset, administrator-created users) are refused when they are on the embedded list of common passwords (`internal/app/data`, reproducible with `gen_common_passwords.go`), contain the username, the local part of the email address or the application name, or are a simple repetition or sequence. Share passwords keep their own rules. With `password_breach_check_online=true` new passwords are also checked against the Have I Been Pwned range API: only the first 5 hex characters of the SHA-1 hash are sent (k-anonymity), with a 3-second timeout; when the service cannot be reached the password is accepted and a warning is logged.
 - **Password maximum age and history.** `account_password_max_age_days` (Admin → Security → Account password policy, 0 to 365, 0 = never) makes a local password expire that many days after it was set. **A new installation starts at 365; an installation that already had accounts when it was upgraded starts at 0**, so nobody is forced to change at the upgrade (existing passwords count as set at the upgrade). 0 is less secure; modern guidance (NIST SP 800-63B) prefers password screening and two-step verification over frequent rotation. It applies only to accounts with a local password: not to guests, not to accounts that sign in only through a provider, and not to users an administrator marked *Exempt from password rotation* under Users. An expired password must be changed before anything else (the forced-change flow on the profile page): at the next sign-in, or, for a session that is already running, at its next request, which ends the account's sessions so the user signs in again with the old password and then chooses a new one. Users see a banner from 14 days before expiry and get one reminder email (template `password_expiry_warning`) 7 days before, when their address is verified, SMTP and a public URL are configured. `account_password_history` (0 to 24, default 5, 0 = no check) refuses a new password equal to the current one or one of the last N; earlier passwords are stored only as bcrypt hashes and the oldest are removed at each change. Each remembered password costs one bcrypt comparison (about 250 ms) when a password is changed. The access review shows `password_age_days`, `password_rotation_exempt` and `password_expires_at`.
 - **Security notifications.** Users with a verified email address get an email when their password is changed (also through a reset link), a second factor is added or removed, or recovery codes are regenerated, and (setting `notify_new_signin`) when a sign-in comes from a browser family and network (/16 for IPv4, /48 for IPv6) not seen for the account in the last 30 days. Only keyed hashes of that combination are stored, never addresses. A failing mail server never blocks the action.
-- **Step-up re-authentication.** Deleting or erasing users, changing administrator/auditor roles, creating, changing or deleting sign-in providers, changing security settings (`mfa_*`, `local_login_enabled`, `application_url`, `audit_*`, `ip_ban_*`, the account password policy, `admin_*`, `provider_session_max_hours`, `password_breach_check_online`, `notify_new_signin`), downloading, deleting and restoring backups, and MFA reset requests need a sign-in or confirmation not older than `admin_stepup_minutes`. The browser asks for the second factor (authenticator code or passkey) or, without one, the password. Administrators who sign in only through a provider and have no second factor sign in at the provider again. Administrator sessions also end after `admin_idle_logout_minutes` of inactivity.
+- **Step-up re-authentication.** Deleting or erasing users, changing administrator/auditor roles, creating, changing or deleting sign-in providers, changing security settings (`mfa_*`, `local_login_enabled`, `application_url`, `audit_*`, `ip_ban_*`, the account password policy, `admin_*`, `provider_session_max_hours`, `password_breach_check_online`, `notify_new_signin`), changing storage settings (`storage_*`, `backup_remote_*`), testing a storage connection, starting or cancelling a storage migration, downloading, deleting and restoring backups, and MFA reset requests need a sign-in or confirmation not older than `admin_stepup_minutes`. The browser asks for the second factor (authenticator code or passkey) or, without one, the password. Administrators who sign in only through a provider and have no second factor sign in at the provider again. Administrator sessions also end after `admin_idle_logout_minutes` of inactivity.
 
 ### Administrator network restriction
 

@@ -98,6 +98,9 @@ type Server struct {
 
 	// rateWindow overrides the one-minute rate-limit window (tests only).
 	rateWindow time.Duration
+
+	// Object storage: current location, deletion queue, migration (storage.go).
+	stor storageState
 }
 
 func lockStripe(locks *[64]sync.Mutex, key string) func() {
@@ -156,6 +159,9 @@ func New(st *store.Store, static fs.FS, version string) *Server {
 	}
 	s.Secret = []byte(sec)
 	if err := s.applyConfig(); err != nil {
+		panic(fmt.Errorf("configuration: %w", err))
+	}
+	if err := s.initStorage(); err != nil {
 		panic(fmt.Errorf("configuration: %w", err))
 	}
 	s.loadIPBans()
@@ -398,6 +404,11 @@ func (s *Server) Router() http.Handler {
 				r.With(s.stepUp, s.critical("backup_downloaded", "backup", s.backupDownloadInfo)).Get("/backups/{name}", s.downloadBackup)
 				r.With(s.stepUp, s.critical("backup_deleted", "backup")).Delete("/backups/{name}", s.deleteBackup)
 				r.With(s.critical("db_import_prepared", "backup")).Post("/backups/import", s.prepareImport)
+
+				r.Get("/storage", s.storageStatus)
+				r.With(s.stepUp).Post("/storage/test", s.storageTest)
+				r.With(s.stepUp, s.critical("storage_migration_requested", "storage")).Post("/storage/migrate", s.storageMigrateStart)
+				r.With(s.stepUp).Post("/storage/migrate/cancel", s.storageMigrateCancel)
 				r.With(s.stepUp, s.critical("db_import_applied", "backup")).Post("/backups/import/apply", s.applyImport)
 			})
 		})

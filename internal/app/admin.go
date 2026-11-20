@@ -18,12 +18,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mhenderik/sendora/internal/storage"
 	"github.com/mhenderik/sendora/internal/store"
 )
 
 // ---------- settings ----------
 
-var secretKeys = map[string]bool{"smtp_pass": true}
+var secretKeys = map[string]bool{"smtp_pass": true,
+	"storage_s3_secret_key": true, "storage_azure_account_key": true, "storage_azure_sas_token": true, "storage_gcs_credentials_json": true}
 
 const msgSMTPPasswordAgain = "enter the SMTP password again when changing the server, port, user or security"
 
@@ -57,6 +59,12 @@ func (s *Server) normalizeSetting(k, str string) (string, error) {
 		if _, err := store.ParseQuotaBytes(str); err != nil {
 			return "", fmt.Errorf("invalid default storage quota")
 		}
+	}
+	if norm, owned, err := storage.NormalizeSetting(k, str); owned {
+		if err != nil {
+			return "", err
+		}
+		return norm, nil
 	}
 	if owned, err := validateShareSetting(k, str); owned && err != nil {
 		return "", err
@@ -229,6 +237,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if !s.guardSettingsUpdate(w, r, updates) { // step-up, admin network list, terms (stepup.go)
 		return
 	}
+	if !s.validateStorageUpdate(w, r, updates) { // complete and reachable (storage.go)
+		return
+	}
 	olds := make(map[string]string, len(updates))
 	for k := range updates {
 		olds[k] = s.St.Setting(k)
@@ -260,6 +271,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if np, ok := updates["mfa_policy"]; ok {
 		s.logEvent(me.ID, me.Username, "mfa_policy_changed", "settings", "policy="+np)
+	}
+	if v, ok := updates["storage_backend"]; ok && v != olds["storage_backend"] {
+		s.logEvent(me.ID, me.Username, "storage_backend_changed", "settings", auditValue(olds["storage_backend"])+" -> "+auditValue(v)+" ("+s.storageFromSettings().Describe()+")")
 	}
 	jout(w, 200, map[string]any{"ok": true})
 }

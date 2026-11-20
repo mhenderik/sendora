@@ -179,7 +179,9 @@ func classifyAction(action string) (category, outcome string) {
 		"backup_downloaded":
 		return catSecurity, outcome
 	case "system_start", "system_stop", "audit_purged", "audit_purge_failed",
-		"backup_created_auto", "backup_failed_auto", "backup_pruned", "share_files_purged", "account_removed_auto":
+		"backup_created_auto", "backup_failed_auto", "backup_pruned", "share_files_purged", "account_removed_auto",
+		"backup_remote_copied", "backup_remote_failed", "backup_remote_pruned",
+		"storage_migration_finished", "storage_migration_failed", "storage_migration_cancelled":
 		return catSystem, outcome
 	case "mfa_reset_requested", "mfa_reset_confirmed", "personal_data_exported", "terms_accepted":
 		return catAccount, outcome

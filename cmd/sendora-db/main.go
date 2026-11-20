@@ -17,7 +17,7 @@ import (
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|verify-files|audit-verify|mfa-reset [flags]")
+		return errors.New("usage: sendora-db keygen|migrate|backup|snapshot-plaintext|verify|verify-files|audit-verify|mfa-reset|storage-migrate [flags]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	source := flags.String("source", "", "database source path; stop the app before offline operations")
@@ -30,6 +30,7 @@ func run(args []string) error {
 	names := flags.Bool("names", false, "verify-files: also print share and file names (sensitive)")
 	all := flags.Bool("all", false, "verify-files: list every row, not only problems")
 	progress := flags.Bool("progress", false, "verify-files: report progress on stderr (default: only when stderr is a terminal)")
+	dryRun := flags.Bool("dry-run", false, "storage-migrate: only report how many files would be copied")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -109,6 +110,12 @@ func run(args []string) error {
 			return err
 		}
 		fmt.Println("All multi-factor factors and sessions of the user were removed. Stop the application before running this offline step.")
+	case "storage-migrate":
+		dir := *dataDir
+		if dir == "" {
+			dir = filepath.Dir(*source)
+		}
+		return storageMigrate(*source, dir, key, *dryRun)
 	case "verify-files":
 		dir := *dataDir
 		if dir == "" {

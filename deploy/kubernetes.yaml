@@ -70,6 +70,30 @@ data:
   # SENDORA_PROVIDER_ENTRA_TENANT_ID: 00000000-0000-0000-0000-000000000000
   # SENDORA_PROVIDER_ENTRA_CLIENT_ID: 00000000-0000-0000-0000-000000000000
   # SENDORA_PROVIDER_ENTRA_ALLOW_REGISTRATION: "true"
+  # Object storage for share files (docs/STORAGE.md). Default: local (DATA_DIR).
+  # Files are encrypted before upload; secrets go into sendora-secrets (below).
+  # S3 / S3-compatible:
+  # SENDORA_STORAGE_BACKEND: s3
+  # SENDORA_STORAGE_S3_ENDPOINT: ""            # empty = AWS; e.g. https://s3.eu-central-2.wasabisys.com
+  # SENDORA_STORAGE_S3_REGION: eu-central-1
+  # SENDORA_STORAGE_S3_BUCKET: sendora-files
+  # SENDORA_STORAGE_S3_PREFIX: sendora/
+  # SENDORA_STORAGE_S3_PATH_STYLE: "false"     # "true" for MinIO, R2, B2
+  # SENDORA_STORAGE_S3_AUTH: static            # or default (IRSA, EKS Pod Identity, instance profile)
+  # SENDORA_STORAGE_S3_ACCESS_KEY: AKIA...
+  # Azure Blob Storage:
+  # SENDORA_STORAGE_BACKEND: azure
+  # SENDORA_STORAGE_AZURE_ACCOUNT: sendorafiles
+  # SENDORA_STORAGE_AZURE_CONTAINER: sendora
+  # SENDORA_STORAGE_AZURE_PREFIX: sendora/
+  # SENDORA_STORAGE_AZURE_AUTH: identity       # or shared_key, sas
+  # Google Cloud Storage:
+  # SENDORA_STORAGE_BACKEND: gcs
+  # SENDORA_STORAGE_GCS_BUCKET: sendora-files
+  # SENDORA_STORAGE_GCS_PREFIX: sendora/
+  # SENDORA_STORAGE_GCS_AUTH: default          # or service_account
+  # Also copy the daily (encrypted) database backups to the object store:
+  # SENDORA_BACKUP_REMOTE_ENABLED: "true"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -164,6 +188,15 @@ spec:
             #   value: /run/secrets/sendora-config/smtp-password
             # - name: SENDORA_PROVIDER_ENTRA_CLIENT_SECRET_FILE
             #   value: /run/secrets/sendora-config/entra-client-secret
+            # Object storage secrets (only the one of your backend and auth mode):
+            # - name: SENDORA_STORAGE_S3_SECRET_KEY_FILE
+            #   value: /run/secrets/sendora-config/s3-secret-key
+            # - name: SENDORA_STORAGE_AZURE_ACCOUNT_KEY_FILE
+            #   value: /run/secrets/sendora-config/azure-account-key
+            # - name: SENDORA_STORAGE_AZURE_SAS_TOKEN_FILE
+            #   value: /run/secrets/sendora-config/azure-sas-token
+            # - name: SENDORA_STORAGE_GCS_CREDENTIALS_JSON_FILE
+            #   value: /run/secrets/sendora-config/gcs-key.json
           envFrom:
             - configMapRef:
                 name: sendora-config
@@ -234,6 +267,7 @@ spec:
                 path: database.key
         # kubectl -n sendora create secret generic sendora-secrets \
         #   --from-file=smtp-password=./smtp-password --from-file=entra-client-secret=./entra-secret
+        #   (add --from-file=s3-secret-key=./s3-secret-key etc. for object storage)
         # - name: config-secrets
         #   secret:
         #     secretName: sendora-secrets
@@ -322,6 +356,11 @@ spec:
     # HTTPS to the OpenID Connect identity providers (Microsoft Entra ID,
     # Google, ...). Their addresses change, so any address except link-local
     # (cloud metadata service). Remove this rule if you use no login provider.
+    # This rule also covers object storage on 443 (AWS S3, Azure Blob Storage,
+    # Google Cloud Storage, R2, Wasabi, B2): keep it when storage_backend is not
+    # local. MinIO or another store on another port (e.g. 9000) needs its own
+    # egress rule; GKE workload identity also needs the metadata server
+    # (169.254.169.254/32, TCP 80), which the except below blocks.
     # IPv6 clusters: add an ipBlock for ::/0 here and in the SMTP rule.
     - to:
         - ipBlock:

@@ -5,6 +5,7 @@ The complete documentation lives in the **[wiki](https://github.com/mhenderik/se
 - [Quick start: Docker](quickstart-docker.md) — one `docker run` command with the published image
 - [Quick start: Kubernetes](quickstart-kubernetes.md) — bare-minimum manifest, port-forward, first administrator
 - [Configuration settings](configuration.md) — every `SENDORA_*` variable and setting
+- [Object storage](STORAGE.md) — S3, Azure Blob and Google Cloud Storage backends, credentials, migration, what the provider can see
 - [Threat model](THREAT-MODEL.md) and [file format](FILE-FORMAT.md) — security design and the encrypted file specification
 - [Compliance and audit documentation](compliance/README.md) — security whitepaper, shared responsibility matrix, data flows, personal data, audit events, vulnerability management
 - [Screenshots](screenshots/) — images used by the README and the wiki

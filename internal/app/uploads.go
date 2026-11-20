@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"mime"
 	"net/http"
@@ -25,6 +26,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mhenderik/sendora/internal/filecrypt"
+	"github.com/mhenderik/sendora/internal/storage"
+	"github.com/mhenderik/sendora/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -536,7 +539,7 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 		expected, checksum, integrity string
 		size, rec                     int64
 		enc                           bool
-		encID                         string
+		encID, objKey                 string
 	}
 	rows, err := s.St.DB.Query(`SELECT idx,name,full_path,type,size,received,sha256 FROM upload_files WHERE session_id=? ORDER BY idx`, id)
 	if err != nil {
@@ -625,6 +628,16 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 	if b.DownloadLimit > 0 {
 		lim = b.DownloadLimit
 	}
+	// New files go to the selected storage location; files are encrypted
+	// before they leave this server.
+	loc, backend, err := s.currentStorage(r.Context())
+	if err != nil {
+		log.Printf("storage unavailable: %v", err)
+		jerr(w, 503, "file storage unavailable")
+		return
+	}
+	// The local share directory is also the claim of the share ID for files in
+	// an object store (it then stays empty).
 	longID, dest, err := claimShareDir(s.St.DB, filepath.Join(s.St.DataDir, "shares"), generate)
 	if err != nil {
 		jerr(w, 500, "share storage unavailable")
@@ -634,16 +647,32 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 	defer func() {
 		if !committed {
 			os.RemoveAll(dest)
+			for _, f := range files {
+				if f.objKey != "" {
+					backend.Delete(context.WithoutCancel(r.Context()), f.objKey)
+				}
+			}
 		}
 	}()
 	// Keep the original parts until the database commit succeeds, so every failure is retryable.
 	for i := range files {
 		f := &files[i]
 		disk := filepath.Join(dest, fmt.Sprintf("%d_%s", f.idx, f.name))
-		checksum, encID, err := stageUploadFile(r.Context(), filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part"), disk, f.size, s.St.FileKey(), s.St.IsEncrypted())
+		part := filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part")
+		var checksum, encID string
+		if loc != store.LocalLocation {
+			if f.objKey, err = storage.NewFileKey(); err == nil {
+				checksum, encID, err = putUploadRemote(r.Context(), backend, part, f.objKey, f.size, s.St.FileKey())
+			}
+		} else {
+			checksum, encID, err = stageUploadFile(r.Context(), part, disk, f.size, s.St.FileKey(), s.St.IsEncrypted())
+		}
 		if err != nil {
 			if errors.Is(err, errIntegrity) {
 				jerr(w, 409, "uploaded file integrity check failed")
+			} else if loc != store.LocalLocation && !errors.Is(err, errNoFileKey) {
+				// The object store failed; the parts are kept, so completing again works.
+				jerr(w, 503, "file storage unavailable")
 			} else {
 				jerr(w, 500, "storage error")
 			}
@@ -695,7 +724,10 @@ func (s *Server) completeUploadWithShareID(w http.ResponseWriter, r *http.Reques
 	sid, _ := res.LastInsertId()
 	for _, f := range files {
 		disk := filepath.Join(dest, fmt.Sprintf("%d_%s", f.idx, f.name))
-		if _, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity,enc,enc_id) VALUES(?,?,?,?,?,?,?,?,?,?)`, sid, f.name, f.fp, f.size, f.typ, disk, f.checksum, f.integrity, f.enc, f.encID); err != nil {
+		if f.objKey != "" {
+			disk = ""
+		}
+		if _, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity,enc,enc_id,storage_id,object_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, sid, f.name, f.fp, f.size, f.typ, disk, f.checksum, f.integrity, f.enc, f.encID, loc, f.objKey); err != nil {
 			jerr(w, 500, "file metadata write failed")
 			return
 		}

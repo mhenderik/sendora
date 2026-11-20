@@ -1576,6 +1576,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 500, "user deletion failed")
 		return
 	}
+	s.kickDeletes() // remote objects of the removed shares (queued by the delete)
 	for _, dir := range dirs {
 		if err := os.RemoveAll(dir); err != nil {
 			jerr(w, 500, "user deleted but file cleanup failed")

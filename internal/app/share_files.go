@@ -1,11 +1,12 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/mhenderik/sendora/internal/store"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -15,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mhenderik/sendora/internal/storage"
+	"github.com/mhenderik/sendora/internal/store"
 )
 
 type shareFileOut struct {
@@ -116,7 +119,7 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 		size, rec                     int64
 		disk                          string
 		enc                           bool
-		encID                         string
+		encID, objKey                 string
 	}
 	rows, err := s.St.DB.Query(`SELECT idx,name,full_path,type,size,received,sha256 FROM upload_files WHERE session_id=? ORDER BY idx`, id)
 	if err != nil {
@@ -165,6 +168,12 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	dest := filepath.Join(s.St.DataDir, "shares", longID)
+	loc, backend, err := s.currentStorage(r.Context())
+	if err != nil {
+		log.Printf("storage unavailable: %v", err)
+		jerr(w, 503, "file storage unavailable")
+		return
+	}
 	committed := false
 	defer func() {
 		if !committed {
@@ -172,18 +181,35 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 				if f.disk != "" {
 					os.Remove(f.disk)
 				}
+				if f.objKey != "" {
+					backend.Delete(context.WithoutCancel(r.Context()), f.objKey)
+				}
 			}
 		}
 	}()
 	for i := range files {
 		f := &files[i]
-		disk := filepath.Join(dest, randHex(8)+"_"+f.name)
-		checksum, encID, err := stageUploadFile(r.Context(), filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part"), disk, f.size, s.St.FileKey(), s.St.IsEncrypted())
-		f.disk = disk
+		part := filepath.Join(s.uploadDir(id), strconv.Itoa(f.idx)+".part")
+		var checksum, encID string
+		var err error
+		if loc != store.LocalLocation {
+			if f.objKey, err = storage.NewFileKey(); err == nil {
+				checksum, encID, err = putUploadRemote(r.Context(), backend, part, f.objKey, f.size, s.St.FileKey())
+			}
+		} else {
+			disk := filepath.Join(dest, randHex(8)+"_"+f.name)
+			checksum, encID, err = stageUploadFile(r.Context(), part, disk, f.size, s.St.FileKey(), s.St.IsEncrypted())
+			f.disk = disk
+			if err != nil {
+				os.Remove(disk) // partial copy under our own fresh random name
+			}
+		}
 		if err != nil {
-			os.Remove(disk) // partial copy under our own fresh random name
 			if errors.Is(err, errIntegrity) {
 				jerr(w, 409, "uploaded file integrity check failed")
+			} else if loc != store.LocalLocation && !errors.Is(err, errNoFileKey) {
+				// The object store failed; the parts are kept, so completing again works.
+				jerr(w, 503, "file storage unavailable")
 			} else {
 				jerr(w, 500, "storage error")
 			}
@@ -278,7 +304,7 @@ func (s *Server) completeAppend(w http.ResponseWriter, r *http.Request, id strin
 		used[strings.ToLower(np)] = true
 		addParentDirs(dirs, strings.ToLower(np))
 		name := path.Base(np)
-		ires, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity,enc,enc_id) VALUES(?,?,?,?,?,?,?,?,?,?)`, shareID, name, np, f.size, f.typ, f.disk, f.checksum, f.integrity, f.enc, f.encID)
+		ires, err := tx.Exec(`INSERT INTO files(share_id,name,full_path,size,type,disk_path,sha256,integrity,enc,enc_id,storage_id,object_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, shareID, name, np, f.size, f.typ, f.disk, f.checksum, f.integrity, f.enc, f.encID, loc, f.objKey)
 		if err != nil {
 			jerr(w, 500, "file metadata write failed")
 			return
@@ -362,7 +388,8 @@ func (s *Server) deleteShareFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var disk, lid string
-	if err := tx.QueryRow(`SELECT f.disk_path,s.long_id FROM files f JOIN shares s ON s.id=f.share_id WHERE f.id=? AND f.share_id=?`, fileID, sh.ID).Scan(&disk, &lid); err != nil {
+	var loc int64
+	if err := tx.QueryRow(`SELECT f.disk_path,s.long_id,f.storage_id FROM files f JOIN shares s ON s.id=f.share_id WHERE f.id=? AND f.share_id=?`, fileID, sh.ID).Scan(&disk, &lid, &loc); err != nil {
 		if err == sql.ErrNoRows {
 			jerr(w, 404, "file not found")
 		} else {
@@ -377,6 +404,28 @@ func (s *Server) deleteShareFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if count <= 1 {
 		jerr(w, 409, "a share needs at least one file")
+		return
+	}
+	if loc != store.LocalLocation {
+		// In an object store: deleting the row queues the object for deletion
+		// in the same transaction (files_remote_deleted trigger).
+		if _, err := tx.Exec(`DELETE FROM files WHERE id=? AND share_id=?`, fileID, sh.ID); err != nil {
+			jerr(w, 500, "database error")
+			return
+		}
+		if removeFileCommitHook != nil {
+			if err := removeFileCommitHook(); err != nil {
+				jerr(w, 500, "database error")
+				return
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			jerr(w, 500, "database error")
+			return
+		}
+		s.kickDeletes()
+		s.logEvent(u.ID, u.Username, "share_file_removed", "share#"+strconv.FormatInt(sh.ID, 10), "file#"+strconv.FormatInt(fileID, 10))
+		jout(w, 200, map[string]any{"ok": true})
 		return
 	}
 	// Only ever touch a file directly inside this share's own directory: the path

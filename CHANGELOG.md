@@ -2,6 +2,71 @@
 
 ## Unreleased
 
+## 0.2.0 (in development)
+
+Phase 1 of 0.2.0: pluggable object storage. Phase 2 (multi-tenancy with a database
+per tenant) builds on it. **The default stays the local data directory; existing
+installations keep working unchanged** (same layout, no migration needed).
+
+### Object storage
+
+- Share files can be stored on an **S3-compatible service** (AWS S3, MinIO, Cloudflare
+  R2, Wasabi, Backblaze B2; static keys or the AWS default credential chain including
+  IRSA/web identity and EKS Pod Identity), **Azure Blob Storage** (shared key, SAS, or
+  `DefaultAzureCredential` with workload/managed identity) or **Google Cloud Storage**
+  (service-account JSON or Application Default Credentials/GKE workload identity, through
+  the JSON API without the gRPC client library). New setting `storage_backend`
+  (`local`, `s3`, `azure`, `gcs`) with per-backend settings `storage_s3_*`,
+  `storage_azure_*`, `storage_gcs_*`; see [docs/STORAGE.md](docs/STORAGE.md).
+- **Encryption stays in Sendora:** files are encrypted (format v2) before they leave the
+  server; object stores only see ciphertext under random names (`files/<32 hex>`) that
+  reveal neither share link IDs nor file names. Uploads are assembled locally as before,
+  encrypted and streamed to the store; a failed upload leaves no partial object.
+  Downloads, HTTP range requests, ZIP downloads, verified downloads and previews read
+  from the store without loading whole files into memory.
+- **Per-file location:** every file record names its storage location (new columns
+  `files.storage_id`, `files.object_key`, table `storage_locations` with the
+  configuration and credentials each location was used with). Switching the backend or
+  bucket only affects new files; earlier files stay readable where they are.
+- **Migration** of existing files to the current backend: a background job from
+  Admin → Storage (progress, cancel, audit trail) and
+  `sendora-db storage-migrate [-dry-run]`. Each file is copied, verified completely
+  (every GCM chunk tag, file ID, SHA-256), switched and then its source deleted (web job:
+  after 15 minutes). Plain legacy files are encrypted on the way; failed files stay in
+  their old location.
+- Deleting files, shares, users and GDPR erasure remove remote objects through a
+  deletion queue filled in the same database transaction (retried with backoff). Expiry
+  clean-up and `sendora-db verify-files` (including orphan objects) work for remote
+  backends.
+- **Remote backup copies:** `backup_remote_enabled` also uploads the automatic
+  (SQLCipher-encrypted) daily backups to `<prefix>backups/`; `backup_keep` applies to
+  the remote copies too.
+- New **Storage** tab in the admin settings: backend selector and fields, write-only
+  secrets, *Test connection* (writes, reads and deletes a probe object), files and bytes
+  per location, pending deletions and the migration control. All settings are also
+  `SENDORA_STORAGE_*` variables (read-only in the screen, `_FILE` for secrets).
+- Changing storage settings, testing a connection and starting or cancelling a migration
+  need a step-up and are audited (`storage_backend_changed`, `storage_connection_tested`,
+  `storage_connection_test_failed`, `storage_migration_*`, `backup_remote_*`). Saving a
+  changed remote configuration runs a connection test first; changing the endpoint,
+  account or access key requires entering the stored secret again; `http://` endpoints
+  are accepted only for loopback, private and cluster-internal hosts; bucket, container,
+  account, region and prefix names are validated; an invalid configuration stops the
+  server at start.
+- Documentation: new [docs/STORAGE.md](docs/STORAGE.md); configuration, threat model
+  (object storage provider), data flows, shared responsibility and audit events updated;
+  commented storage examples in `deploy/kubernetes.yaml`.
+
+### Build
+
+- New dependencies: `aws-sdk-go-v2` (`service/s3`, `config`, `credentials`), Azure
+  `azblob` and `azidentity`, `golang.org/x/oauth2/google`. `azblob` is pinned at
+  v1.6.4: v1.7 and later pull in Apache Arrow (about 4.7 MB more binary).
+- Binary size (linux, stripped): `sendora` 14.4 MB -> 25.6 MB, `sendora-db` 3.3 MB -> 13.4 MB
+  (it reads and migrates files in object stores). Image size (local build): 126 MB -> 147 MB
+  uncompressed, about 39.5 MiB -> 45.8 MiB compressed. The Google Cloud Storage backend uses the
+  JSON API with `golang.org/x/oauth2/google` instead of the gRPC-based client library.
+
 ## 0.1.5 (2026-11-18)
 
 ### Audit log

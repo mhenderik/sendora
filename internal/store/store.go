@@ -12,6 +12,7 @@ import (
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/mhenderik/sendora/internal/filecrypt"
+	"github.com/mhenderik/sendora/internal/storage"
 )
 
 type Store struct {
@@ -25,6 +26,9 @@ type Store struct {
 	auditOnce   sync.Once
 	auditMacFn  func([]byte) []byte
 	auditVer    auditVerifyState // incremental verification (audit.go)
+
+	backendsOnce sync.Once
+	backends     *Backends // storage backends per location (storage.go)
 }
 
 // SettingsGen changes whenever SetSetting writes; caches use it to refresh.
@@ -244,7 +248,7 @@ func initSchema(db *sql.DB) error {
 // PrepareImported. Order matters: seed runs between the policy and brand steps,
 // and after migratePasswordPolicy (which must see an existing installation first).
 func (s *Store) runMigrations() error {
-	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders, s.migrateAudit, s.migrateAccounts, s.migrateDownloadIP, s.migrateAccountSecurity, s.migratePasswordPolicy} {
+	for _, step := range []func() error{s.MigratePolicy, s.migrateIntegrity, s.migrateReverseOpen, s.migrateShareAppend, s.migrateMFA, s.migrateIdle, s.migrateUITranslations, s.migrateUsernameCase, s.migrateIPBans, s.migrateReplyToFormat, s.migrateSessions, s.migratePendingRegistration, s.migrateManagedProviders, s.migrateAudit, s.migrateAccounts, s.migrateDownloadIP, s.migrateAccountSecurity, s.migratePasswordPolicy, s.migrateStorage} {
 		if err := step(); err != nil {
 			return err
 		}
@@ -362,6 +366,10 @@ func (s *Store) seed() {
 	  SELECT 'ui_builtin_background','none','ui' FROM settings WHERE key='ui_default_background' AND value='false'`)
 	for _, d := range defaults {
 		s.DB.Exec(`INSERT OR IGNORE INTO settings(key,value,grp) VALUES(?,?,?)`, d.Key, d.Val, d.Grp)
+	}
+	// Storage settings (internal/storage): local stays the default backend.
+	for _, d := range storage.Settings {
+		s.DB.Exec(`INSERT OR IGNORE INTO settings(key,value,grp) VALUES(?,?,'storage')`, d.Key, d.Default)
 	}
 	var n int
 	s.DB.QueryRow(`SELECT COUNT(*) FROM themes`).Scan(&n)

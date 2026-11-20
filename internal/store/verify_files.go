@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"sort"
 
 	"github.com/mhenderik/sendora/internal/filecrypt"
+	"github.com/mhenderik/sendora/internal/storage"
 )
 
 // File check statuses reported by VerifyFiles.
@@ -62,15 +65,6 @@ type FilesReport struct {
 // Failures is the number of rows with a failing status plus orphans.
 func (r *FilesReport) Failures() int { return r.Summary.Failed + r.Summary.Orphans }
 
-func pathHash(dataDir, p string) string {
-	rel, err := filepath.Rel(dataDir, p)
-	if err != nil {
-		rel = p
-	}
-	h := sha256.Sum256([]byte(filepath.ToSlash(rel)))
-	return hex.EncodeToString(h[:4])
-}
-
 type fileRow struct {
 	id             int64
 	name, fullPath string
@@ -79,6 +73,8 @@ type fileRow struct {
 	enc            bool
 	encID          string
 	lid, share     string
+	loc            int64
+	objKey         string
 }
 
 // Problem reports whether the row failed a check (anything but ok and
@@ -97,6 +93,8 @@ type VerifyOptions struct {
 	Orphan func(OrphanFile)
 	// Progress is called after each row with the rows done and the total.
 	Progress func(done, total int)
+	// OpenBackend replaces storage.Open (tests).
+	OpenBackend func(context.Context, storage.Config) (storage.Backend, error)
 }
 
 // DefaultVerifyWorkers is the number of files VerifyFilesStream checks at once.
@@ -119,6 +117,11 @@ func VerifyFiles(source, dataDir string, key []byte, names bool) (*FilesReport, 
 	return rep, nil
 }
 
+// VerifyStoredFiles runs VerifyFilesStream on this store's own database.
+func (s *Store) VerifyStoredFiles(opt VerifyOptions) (FilesSummary, error) {
+	return VerifyFilesStream(s.Path, s.DataDir, s.cipherKey, opt)
+}
+
 // VerifyFilesStream is VerifyFiles for large stores: rows are checked by a
 // small worker pool and handed to opt.File one by one in row id order instead
 // of being collected, then orphans to opt.Orphan. It returns the summary.
@@ -133,7 +136,16 @@ func VerifyFilesStream(source, dataDir string, key []byte, opt VerifyOptions) (F
 		return sum, err
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT f.id,f.name,f.full_path,f.size,f.disk_path,f.sha256,f.enc,f.enc_id,s.long_id,s.name FROM files f JOIN shares s ON s.id=f.share_id ORDER BY f.id`)
+	// A database from before 0.2.0 that this binary has not opened yet has no
+	// storage columns: every file is local then.
+	var probe int64
+	perr := db.QueryRow(`SELECT storage_id FROM files LIMIT 1`).Scan(&probe)
+	hasLoc := perr == nil || errors.Is(perr, sql.ErrNoRows)
+	q := `SELECT f.id,f.name,f.full_path,f.size,f.disk_path,f.sha256,f.enc,f.enc_id,s.long_id,s.name,0,'' FROM files f JOIN shares s ON s.id=f.share_id ORDER BY f.id`
+	if hasLoc {
+		q = `SELECT f.id,f.name,f.full_path,f.size,f.disk_path,f.sha256,f.enc,f.enc_id,s.long_id,s.name,f.storage_id,f.object_key FROM files f JOIN shares s ON s.id=f.share_id ORDER BY f.id`
+	}
+	rows, err := db.Query(q)
 	if err != nil {
 		return sum, errors.New("files table cannot be read")
 	}
@@ -141,7 +153,7 @@ func VerifyFilesStream(source, dataDir string, key []byte, opt VerifyOptions) (F
 	for rows.Next() {
 		var r fileRow
 		var enc int
-		if err := rows.Scan(&r.id, &r.name, &r.fullPath, &r.size, &r.disk, &r.sha, &enc, &r.encID, &r.lid, &r.share); err != nil {
+		if err := rows.Scan(&r.id, &r.name, &r.fullPath, &r.size, &r.disk, &r.sha, &enc, &r.encID, &r.lid, &r.share, &r.loc, &r.objKey); err != nil {
 			rows.Close()
 			return sum, errors.New("files table cannot be read")
 		}
@@ -154,13 +166,21 @@ func VerifyFilesStream(source, dataDir string, key []byte, opt VerifyOptions) (F
 		return sum, errors.New("files table cannot be read")
 	}
 
-	// Resolve every path first: the orphan scan needs the complete set.
-	paths := make([]string, len(list))
-	known := map[string]bool{}
+	// Resolve every object first: the orphan scan needs the complete set.
+	backends := NewBackends(db, dataDir)
+	if opt.OpenBackend != nil {
+		backends.OpenFn = opt.OpenBackend
+	}
+	ctx := context.Background()
+	keys := make([]string, len(list))
+	known := map[int64]map[string]bool{LocalLocation: {}}
 	for i, r := range list {
-		if p, perr := SharePath(dataDir, r.lid, r.disk); perr == nil {
-			paths[i] = p
-			known[p] = true
+		if k, kerr := FileObjectKey(r.loc, r.lid, r.disk, r.objKey); kerr == nil {
+			keys[i] = k
+			if known[r.loc] == nil {
+				known[r.loc] = map[string]bool{}
+			}
+			known[r.loc][k] = true
 		}
 	}
 	check := func(i int) FileCheck {
@@ -169,12 +189,23 @@ func VerifyFilesStream(source, dataDir string, key []byte, opt VerifyOptions) (F
 		if opt.Names {
 			c.Name, c.Share = r.fullPath, r.share
 		}
-		if paths[i] == "" {
+		if keys[i] == "" {
 			c.PathHash, c.Status = "00000000", FileMissing
-		} else {
-			c.PathHash = pathHash(dataDir, paths[i])
-			c.Status = checkFile(paths[i], r, master)
+			return c
 		}
+		c.PathHash = objectHash(r.loc, keys[i])
+		be, err := backends.Get(ctx, r.loc)
+		if err != nil {
+			c.Status = FileMissing
+			return c
+		}
+		obj, err := be.Open(ctx, keys[i])
+		if err != nil {
+			c.Status = FileMissing
+			return c
+		}
+		c.Status = checkObject(obj, r, master)
+		obj.Close()
 		return c
 	}
 
@@ -255,15 +286,48 @@ func VerifyFilesStream(source, dataDir string, key []byte, opt VerifyOptions) (F
 			if f.IsDir() {
 				continue
 			}
-			p := filepath.Join(shares, d.Name(), f.Name())
-			if known[p] {
+			key := "shares/" + d.Name() + "/" + f.Name()
+			if known[LocalLocation][key] {
 				continue
 			}
-			o := OrphanFile{PathHash: pathHash(dataDir, p)}
+			o := OrphanFile{PathHash: objectHash(LocalLocation, key)}
 			if opt.Names {
 				o.Name = f.Name()
 			}
 			orphans = append(orphans, o)
+		}
+	}
+	// Objects under files/ of every remote location that no row refers to.
+	if hasLoc {
+		locRows, err := db.Query(`SELECT id FROM storage_locations ORDER BY id`)
+		if err == nil {
+			var locs []int64
+			for locRows.Next() {
+				var id int64
+				if locRows.Scan(&id) == nil {
+					locs = append(locs, id)
+				}
+			}
+			locRows.Close()
+			for _, id := range locs {
+				be, err := backends.Get(ctx, id)
+				if err != nil {
+					return sum, fmt.Errorf("storage location %d cannot be opened: %v", id, err)
+				}
+				err = be.List(ctx, storage.FilePrefix, func(i storage.Info) error {
+					if !known[id][i.Key] {
+						o := OrphanFile{PathHash: objectHash(id, i.Key)}
+						if opt.Names {
+							o.Name = fmt.Sprintf("location %d: %s", id, i.Key)
+						}
+						orphans = append(orphans, o)
+					}
+					return nil
+				})
+				if err != nil {
+					return sum, fmt.Errorf("storage location %d cannot be listed: %v", id, err)
+				}
+			}
 		}
 	}
 	sort.Slice(orphans, func(i, j int) bool { return orphans[i].PathHash < orphans[j].PathHash })
@@ -276,22 +340,24 @@ func VerifyFilesStream(source, dataDir string, key []byte, opt VerifyOptions) (F
 	return sum, nil
 }
 
-func checkFile(p string, r fileRow, master []byte) string {
-	f, err := os.Open(p)
-	if err != nil {
-		return FileMissing
+// objectHash identifies a stored object without naming it: the local key is
+// the path below the data directory, as in earlier releases.
+func objectHash(loc int64, key string) string {
+	if loc != LocalLocation {
+		key = fmt.Sprintf("location-%d/%s", loc, key)
 	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil || !st.Mode().IsRegular() {
-		return FileMissing
-	}
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:4])
+}
+
+func checkObject(f storage.Object, r fileRow, master []byte) string {
+	st := struct{ size int64 }{f.Size()}
 	h := sha256.New()
 	if !r.enc {
-		if st.Size() != r.size {
+		if st.size != r.size {
 			return FileSizeMiss
 		}
-		if _, err := io.Copy(h, f); err != nil {
+		if _, err := io.Copy(h, io.NewSectionReader(f, 0, st.size)); err != nil {
 			return FileMissing
 		}
 		if r.sha != "" && hex.EncodeToString(h.Sum(nil)) != r.sha {
@@ -299,7 +365,7 @@ func checkFile(p string, r fileRow, master []byte) string {
 		}
 		return FilePlainLegacy
 	}
-	rd, err := filecrypt.NewReader(f, st.Size(), r.size, master, r.encID)
+	rd, err := filecrypt.NewReader(nopCloser{f}, st.size, r.size, master, r.encID)
 	if err != nil {
 		switch {
 		case errors.Is(err, filecrypt.ErrSizeMismatch):
