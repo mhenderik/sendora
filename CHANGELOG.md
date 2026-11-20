@@ -135,6 +135,12 @@ unchanged** (same layout, no migration needed).
   audited) is always available: an orderly stop, then the process re-executes itself
   (`SENDORA_RESTART_MODE=exit`: exit code 75 for a supervisor); the page waits for the
   new addresses and links to them. The platform console offers the same restart.
+  The base domain is entered as host and port (wizard and console *Platform settings*,
+  stored as `host[:port]`; the console stores it in the data directory for the next start
+  unless `SENDORA_BASE_DOMAIN` is set) with the resulting addresses shown live; a port
+  that differs from the one in use is warned about, and multi-tenant mode logs a warning
+  when requests arrive on a non-default port the base domain lacks. Custom domains are
+  reduced to their host name.
 - **Moving to another host**: `sendora-db tenant-import -from <old DATA_DIR>
   -source-key-file <old key> [-custom-domain <old host>]` copies a single-tenant
   installation into an existing multi-tenant environment (other tenants may exist) as a

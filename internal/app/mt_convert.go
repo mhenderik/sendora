@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -126,15 +127,67 @@ func writeFile0600(path string, v any) error {
 	return os.Rename(tmp, path)
 }
 
+// SplitBaseDomain checks a base domain "host" or "host:port" (no scheme or
+// path) and returns its parts; the port is "" when absent.
+func SplitBaseDomain(base string) (host, port string, err error) {
+	host = strings.ToLower(strings.TrimSpace(base))
+	if strings.ContainsAny(host, "/@ ?#") {
+		return "", "", errors.New("invalid base domain: enter the host name only (no scheme or path) and the port separately")
+	}
+	if h, p, e := net.SplitHostPort(host); e == nil {
+		n, perr := strconv.Atoi(p)
+		if perr != nil || n < 1 || n > 65535 {
+			return "", "", errors.New("invalid port of the base domain (1-65535)")
+		}
+		host, port = h, p
+		if port == "80" || port == "443" {
+			port = ""
+		}
+	}
+	if _, ok := platform.NormalizeDomain("x." + host); !ok || strings.Contains(host, ":") {
+		return "", "", errors.New("invalid base domain (a host name such as sendora.example.com)")
+	}
+	return host, port, nil
+}
+
+// JoinBaseDomain is the stored form of a base domain.
+func JoinBaseDomain(host, port string) string {
+	if port == "" || port == "80" || port == "443" {
+		return host
+	}
+	return host + ":" + port
+}
+
+// basePortWarning explains when the base domain's port differs from the one
+// this server is reached on (generated links would lack or carry a wrong
+// port), unless a reverse proxy is evidently in front.
+func (s *Server) basePortWarning(r *http.Request, port string) string {
+	if len(s.trustedProxies) > 0 || r.Header.Get("X-Forwarded-Host") != "" || r.Header.Get("X-Forwarded-Proto") != "" {
+		return ""
+	}
+	_, reqPort, _ := net.SplitHostPort(r.Host)
+	if reqPort == "80" || reqPort == "443" {
+		reqPort = ""
+	}
+	if reqPort == port {
+		return ""
+	}
+	if port == "" {
+		return "the base domain has no port, but this server is reached on port " + reqPort + ": the platform's links would lack the port; enter " + reqPort + " as the port unless a reverse proxy serves the platform on 80/443"
+	}
+	if reqPort == "" {
+		return "the base domain uses port " + port + ", but this server is reached without a port"
+	}
+	return "the base domain uses port " + port + ", but this server is reached on port " + reqPort
+}
+
 // validateConversion checks a request (also again at start-up).
 func validateConversion(c *ConversionRequest) error {
-	host := c.BaseDomain
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
+	host, port, err := SplitBaseDomain(c.BaseDomain)
+	if err != nil {
+		return err
 	}
-	if _, ok := platform.NormalizeDomain("x." + strings.ToLower(host)); !ok || strings.ContainsAny(c.BaseDomain, "/@ ") {
-		return errors.New("invalid base domain (a host name, optionally with :port)")
-	}
+	c.BaseDomain = JoinBaseDomain(host, port)
 	if !platform.ValidSlug(c.Slug) {
 		return errors.New("invalid or reserved subdomain for the first tenant")
 	}
@@ -142,6 +195,11 @@ func validateConversion(c *ConversionRequest) error {
 		return errors.New("invalid platform administrator username")
 	}
 	if c.CustomDomain != "" {
+		// A custom domain is a host name (served on 80/443 by the proxy);
+		// a pasted port or scheme is dropped.
+		if h, _, err := SplitBaseDomain(strings.SplitN(strings.TrimPrefix(strings.TrimPrefix(c.CustomDomain, "https://"), "http://"), "/", 2)[0]); err == nil {
+			c.CustomDomain = h
+		}
 		d, ok := platform.NormalizeDomain(c.CustomDomain)
 		base := strings.ToLower(host)
 		if !ok || d == base || strings.HasSuffix(d, "."+base) {
@@ -187,6 +245,19 @@ func (s *Server) suggestedCustomDomain() string {
 	return ""
 }
 
+// publicPort is the port of the configured public URL ("" for 80/443 or none).
+func (s *Server) publicPort() string {
+	raw := s.BaseURL
+	if raw == "" {
+		raw = s.St.Setting("application_url")
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Port() == "80" || u.Port() == "443" {
+		return ""
+	}
+	return u.Port()
+}
+
 // mtConvStatus: GET /api/admin/multitenant.
 func (s *Server) mtConvStatus(w http.ResponseWriter, r *http.Request) {
 	if s.tenant != nil {
@@ -194,7 +265,7 @@ func (s *Server) mtConvStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"suggested_custom_domain": s.suggestedCustomDomain(), "supervisor": supervisorLikely(), "restart_mode": RestartMode(),
-		"restart_available": s.restartFn != nil, "password_min_length": consoleMinPassword,
+		"restart_available": s.restartFn != nil, "password_min_length": consoleMinPassword, "public_port": s.publicPort(),
 		"jwt_secret_set": os.Getenv("JWT_SECRET") != "" || os.Getenv("JWT_SECRET_FILE") != ""}
 	if c, err := readConversion(s.St.DataDir); err == nil {
 		c.AdminPasswordHash = ""
@@ -268,7 +339,8 @@ func (s *Server) mtConvSchedule(w http.ResponseWriter, r *http.Request) {
 	os.Remove(filepath.Join(s.St.DataDir, ConversionErrorFile))
 	s.logEvent(me.ID, me.Username, "multitenant_conversion_scheduled", "platform",
 		fmt.Sprintf("base_domain=%s tenant=%s platform_admin=%s mfa_required=%t custom_domain=%s; runs at the next start", c.BaseDomain, c.Slug, c.AdminUsername, c.MFARequired, c.CustomDomain))
-	jout(w, 200, map[string]any{"ok": true, "supervisor": supervisorLikely()})
+	_, port, _ := SplitBaseDomain(c.BaseDomain)
+	jout(w, 200, map[string]any{"ok": true, "supervisor": supervisorLikely(), "warning": s.basePortWarning(r, port)})
 }
 
 // mtConvCancel: DELETE /api/admin/multitenant (administrators, step-up).

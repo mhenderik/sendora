@@ -6,6 +6,7 @@ import QrCode from '../components/QrCode.vue'
 import StorageForm from '../components/StorageForm.vue'
 import PasswordHints from '../components/PasswordHints.vue'
 import { platformPolicy } from '../password-check.mjs'
+import { splitHostPort, validHost, validPort, joinHostPort, platformURLs } from '../base-domain.mjs'
 import { t, tr, lang, setLang, builtinLanguages } from '../i18n'
 import { gbToBytes, bytesToGB } from '../quota.mjs'
 import { pconsole, slugProblem, fmtSize, quotaPercent, reauthBody, storageKindLabel } from '../platform-console.mjs'
@@ -111,7 +112,7 @@ const saveQuota = () => run(async () => {
   await pconsole(`/tenants/${tid()}/quotas`, { method: 'PUT', body: { max_users: Number(quota.max_users) || 0 } })
   notice.value = t('Saved'); await loadTenants()
 })
-const addDomain = () => run(async () => { await pconsole(`/tenants/${tid()}/domains`, { method: 'POST', body: { domain: domainInput.value } }); domainInput.value = ''; await refreshSel() })
+const addDomain = () => run(async () => { await pconsole(`/tenants/${tid()}/domains`, { method: 'POST', body: { domain: splitHostPort(domainInput.value).host } }); domainInput.value = ''; await refreshSel() })
 const verifyDomain = d => run(async () => { await pconsole(`/tenants/${tid()}/domains/${encodeURIComponent(d)}/verify`, { method: 'POST' }); await refreshSel() })
 const removeDomain = d => run(async () => { await pconsole(`/tenants/${tid()}/domains/${encodeURIComponent(d)}`, { method: 'DELETE' }); await refreshSel() })
 const makePrimary = d => run(async () => { await pconsole(`/tenants/${tid()}/primary-domain`, { method: 'PUT', body: { domain: d } }); await refreshSel() })
@@ -154,12 +155,23 @@ const saveNewOffer = () => run(async () => {
 const pstore = reactive({ settings: null, set: {}, managed: [], description: '', test: null, testing: false })
 async function loadSettings() {
   const d = await pconsole('/settings'); settings.value = d.settings; managed.value = d.managed; restartAvailable.value = !!d.restart_available
+  Object.assign(bd, { host: d.base_host || '', port: d.base_port || '', managed: !!d.base_domain_managed, code: '', saved: joinHostPort(d.base_host || '', d.base_port || '') })
   mfa.required = d.settings.platform_mfa_required !== 'false'; mfa.code = ''
   newOffer.value = d.settings.new_tenant_storage_offer || 'none'; newOffer.code = ''
   const ps = await pconsole('/storage')
   Object.assign(pstore, { settings: { ...ps.settings }, set: ps.set || {}, managed: ps.managed || [], description: ps.description, savedBackend: ps.settings.storage_backend, test: null })
 }
 const restartCode = ref(''), restarting = ref(false), restartAvailable = ref(false)
+// Base domain as host and port (stored as host[:port]; SENDORA_BASE_DOMAIN wins).
+const bd = reactive({ host: '', port: '', managed: false, code: '', saved: '' })
+const bdOK = computed(() => validHost(bd.host) && validPort(bd.port))
+const bdLive = computed(() => (validHost(bd.host) ? platformURLs(bd.host, bd.port, '<slug>') : null))
+function onBdHost() { const { host, port } = splitHostPort(bd.host); bd.host = host; if (port) bd.port = port }
+const saveBaseDomain = () => run(async () => {
+  const d = await pconsole('/base-domain', { method: 'PUT', body: { host: bd.host, port: bd.port, ...reauth(bd.code) } })
+  bd.code = ''; bd.saved = d.base_domain
+  notice.value = d.restart_needed ? t('Saved. The new base domain applies after a restart of the server.') : t('Saved')
+})
 const restartServer = () => run(async () => {
   if (!confirm(t('Restart the server now? Requests in progress finish first; everyone stays signed in.'))) return
   await pconsole('/restart', { method: 'POST', body: reauth(restartCode.value) })
@@ -433,7 +445,7 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
 
         <form v-if="tab === 'settings' && settings" class="card" @submit.prevent="saveSettings">
           <h2>{{ t('Platform settings') }}</h2>
-          <p class="muted">{{ t('Base domain') }}: <code>{{ boot?.base_domain }}</code> ({{ t('set by SENDORA_BASE_DOMAIN') }})</p>
+          <p class="muted">{{ t('Base domain') }}: <code>{{ boot?.base_domain }}</code><template v-if="bd.managed"> ({{ t('set by SENDORA_BASE_DOMAIN') }})</template></p>
           <template v-for="[k, label] in settingKeys" :key="k">
             <label :for="'s-' + k">{{ t(label) }}</label>
             <input :id="'s-' + k" v-model="settings[k]" :disabled="managed.includes(k)" />
@@ -481,6 +493,24 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
           <label for="no-code">{{ reauthLabel }}</label>
           <input id="no-code" v-model="newOffer.code" :type="byPassword ? 'password' : 'text'" autocomplete="off" />
           <div class="actions"><button :disabled="busy || offerProblem || managed.includes('new_tenant_storage_offer') || newOffer.value === settings.new_tenant_storage_offer">{{ t('Save') }}</button></div>
+        </form>
+
+        <form v-if="tab === 'settings' && settings" class="card" @submit.prevent="saveBaseDomain">
+          <h2>{{ t('Base domain') }}</h2>
+          <div class="row">
+            <div style="flex:3"><label for="bd-host">{{ t('Base domain') }}</label><input id="bd-host" v-model="bd.host" :disabled="bd.managed" autocomplete="off" @blur="onBdHost" />
+              <p v-if="bd.host && !validHost(bd.host)" class="err">{{ t('Enter a host name only, without http:// or a path.') }}</p></div>
+            <div style="flex:1"><label for="bd-port">{{ t('Port') }}</label><input id="bd-port" v-model="bd.port" :disabled="bd.managed" inputmode="numeric" placeholder="443" autocomplete="off" />
+              <p v-if="!validPort(bd.port)" class="err">{{ t('Enter a port from 1 to 65535, or leave it empty for 80/443.') }}</p></div>
+          </div>
+          <p v-if="bdLive" class="muted" aria-live="polite">{{ t('Platform console') }}: <code>{{ bdLive.console }}</code> · {{ t('Organisation') }}: <code>{{ bdLive.org }}</code></p>
+          <p v-if="bd.managed" class="muted">{{ t('Set by SENDORA_BASE_DOMAIN in the server configuration.') }}</p>
+          <template v-else>
+            <p class="muted">{{ t('Stored in the data directory; it applies after a restart of the server.') }}</p>
+            <label for="bd-code">{{ reauthLabel }}</label>
+            <input id="bd-code" v-model="bd.code" :type="byPassword ? 'password' : 'text'" autocomplete="off" />
+            <div class="actions"><button :disabled="busy || !bdOK || joinHostPort(bd.host, bd.port) === bd.saved">{{ t('Save') }}</button></div>
+          </template>
         </form>
 
         <form v-if="tab === 'settings' && settings && restartAvailable" class="card" @submit.prevent="restartServer">

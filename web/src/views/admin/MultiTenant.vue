@@ -7,26 +7,42 @@ import { api } from '../../api'
 import { t } from '../../i18n'
 import PasswordHints from '../../components/PasswordHints.vue'
 import { platformPolicy, passwordChecklist } from '../../password-check.mjs'
+import { splitHostPort, validHost, validPort, joinHostPort, defaultPort, platformURLs, portWarning } from '../../base-domain.mjs'
 
 const st = ref(null), err = ref(''), msg = ref(''), busy = ref(false), confirmed = ref(false)
-const f = reactive({ base_domain: '', slug: '', name: '', admin_username: '', admin_email: '', admin_password: '', mfa_required: true, use_custom_domain: true, custom_domain: '' })
+const f = reactive({ base_host: '', base_port: '', slug: '', name: '', admin_username: '', admin_email: '', admin_password: '', mfa_required: true, use_custom_domain: true, custom_domain: '' })
 async function load() {
   st.value = await api('/multitenant')
+  // The port of the address in use (or of the configured public URL).
+  if (!f.base_port) f.base_port = defaultPort(location.port) || st.value.public_port || ''
   if (!f.custom_domain) f.custom_domain = st.value.suggested_custom_domain || ''
   f.use_custom_domain = !!f.custom_domain
 }
 onMounted(async () => { try { await load() } catch (e) { err.value = e.message } })
 const slugOK = computed(() => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(f.slug) && !f.slug.includes('--'))
 const pwPolicy = computed(() => platformPolicy(st.value || {}))
-const ready = computed(() => f.base_domain && slugOK.value && f.admin_username && f.admin_email && passwordChecklist(f.admin_password, pwPolicy.value).ok && confirmed.value)
+// The base domain is edited as host and port; a port typed into the host
+// field moves to the port field.
+function onHost() {
+  const { host, port } = splitHostPort(f.base_host)
+  if (port || host !== f.base_host) { f.base_host = host; if (port) f.base_port = port }
+}
+function onCustom() { f.custom_domain = splitHostPort(f.custom_domain).host }
+const hostOK = computed(() => validHost(f.base_host))
+const portOK = computed(() => validPort(f.base_port))
+const baseDomain = computed(() => joinHostPort(f.base_host, f.base_port))
+const live = computed(() => (hostOK.value ? platformURLs(f.base_host, f.base_port, f.slug) : null))
+const pagePort = typeof location === 'undefined' ? '' : location.port
+const portHint = computed(() => portWarning(f.base_port, pagePort))
+const ready = computed(() => hostOK.value && portOK.value && slugOK.value && f.admin_username && f.admin_email && passwordChecklist(f.admin_password, pwPolicy.value).ok && confirmed.value)
 
 async function schedule() {
   err.value = msg.value = ''; busy.value = true
   try {
-    await api('/multitenant', { method: 'POST', body: { base_domain: f.base_domain, slug: f.slug, name: f.name, admin_username: f.admin_username, admin_email: f.admin_email,
+    const res = await api('/multitenant', { method: 'POST', body: { base_domain: baseDomain.value, slug: f.slug, name: f.name, admin_username: f.admin_username, admin_email: f.admin_email,
       admin_password: f.admin_password, mfa_required: f.mfa_required, custom_domain: f.use_custom_domain ? f.custom_domain : '' } })
     f.admin_password = ''; confirmed.value = false
-    msg.value = t('The conversion is scheduled. It runs at the next start of the server.')
+    msg.value = t('The conversion is scheduled. It runs at the next start of the server.') + (res?.warning ? ' ' + t('Note: {warning}', { warning: res.warning }) : '')
     await load()
   } catch (e) { err.value = e.message } finally { busy.value = false }
 }
@@ -37,11 +53,11 @@ async function cancel() {
 // The addresses after the conversion (http for localhost base domains).
 const urls = c => {
   if (!c?.base_domain) return null
-  const host = c.base_domain.split(':')[0]
-  const scheme = host === 'localhost' || host.endsWith('.localhost') ? 'http' : 'https'
-  return { console: `${scheme}://admin.${c.base_domain}`, org: `${scheme}://${c.slug}.${c.base_domain}`, custom: c.custom_domain ? `https://${c.custom_domain}` : '' }
+  const { host, port } = splitHostPort(c.base_domain)
+  const u = platformURLs(host, port, c.slug) || { console: '', org: '' }
+  return { ...u, custom: c.custom_domain ? `https://${c.custom_domain}` : '' }
 }
-const preview = computed(() => ({ base_domain: f.base_domain, slug: f.slug, name: f.name || f.slug, admin_username: f.admin_username, admin_email: f.admin_email,
+const preview = computed(() => ({ base_domain: baseDomain.value, slug: f.slug, name: f.name || f.slug, admin_username: f.admin_username, admin_email: f.admin_email,
   mfa_required: f.mfa_required, custom_domain: f.use_custom_domain ? f.custom_domain : '' }))
 const fmtLocal = v => { try { return new Date(v).toLocaleString() } catch { return v } }
 const restarting = ref(false), restarted = ref(null)
@@ -121,14 +137,22 @@ async function restart() {
       </ul>
 
       <h2>{{ t('Platform') }}</h2>
-      <label for="mt-base">{{ t('Base domain') }}</label><input id="mt-base" v-model="f.base_domain" placeholder="sendora.example.com" required autocomplete="off" />
       <div class="row">
-        <div><label for="mt-slug">{{ t('Subdomain of this organisation') }}</label><input id="mt-slug" v-model="f.slug" required autocomplete="off" />
-          <p v-if="f.slug && f.base_domain" class="muted">{{ f.slug }}.{{ f.base_domain }}</p></div>
+        <div style="flex:3"><label for="mt-base">{{ t('Base domain') }}</label><input id="mt-base" v-model="f.base_host" placeholder="sendora.example.com" required autocomplete="off" @blur="onHost" @change="onHost" />
+          <p v-if="f.base_host && !hostOK" class="err">{{ t('Enter a host name only, without http:// or a path.') }}</p></div>
+        <div style="flex:1"><label for="mt-port">{{ t('Port') }}</label><input id="mt-port" v-model="f.base_port" inputmode="numeric" placeholder="443" autocomplete="off" />
+          <p v-if="!portOK" class="err">{{ t('Enter a port from 1 to 65535, or leave it empty for 80/443.') }}</p></div>
+      </div>
+      <p v-if="portHint === 'missing-port'" class="err" role="alert">{{ t('This page is served on port {port}, but the base domain has no port: unless a reverse proxy serves the platform on 80/443, every address would lack the port.', { port: pagePort }) }}</p>
+      <p v-else-if="portHint === 'extra-port'" class="notice" role="note">{{ t('The base domain uses a port, but this page is served without one. Check that the platform is reachable on that port.') }}</p>
+      <div class="row">
+        <div><label for="mt-slug">{{ t('Subdomain of this organisation') }}</label><input id="mt-slug" v-model="f.slug" required autocomplete="off" /></div>
         <div><label for="mt-name">{{ t('Name of this organisation') }}</label><input id="mt-name" v-model="f.name" /></div>
       </div>
       <label class="check"><input type="checkbox" v-model="f.use_custom_domain" /> {{ t('Keep the current address as a custom domain of this organisation (existing links keep working)') }}</label>
-      <input v-if="f.use_custom_domain" id="mt-custom" v-model="f.custom_domain" :aria-label="t('Custom domain')" placeholder="files.example.com" />
+      <input v-if="f.use_custom_domain" id="mt-custom" v-model="f.custom_domain" :aria-label="t('Custom domain')" placeholder="files.example.com" @blur="onCustom" />
+      <p v-if="f.use_custom_domain" class="muted">{{ t('A host name only: custom domains are served on the standard ports by your reverse proxy.') }}</p>
+      <p v-if="live" class="muted" aria-live="polite">{{ t('Platform console') }}: <code>{{ live.console }}</code><template v-if="live.org"> · {{ t('Organisation') }}: <code>{{ live.org }}</code></template></p>
       <h2>{{ t('First platform administrator') }}</h2>
       <div class="row">
         <div><label for="mt-user">{{ t('Username') }}</label><input id="mt-user" v-model="f.admin_username" required autocomplete="off" /></div>
@@ -137,7 +161,7 @@ async function restart() {
       <label for="mt-pass">{{ t('Password') }}</label><input id="mt-pass" v-model="f.admin_password" type="password" autocomplete="new-password" minlength="12" required />
       <PasswordHints :password="f.admin_password" :policy="pwPolicy" />
       <label class="check"><input type="checkbox" v-model="f.mfa_required" /> {{ t('Platform administrators must use an authenticator app') }}</label>
-      <template v-if="f.base_domain && f.slug">
+      <template v-if="hostOK && f.slug">
         <h2>{{ t('Summary') }}</h2>
         <dl class="facts">
           <dt>{{ t('Base domain') }}</dt><dd>{{ preview.base_domain }}</dd>

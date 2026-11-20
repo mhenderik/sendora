@@ -218,7 +218,10 @@ Quota changes apply immediately to an open tenant.
 ### 7.1 From the web UI (Admin → Multi-tenant)
 
 A single-tenant administrator can schedule the conversion in **Admin →
-Multi-tenant**: base domain, subdomain and name of the first organisation (the
+Multi-tenant**: base domain (host name and port as separate fields; the port is
+prefilled from the address in use, empty for 80/443, stored as `host[:port]`
+like `SENDORA_BASE_DOMAIN`; a warning appears when it differs from the port the
+server is reached on and no reverse proxy is evident), subdomain and name of the first organisation (the
 current installation), the first platform administrator (username, email,
 password screened like console passwords), whether platform administrators must
 use an authenticator, and optionally the current address (preselected from

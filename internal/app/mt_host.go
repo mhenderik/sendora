@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mhenderik/sendora/internal/netguard"
@@ -66,6 +67,8 @@ type TenantHost struct {
 	now func() time.Time
 	// restartFn is set by main: orderly stop, then restart (Platform settings).
 	restartFn func()
+	// portWarned: the missing-port warning was logged (warnPortOnce).
+	portWarned atomic.Bool
 	// openBackend opens object storage backends (storage.Open; tests replace it).
 	openBackend func(context.Context, storage.Config) (storage.Backend, error)
 }
@@ -172,6 +175,7 @@ const suspendedPage = `<!doctype html><html lang="en"><head><meta charset="utf-8
 // ServeHTTP routes a request by host.
 func (h *TenantHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	raw, host := h.requestHost(r)
+	h.warnPortOnce(raw)
 	// The container health check and orchestrator probes use any host.
 	if r.URL.Path == "/api/health" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 		jout(w, 200, map[string]any{"status": "ok"})
@@ -230,6 +234,17 @@ func (h *TenantHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer h.release(e, false)
 	r.Host = raw
 	e.handler.ServeHTTP(w, r)
+}
+
+// warnPortOnce logs once when requests arrive on a non-default port while the
+// base domain has none: every generated link (emails, redirects) lacks it.
+func (h *TenantHost) warnPortOnce(rawHost string) {
+	if h.basePort != "" || h.portWarned.Load() {
+		return
+	}
+	if _, p, err := net.SplitHostPort(rawHost); err == nil && p != "80" && p != "443" && h.portWarned.CompareAndSwap(false, true) {
+		log.Printf("WARNING: requests arrive on port %s but the base domain %q has no port: generated links lack it. Set the base domain to %s:%s (console Platform settings or SENDORA_BASE_DOMAIN), or serve the platform on 80/443 behind a proxy", p, h.baseHost, h.baseHost, p)
+	}
 }
 
 // acquire returns the open tenant, opening it when needed, with a reference

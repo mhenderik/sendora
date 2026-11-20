@@ -1357,5 +1357,14 @@
   "The server did not come back yet. Check the server log, then open the new addresses.": "De server is nog niet terug. Controleer het serverlog en open daarna de nieuwe adressen.",
   "The server was restarted.": "De server is herstart.",
   "restarting is not available here; restart the server": "herstarten is hier niet beschikbaar; herstart de server",
-  "restart the server to run the conversion": "herstart de server om de omzetting uit te voeren"
+  "restart the server to run the conversion": "herstart de server om de omzetting uit te voeren",
+  "A host name only: custom domains are served on the standard ports by your reverse proxy.": "Alleen een hostnaam: eigen domeinen worden door je reverse proxy op de standaardpoorten aangeboden.",
+  "Enter a host name only, without http:// or a path.": "Vul alleen een hostnaam in, zonder http:// of pad.",
+  "Enter a port from 1 to 65535, or leave it empty for 80/443.": "Vul een poort van 1 tot 65535 in, of laat het leeg voor 80/443.",
+  "Note: {warning}": "Let op: {warning}",
+  "Saved. The new base domain applies after a restart of the server.": "Opgeslagen. Het nieuwe basisdomein geldt na een herstart van de server.",
+  "Set by SENDORA_BASE_DOMAIN in the server configuration.": "Ingesteld via SENDORA_BASE_DOMAIN in de serverconfiguratie.",
+  "Stored in the data directory; it applies after a restart of the server.": "Opgeslagen in de datamap; het geldt na een herstart van de server.",
+  "The base domain uses a port, but this page is served without one. Check that the platform is reachable on that port.": "Het basisdomein gebruikt een poort, maar deze pagina wordt zonder poort aangeboden. Controleer of het platform via die poort bereikbaar is.",
+  "This page is served on port {port}, but the base domain has no port: unless a reverse proxy serves the platform on 80/443, every address would lack the port.": "Deze pagina wordt aangeboden op poort {port}, maar het basisdomein heeft geen poort: tenzij een reverse proxy het platform op 80/443 aanbiedt, ontbreekt de poort in elk adres."
 }

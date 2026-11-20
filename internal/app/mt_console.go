@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,6 +147,7 @@ func newPlatformConsole(h *TenantHost) *platformConsole {
 			r.Post("/storage/test", c.testPlatformStorage)
 			r.Get("/settings", c.getSettings)
 			r.Post("/restart", c.restart)
+			r.Put("/base-domain", c.putBaseDomain)
 			r.Put("/settings", c.putSettings)
 			r.Get("/audit", c.audit)
 			r.Get("/audit/status", c.auditStatus)
@@ -963,6 +965,10 @@ func (c *platformConsole) addDomain(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "invalid request")
 		return
 	}
+	// A custom domain is a host name; a pasted scheme, port or path is dropped.
+	if h, _, err := SplitBaseDomain(strings.SplitN(strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(b.Domain), "https://"), "http://"), "/", 2)[0]); err == nil {
+		b.Domain = h
+	}
 	d, err := c.h.P.AddCustomDomain(t.ID, b.Domain, c.h.baseHost)
 	if err != nil {
 		jerr(w, 400, err.Error())
@@ -1359,6 +1365,52 @@ func (c *platformConsole) putNetwork(w http.ResponseWriter, r *http.Request) {
 	jout(w, 200, map[string]any{"ok": true})
 }
 
+// ---------- base domain ----------
+
+// putBaseDomain: PUT /api/platform/base-domain {host, port, code}: stores the
+// base domain in DATA_DIR/sendora-mode.json (SENDORA_BASE_DOMAIN wins when
+// set); it applies after a restart. Re-authentication and audit.
+func (c *platformConsole) putBaseDomain(w http.ResponseWriter, r *http.Request) {
+	if os.Getenv("SENDORA_BASE_DOMAIN") != "" {
+		jerr(w, 409, "the base domain is set by SENDORA_BASE_DOMAIN")
+		return
+	}
+	var b struct{ Host, Port, Code string }
+	if decodeLoose(r, &b) != nil {
+		jerr(w, 400, "invalid request")
+		return
+	}
+	combined := strings.ToLower(strings.TrimSpace(b.Host))
+	if p := strings.TrimSpace(b.Port); p != "" {
+		combined += ":" + p
+	}
+	host, port, err := SplitBaseDomain(combined)
+	if err != nil {
+		jerr(w, 400, err.Error())
+		return
+	}
+	next := JoinBaseDomain(host, port)
+	cur := c.h.baseHost + c.h.basePort
+	if next == cur {
+		jout(w, 200, map[string]any{"ok": true, "base_domain": next})
+		return
+	}
+	if !c.stepUp(w, r, b.Code) {
+		return
+	}
+	pm, _ := ReadPersistedMode(c.h.P.DataDir)
+	if pm == nil {
+		pm = &PersistedMode{Mode: "multi-tenant"}
+	}
+	pm.BaseDomain = next
+	if err := writeFile0600(filepath.Join(c.h.P.DataDir, ModeFile), pm); err != nil {
+		jerr(w, 500, "could not store the base domain")
+		return
+	}
+	c.record(r, "platform_base_domain_changed", "settings", "ok", cur+" -> "+next+" (applies after a restart)")
+	jout(w, 200, map[string]any{"ok": true, "base_domain": next, "restart_needed": true})
+}
+
 // ---------- restart ----------
 
 // restart: POST /api/platform/restart {code}: an orderly stop of every tenant
@@ -1394,6 +1446,7 @@ func (c *platformConsole) getSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	jout(w, 200, map[string]any{"settings": c.h.P.Settings(), "managed": managed, "base_domain": c.h.baseHost + c.h.basePort,
 		"restart_available": c.h.restartFn != nil, "restart_mode": RestartMode(),
+		"base_host": c.h.baseHost, "base_port": strings.TrimPrefix(c.h.basePort, ":"), "base_domain_managed": os.Getenv("SENDORA_BASE_DOMAIN") != "",
 		"max_open_tenants_now": len(c.h.OpenTenants())})
 }
 
