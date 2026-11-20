@@ -35,6 +35,9 @@ var settingDefaults = []settingDef{
 	// Platform administrators must use an authenticator app (owner decision;
 	// false lets them sign in with a password only, enrolment stays possible).
 	{"platform_mfa_required", "security", "true"},
+	// What the platform provides to new tenants: none (they set up their own
+	// storage), platform (the default bucket with their prefix) or local disk.
+	{"new_tenant_storage_offer", "storage", "none"},
 }
 
 func init() {
@@ -94,6 +97,12 @@ func NormalizeSetting(key, v string) (string, error) {
 		return norm, err
 	}
 	switch key {
+	case "new_tenant_storage_offer":
+		v = strings.ToLower(v)
+		if !ValidOffer(v) {
+			return "", fmt.Errorf("must be none, platform or local")
+		}
+		return v, nil
 	case "platform_mfa_required":
 		switch strings.ToLower(v) {
 		case "true", "1", "yes":

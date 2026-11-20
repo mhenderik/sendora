@@ -65,7 +65,11 @@ const logout = () => run(async () => { await pconsole('/logout', { method: 'POST
 const tenants = ref([]), q = ref(''), sel = ref(null), created = ref(null)
 const nt = reactive({ slug: '', name: '', admin_email: '', admin_username: '', max_users: '0', max_storage_gb: '0', storage_offer: 'none', allow_own_storage: true })
 const slugHint = computed(() => nt.slug ? t(slugProblem(nt.slug)) : '')
-async function loadTenants() { tenants.value = (await pconsole('/tenants?q=' + encodeURIComponent(q.value))).tenants }
+async function loadTenants() {
+  tenants.value = (await pconsole('/tenants?q=' + encodeURIComponent(q.value))).tenants
+  // The create form preselects "Storage for new tenants" (platform setting).
+  if (!nt.slug) { try { nt.storage_offer = (await pconsole('/settings')).settings.new_tenant_storage_offer || 'none' } catch {} }
+}
 const search = () => run(loadTenants)
 const createTenant = () => run(async () => {
   const d = await pconsole('/tenants', { method: 'POST', body: {
@@ -73,7 +77,7 @@ const createTenant = () => run(async () => {
     max_users: Number(nt.max_users) || 0, max_storage_bytes: gbToBytes(String(nt.max_storage_gb || '0')),
     storage_offer: nt.storage_offer, allow_own_storage: nt.allow_own_storage } })
   created.value = d
-  Object.assign(nt, { slug: '', name: '', admin_email: '', admin_username: '', max_users: '0', max_storage_gb: '0', storage_offer: 'none', allow_own_storage: true })
+  Object.assign(nt, { slug: '', name: '', admin_email: '', admin_username: '', max_users: '0', max_storage_gb: '0', allow_own_storage: true })
   await loadTenants()
 })
 const quota = reactive({ max_users: '0', max_storage_gb: '0' })
@@ -129,12 +133,19 @@ const settingKeys = [
   ['platform_smtp_host', tr('Default SMTP server')], ['platform_smtp_port', tr('SMTP port')], ['platform_smtp_user', tr('SMTP username')],
   ['platform_smtp_from', tr('Sender address')], ['platform_smtp_tls', tr('SMTP security (none, tls, starttls)')]]
 const mfa = reactive({ required: true, code: '' })
+const newOffer = reactive({ value: 'none', code: '' })
+const offerProblem = computed(() => newOffer.value === 'platform' && !!pstore.settings && pstore.savedBackend === 'local')
+const saveNewOffer = () => run(async () => {
+  await pconsole('/settings', { method: 'PUT', body: { new_tenant_storage_offer: newOffer.value, ...reauth(newOffer.code) } })
+  notice.value = t('Saved'); await loadSettings()
+})
 const pstore = reactive({ settings: null, set: {}, managed: [], description: '', test: null, testing: false })
 async function loadSettings() {
   const d = await pconsole('/settings'); settings.value = d.settings; managed.value = d.managed
   mfa.required = d.settings.platform_mfa_required !== 'false'; mfa.code = ''
+  newOffer.value = d.settings.new_tenant_storage_offer || 'none'; newOffer.code = ''
   const ps = await pconsole('/storage')
-  Object.assign(pstore, { settings: { ...ps.settings }, set: ps.set || {}, managed: ps.managed || [], description: ps.description, test: null })
+  Object.assign(pstore, { settings: { ...ps.settings }, set: ps.set || {}, managed: ps.managed || [], description: ps.description, savedBackend: ps.settings.storage_backend, test: null })
 }
 const saveMfa = () => run(async () => {
   if (!mfa.required && !confirm(t('Platform administrators will be able to sign in with only a password. Anyone who learns a password gets full control over all tenants. Continue?'))) return
@@ -424,6 +435,21 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
           <p v-if="pstore.test && !pstore.test.ok" class="err" role="alert">{{ t('Connection test failed: {error}', { error: pstore.test.error }) }}</p>
           <div class="actions"><button :disabled="busy">{{ t('Save') }}</button>
             <button v-if="pstore.settings.storage_backend !== 'local'" type="button" class="secondary" :disabled="pstore.testing" @click="testPlatformStorage">{{ pstore.testing ? t('Testing…') : t('Test connection') }}</button></div>
+        </form>
+
+        <form v-if="tab === 'settings' && settings" class="card" @submit.prevent="saveNewOffer">
+          <h2>{{ t('Storage for new tenants') }}</h2>
+          <select id="no-offer" v-model="newOffer.value" :disabled="managed.includes('new_tenant_storage_offer')" :aria-label="t('Storage for new tenants')">
+            <option value="none">{{ t('None: the tenant sets up its own storage') }}</option>
+            <option value="platform">{{ t('Platform bucket (own prefix)') }}</option>
+            <option value="local">{{ t('Local disk on the server') }}</option>
+          </select>
+          <p v-if="managed.includes('new_tenant_storage_offer')" class="muted">{{ t('Set by the server configuration.') }}</p>
+          <p v-if="offerProblem" class="err" role="alert">{{ t('No platform default storage backend is configured. Configure Default storage first; until then the platform bucket cannot be offered.') }}</p>
+          <p class="muted">{{ t('Preselected when creating a tenant; it can still be changed per tenant. The change is recorded in the platform audit log.') }}</p>
+          <label for="no-code">{{ reauthLabel }}</label>
+          <input id="no-code" v-model="newOffer.code" :type="byPassword ? 'password' : 'text'" autocomplete="off" />
+          <div class="actions"><button :disabled="busy || offerProblem || managed.includes('new_tenant_storage_offer') || newOffer.value === settings.new_tenant_storage_offer">{{ t('Save') }}</button></div>
         </form>
 
         <div v-if="tab === 'account'" class="card">

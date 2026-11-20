@@ -620,8 +620,8 @@ func (h *TenantHost) CreateTenant(actor, slug, name, adminUser, adminEmail strin
 	if storageOffer == "" {
 		storageOffer = platform.OfferNone
 	}
-	if !platform.ValidOffer(storageOffer) {
-		return nil, "", false, errors.New("storage offer must be none, platform or local")
+	if err := h.P.CheckOffer(storageOffer); err != nil {
+		return nil, "", false, err
 	}
 	t, err := h.P.CreateTenant(slug, name, maxUsers, maxStorage)
 	if err != nil {

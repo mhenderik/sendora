@@ -150,6 +150,27 @@ func MergeStorageSettings(prev map[string]string, in map[string]string) (map[str
 	return next, nil
 }
 
+// NewTenantOffer is the storage offer for new tenants (platform setting
+// new_tenant_storage_offer, default none).
+func (p *Platform) NewTenantOffer() string {
+	if o := p.Setting("new_tenant_storage_offer"); ValidOffer(o) {
+		return o
+	}
+	return OfferNone
+}
+
+// CheckOffer refuses an offer the platform cannot provide: the platform
+// bucket needs a configured platform default backend.
+func (p *Platform) CheckOffer(offer string) error {
+	if !ValidOffer(offer) {
+		return errors.New("storage offer must be none, platform or local")
+	}
+	if offer == OfferPlatform && p.PlatformStorage().Backend == storage.KindLocal {
+		return errors.New("configure a platform default storage backend (Default storage) before offering the platform bucket")
+	}
+	return nil
+}
+
 // SetStorage stores a tenant's storage decision: the platform's offer and
 // whether the tenant may configure storage of its own.
 func (p *Platform) SetStorage(tenantID, offer string, tenantManaged bool) error {

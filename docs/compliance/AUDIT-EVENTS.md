@@ -245,6 +245,7 @@ to that tenant's log with the role `platform_admin` (marked *both* below).
 | Action | When | Actor | Target | Detail |
 |---|---|---|---|---|
 | `platform_mfa_requirement_changed` | `platform_mfa_required` switched (after a fresh confirmation) | platform administrator | `settings` | `platform_mfa_required <old> -> <new>` and the consequence |
+| `platform_new_tenant_storage_changed` | "Storage for new tenants" changed (after a fresh confirmation) | platform administrator | `settings` | `new_tenant_storage_offer <old> -> <new>` |
 | `platform_admin_offline_reset` | `sendora-db platform-admin-reset` | system (`sendora-db`) | `admin <name>` | `authenticator removed` and/or `temporary password set`; sessions ended |
 | `password_changed`, `password_change_failed` | A platform administrator changed their password (also after a temporary password) | platform administrator | `admin <name>` | `temporary password replaced` when applicable |
 | `platform_storage_changed`, `platform_storage_tested`, `platform_storage_test_failed` | Platform default storage saved or tested | platform administrator | `storage` | `<old> -> <new>; keys=...` or the location and error |

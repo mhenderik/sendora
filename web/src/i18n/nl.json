@@ -1290,5 +1290,9 @@
   "Uploading is not available yet: your organisation has not set up storage. Please ask an administrator.": "Uploaden is nog niet mogelijk: je organisatie heeft nog geen opslag ingesteld. Vraag het aan een beheerder.",
   "Without storage provided by the platform, uploads are refused until the tenant's administrator sets up storage under Admin → Storage.": "Zonder opslag van het platform worden uploads geweigerd totdat de beheerder van de tenant opslag instelt onder Beheer → Opslag.",
   "Set up storage first under Admin → Storage": "Stel eerst opslag in onder Beheer → Opslag",
-  "choose S3, Azure Blob Storage or Google Cloud Storage: the platform provides no storage for this organisation": "kies S3, Azure Blob Storage of Google Cloud Storage: het platform biedt geen opslag voor deze organisatie"
+  "choose S3, Azure Blob Storage or Google Cloud Storage: the platform provides no storage for this organisation": "kies S3, Azure Blob Storage of Google Cloud Storage: het platform biedt geen opslag voor deze organisatie",
+  "Storage for new tenants": "Opslag voor nieuwe tenants",
+  "No platform default storage backend is configured. Configure Default storage first; until then the platform bucket cannot be offered.": "Er is geen standaardopslag van het platform ingesteld. Stel eerst de standaardopslag in; tot die tijd kan de bucket van het platform niet worden aangeboden.",
+  "Preselected when creating a tenant; it can still be changed per tenant. The change is recorded in the platform audit log.": "Vooraf geselecteerd bij het aanmaken van een tenant; per tenant kan het nog worden gewijzigd. De wijziging wordt vastgelegd in het auditlog van het platform.",
+  "configure a platform default storage backend (Default storage) before offering the platform bucket": "stel eerst een standaardopslag van het platform in (Standaardopslag) voordat je de bucket van het platform aanbiedt"
 }

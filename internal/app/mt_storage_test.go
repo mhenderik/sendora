@@ -605,3 +605,53 @@ func TestMTNewTenantWithoutStorageAndConsolePrivacy(t *testing.T) {
 		t.Fatal("console changed the tenant's storage settings")
 	}
 }
+
+// "Storage for new tenants": re-authentication and an audit record; the
+// platform bucket only while a platform default backend exists; the create
+// form uses it unless the administrator picks another offer.
+func TestMTNewTenantStorageOfferSetting(t *testing.T) {
+	m := newMTEnv(t)
+	mb := m.memoryStorage()
+	c, cookie, secret := m.consoleLogin()
+	if m.p.NewTenantOffer() != platform.OfferNone {
+		t.Fatal("default must be none")
+	}
+	r := c.do("PUT", "/api/platform/settings", "", map[string]any{"new_tenant_storage_offer": "platform", "code": m.nextCode(secret)}, "Cookie", cookie)
+	if r.Code != 400 || !strings.Contains(r.S("error"), "platform default storage") {
+		t.Fatalf("platform offer without a default backend: %d %s", r.Code, r.Body)
+	}
+	c.want(c.do("PUT", "/api/platform/storage", "", map[string]any{"settings": platformS3("shared-bucket", "")}, "Cookie", cookie), 200, "platform storage")
+	c.want(c.do("PUT", "/api/platform/settings", "", map[string]any{"new_tenant_storage_offer": "platform"}, "Cookie", cookie), 403, "offer change without re-auth")
+	c.want(c.do("PUT", "/api/platform/settings", "", map[string]any{"new_tenant_storage_offer": "bogus", "code": m.nextCode(secret)}, "Cookie", cookie), 400, "invalid offer")
+	c.want(c.do("PUT", "/api/platform/settings", "", map[string]any{"new_tenant_storage_offer": "platform", "code": m.nextCode(secret)}, "Cookie", cookie), 200, "offer platform to new tenants")
+	if g := c.do("GET", "/api/platform/settings", "", nil, "Cookie", cookie); !strings.Contains(string(g.Body), `"new_tenant_storage_offer":"platform"`) {
+		t.Fatalf("settings: %s", g.Body)
+	}
+	// The default backend cannot be removed while new tenants are offered it.
+	c.want(c.do("PUT", "/api/platform/storage", "", map[string]any{"settings": map[string]any{"storage_backend": "local"}}, "Cookie", cookie), 400, "remove default while offered")
+
+	r = c.do("POST", "/api/platform/tenants", "", map[string]any{"slug": "klantp", "admin_email": "boss@klantp.test"}, "Cookie", cookie)
+	c.want(r, 201, "create with the platform setting")
+	tp, _ := m.p.TenantBySlug("klantp")
+	if sc, _ := m.p.Storage(tp.ID); sc.Offer != platform.OfferPlatform {
+		t.Fatalf("new tenant offer %+v", sc)
+	}
+	link, _ := r.J()["setup_link"].(string)
+	e := m.host("klantp." + mtBase)
+	e.want(e.do("POST", "/api/auth/reset-password", "", map[string]any{"token": link[strings.LastIndex(link, "/")+1:], "password": mtPassword}), 200, "first password")
+	lr := e.do("POST", "/api/auth/login", "", map[string]any{"username": "boss", "password": mtPassword})
+	e.want(e.share(lr.S("access_token"), map[string]string{"a.txt": "straight away", "b.txt": "second"}, nil), 201, "upload straight away")
+	if keys := mb.keys(formConfig(platformS3("shared-bucket", ""))); len(keys) != 2 || !strings.HasPrefix(keys[0], "tenants/"+tp.ID+"/files/") {
+		t.Fatalf("objects: %v", keys)
+	}
+	// Another offer can still be chosen per tenant at creation.
+	c.want(c.do("POST", "/api/platform/tenants", "", map[string]any{"slug": "klantq", "admin_email": "boss@klantq.test", "storage_offer": "none"}, "Cookie", cookie), 201, "create with none")
+	tq, _ := m.p.TenantBySlug("klantq")
+	if sc, _ := m.p.Storage(tq.ID); sc.Offer != platform.OfferNone {
+		t.Fatalf("explicit offer ignored: %+v", sc)
+	}
+	au := c.do("GET", "/api/platform/audit", "", nil, "Cookie", cookie)
+	if !strings.Contains(string(au.Body), `"action":"platform_new_tenant_storage_changed"`) {
+		t.Fatalf("offer change not audited: %s", au.Body)
+	}
+}

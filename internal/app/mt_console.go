@@ -782,6 +782,13 @@ func (c *platformConsole) createTenant(w http.ResponseWriter, r *http.Request) {
 	}
 	cs := consoleFrom(r)
 	allowOwn := b.AllowOwnStorage == nil || *b.AllowOwnStorage
+	if b.StorageOffer == "" {
+		b.StorageOffer = c.h.P.NewTenantOffer()
+	}
+	if err := c.h.P.CheckOffer(b.StorageOffer); err != nil {
+		jerr(w, 400, err.Error())
+		return
+	}
 	t, link, emailed, err := c.h.CreateTenant(cs.admin.Username, b.Slug, b.Name, b.AdminUsername, b.AdminEmail, maxUsers, maxStorage, b.StorageOffer, allowOwn)
 	if err != nil {
 		c.record(r, "tenant_create_failed", "tenant "+clip(b.Slug, 64), "failed", clip(err.Error(), 200))
@@ -1135,6 +1142,12 @@ func (c *platformConsole) putStorage(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 404, "not found")
 		return
 	}
+	if b.Offer != prev.Offer {
+		if err := c.h.P.CheckOffer(b.Offer); err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+	}
 	if err := c.h.P.SetStorage(t.ID, b.Offer, b.TenantManaged); err != nil {
 		jerr(w, 400, err.Error())
 		return
@@ -1224,6 +1237,10 @@ func (c *platformConsole) putPlatformStorage(w http.ResponseWriter, r *http.Requ
 	next, cfg, err := c.platformStorageNext(f)
 	if err != nil {
 		jerr(w, 400, err.Error())
+		return
+	}
+	if cfg.Backend == storage.KindLocal && c.h.P.NewTenantOffer() == platform.OfferPlatform {
+		jerr(w, 400, "new tenants are offered the platform bucket: change \"Storage for new tenants\" first")
 		return
 	}
 	cur := c.h.P.PlatformStorage()
@@ -1350,7 +1367,24 @@ func (c *platformConsole) putSettings(w http.ResponseWriter, r *http.Request) {
 		in["platform_mfa_required"] = norm
 		mfaChange = (norm == "true") != oldMFA
 	}
-	if mfaChange && !c.h.cfg.Managed["platform_mfa_required"] && !c.stepUp(w, r, code) {
+	// The storage offer for new tenants: re-authentication, and the platform
+	// bucket only while a platform default backend exists.
+	oldOffer := c.h.P.NewTenantOffer()
+	offerChange := false
+	if v, ok := in["new_tenant_storage_offer"]; ok {
+		norm, err := platform.NormalizeSetting("new_tenant_storage_offer", v)
+		if err != nil {
+			jerr(w, 400, "new_tenant_storage_offer: "+err.Error())
+			return
+		}
+		if err := c.h.P.CheckOffer(norm); err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		in["new_tenant_storage_offer"] = norm
+		offerChange = norm != oldOffer
+	}
+	if ((mfaChange && !c.h.cfg.Managed["platform_mfa_required"]) || (offerChange && !c.h.cfg.Managed["new_tenant_storage_offer"])) && !c.stepUp(w, r, code) {
 		return
 	}
 	changed, err := c.h.P.PutSettings(in, c.h.cfg.Managed)
@@ -1359,6 +1393,9 @@ func (c *platformConsole) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.record(r, "platform_settings_changed", "settings", "ok", "keys="+strings.Join(changed, ","))
+	if offerChange {
+		c.record(r, "platform_new_tenant_storage_changed", "settings", "ok", fmt.Sprintf("new_tenant_storage_offer %s -> %s", oldOffer, c.h.P.NewTenantOffer()))
+	}
 	if mfaChange {
 		newMFA := c.h.P.MFARequired()
 		detail := fmt.Sprintf("platform_mfa_required %t -> %t", oldMFA, newMFA)

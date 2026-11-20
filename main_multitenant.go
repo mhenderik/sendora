@@ -49,6 +49,9 @@ func runMultiTenant(dataDir string, key []byte) {
 	if os.Getenv("SENDORA_STORAGE_BACKEND") != "" {
 		log.Printf("WARNING: SENDORA_STORAGE_* is ignored in multi-tenant mode; use SENDORA_PLATFORM_STORAGE_* for the platform default storage")
 	}
+	if err := p.CheckOffer(p.NewTenantOffer()); err != nil {
+		log.Fatal("SENDORA_NEW_TENANT_STORAGE_OFFER / new_tenant_storage_offer: ", err)
+	}
 	if !p.MFARequired() {
 		log.Printf("WARNING: platform_mfa_required is off: platform administrators sign in with a password only")
 	}

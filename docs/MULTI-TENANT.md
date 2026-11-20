@@ -117,6 +117,7 @@ The request host decides everything:
 | `SENDORA_TENANT_IDLE_MINUTES`, `SENDORA_MAX_OPEN_TENANTS`, `SENDORA_TENANT_MAINTENANCE_HOURS`, `SENDORA_DEFAULT_MAX_USERS`, `SENDORA_DEFAULT_MAX_STORAGE_BYTES`, `SENDORA_PLATFORM_AUDIT_RETENTION_DAYS` | Platform settings (also editable in the console unless set here). |
 | `SENDORA_PLATFORM_SMTP_HOST`, `_PORT`, `_USER`, `_PASSWORD` (or `_PASSWORD_FILE`), `_FROM`, `_TLS` | Default SMTP server for tenants that have no SMTP server of their own (welcome mails, resets, notifications). |
 | `SENDORA_PLATFORM_STORAGE_*` | The platform default object storage (§8): the same fields as a single-tenant installation's `SENDORA_STORAGE_*` with `PLATFORM_` in front (`SENDORA_PLATFORM_STORAGE_BACKEND`, `SENDORA_PLATFORM_STORAGE_S3_BUCKET`, `SENDORA_PLATFORM_STORAGE_S3_SECRET_KEY_FILE`, ...). `SENDORA_STORAGE_*` is ignored in multi-tenant mode. |
+| `SENDORA_NEW_TENANT_STORAGE_OFFER` | Storage the platform provides to new tenants: `none` (default; they set up their own), `platform` (the platform bucket; needs a platform default backend) or `local`. Preselected in the create-tenant form (§8). |
 | `SENDORA_PLATFORM_MFA_REQUIRED` | `true` (default): platform administrators must use an authenticator app. `false`: password-only sign-in (§5). |
 
 Every other `SENDORA_<SETTING>` variable keeps its meaning but applies to
@@ -268,6 +269,15 @@ the tenant):
 | --- | --- |
 | **Tenant may configure its own storage** (default on) | The tenant's administrators configure S3, Azure Blob or GCS in Admin → Storage (same form and validation as single-tenant mode, *Test connection*, re-authentication, audit). Explicit credentials only (never the server's IAM role, managed/workload identity or application default credentials), and the endpoint must pass the SSRF guard (§8a) when saved and on every connection. Off: the tenant sees its storage read-only. |
 | **Storage provided by the platform** (default *none*) | Optional offers: the **platform bucket** — the platform default (*Platform settings → Default storage* or `SENDORA_PLATFORM_STORAGE_*`) under the tenant's fixed prefix `<platform prefix>tenants/<tenant id>/`; or the **local disk** of the server (the tenant's directory), only when the platform explicitly offers it. In the tenant's form the offer appears as the first choice. |
+
+**Storage for new tenants** (platform setting `new_tenant_storage_offer`, console
+*Platform settings*, or `SENDORA_NEW_TENANT_STORAGE_OFFER`; default `none`) is
+preselected in the create-tenant form and can still be changed per tenant.
+Changing it needs re-authentication and is recorded as
+`platform_new_tenant_storage_changed`. The platform bucket can only be offered
+(as this setting or per tenant) while a platform default backend is configured;
+the console warns and refuses otherwise, and the default backend cannot be set
+back to local while new tenants are offered the platform bucket.
 
 **The platform never sees a tenant's own storage**: the console and its API show
 only the kind ("Own storage (Azure)") and the bytes stored — no bucket or

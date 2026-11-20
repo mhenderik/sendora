@@ -139,6 +139,11 @@ unchanged** (same layout, no migration needed).
   creation form defaults to *none*. **The platform never sees a tenant's own storage**:
   the console and its API show only the kind ("Own storage (Azure)") and the usage, no
   bucket, container, endpoint, prefix, account or key, and cannot change or test it.
+  The platform setting **Storage for new tenants** (`new_tenant_storage_offer`, console or
+  `SENDORA_NEW_TENANT_STORAGE_OFFER`; default `none`) is preselected in the create-tenant
+  form; changing it needs re-authentication and is audited
+  (`platform_new_tenant_storage_changed`). The platform bucket can only be offered while
+  a platform default backend is configured.
   Existing tenants keep what they had; every file keeps its location, the tenant's
   migration job and `sendora-db storage-migrate -tenant` move earlier files, and
   deleting a tenant removes its prefix (and Sendora's objects in its own storage;
