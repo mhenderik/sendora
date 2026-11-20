@@ -881,16 +881,30 @@ func (c *platformConsole) setQuotas(w http.ResponseWriter, r *http.Request) {
 	if t == nil {
 		return
 	}
-	var b struct{ MaxUsers, MaxStorageBytes int64 }
+	var b struct {
+		MaxUsers        int64
+		MaxStorageBytes *int64
+		Code            string
+	}
 	if decodeLoose(r, &b) != nil {
 		jerr(w, 400, "invalid request")
 		return
 	}
-	if err := c.h.SetTenantQuotas(consoleFrom(r).admin.Username, t.ID, b.MaxUsers, b.MaxStorageBytes); err != nil {
+	maxStorage := t.MaxStorageBytes
+	if b.MaxStorageBytes != nil {
+		maxStorage = *b.MaxStorageBytes
+	}
+	// The storage limit has one source of truth (max_storage_bytes) and is
+	// changed with a fresh confirmation (also from the Storage card).
+	if maxStorage != t.MaxStorageBytes && !c.stepUp(w, r, b.Code) {
+		return
+	}
+	b.MaxStorageBytes = &maxStorage
+	if err := c.h.SetTenantQuotas(consoleFrom(r).admin.Username, t.ID, b.MaxUsers, maxStorage); err != nil {
 		jerr(w, 400, err.Error())
 		return
 	}
-	c.record(r, "tenant_quota_changed", tenantTarget(t), "ok", fmt.Sprintf("max_users %d->%d max_storage_bytes %d->%d", t.MaxUsers, b.MaxUsers, t.MaxStorageBytes, b.MaxStorageBytes))
+	c.record(r, "tenant_quota_changed", tenantTarget(t), "ok", fmt.Sprintf("max_users %d->%d max_storage_bytes %d->%d", t.MaxUsers, b.MaxUsers, t.MaxStorageBytes, maxStorage))
 	jout(w, 200, map[string]any{"ok": true})
 }
 
@@ -1104,11 +1118,13 @@ func (c *platformConsole) storageView(t *platform.Tenant) (map[string]any, error
 	c.h.withTenant(t.ID, func(s *Server) error { kind = s.StorageKind(); return nil })
 	def := c.h.P.PlatformStorage()
 	return map[string]any{
-		"offer":            sc.Offer,
-		"tenant_managed":   sc.TenantManaged,
-		"kind":             kind,
-		"usage_bytes":      t.StatStorage,
-		"platform_backend": def.Backend,
+		"offer":             sc.Offer,
+		"tenant_managed":    sc.TenantManaged,
+		"kind":              kind,
+		"usage_bytes":       t.StatStorage,
+		"max_storage_bytes": t.MaxStorageBytes,
+		"limit_applies":     !strings.HasPrefix(kind, "own:"),
+		"platform_backend":  def.Backend,
 	}, nil
 }
 

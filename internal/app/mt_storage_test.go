@@ -583,7 +583,7 @@ func TestMTNewTenantWithoutStorageAndConsolePrivacy(t *testing.T) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	if strings.Join(keys, ",") != "kind,offer,platform_backend,tenant_managed,usage_bytes" {
+	if strings.Join(keys, ",") != "kind,limit_applies,max_storage_bytes,offer,platform_backend,tenant_managed,usage_bytes" {
 		t.Fatalf("console storage view fields: %v", keys)
 	}
 	forbidden := []string{"klantnstore", "klantn-files", "secret-prefix", "S0VZLVNFQ1JFVA", "blob.core.windows.net", "boss@klantn.test", "Quarterly secrets",
@@ -653,5 +653,55 @@ func TestMTNewTenantStorageOfferSetting(t *testing.T) {
 	au := c.do("GET", "/api/platform/audit", "", nil, "Cookie", cookie)
 	if !strings.Contains(string(au.Body), `"action":"platform_new_tenant_storage_changed"`) {
 		t.Fatalf("offer change not audited: %s", au.Body)
+	}
+}
+
+// The platform's storage limit (max_storage_bytes, one source of truth)
+// applies to storage the platform provides; changing it needs re-auth and is
+// audited; the tenant sees used / limit; storage of the tenant's own has no
+// platform limit.
+func TestMTStorageLimitForProvidedStorage(t *testing.T) {
+	m := newMTEnv(t)
+	m.memoryStorage()
+	old := netguard.LookupNetIP
+	t.Cleanup(func() { netguard.LookupNetIP = old })
+	netguard.LookupNetIP = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
+	c, cookie, secret := m.consoleLogin()
+	k, tok := m.newTenant("klantl") // the platform offers local disk
+	tl, _ := m.p.TenantBySlug("klantl")
+	q := "/api/platform/tenants/" + tl.ID + "/quotas"
+	c.want(c.do("PUT", q, "", map[string]any{"max_users": 0, "max_storage_bytes": 50}, "Cookie", cookie), 403, "limit without re-auth")
+	c.want(c.do("PUT", q, "", map[string]any{"max_users": 0, "max_storage_bytes": 50, "code": m.nextCode(secret)}, "Cookie", cookie), 200, "limit")
+	// Changing only the user quota needs no re-auth and keeps the limit.
+	c.want(c.do("PUT", q, "", map[string]any{"max_users": 7}, "Cookie", cookie), 200, "users only")
+	if tn, _ := m.p.Tenant(tl.ID); tn.MaxStorageBytes != 50 || tn.MaxUsers != 7 {
+		t.Fatalf("quotas %+v", tn)
+	}
+	k.want(k.share(tok, map[string]string{"a.txt": strings.Repeat("a", 20), "b.txt": strings.Repeat("b", 20)}, nil), 201, "within the limit")
+	r := k.do("POST", "/api/uploads", tok, map[string]any{"files": []map[string]any{{"name": "big.bin", "full_path": "big.bin", "size": 30}}})
+	if r.Code != 413 || r.S("error") != msgTenantStorageFull {
+		t.Fatalf("over the limit: %d %s", r.Code, r.Body)
+	}
+	st := k.do("GET", "/api/storage", tok, nil)
+	if tn, _ := st.J()["tenant"].(map[string]any); tn == nil || tn["limit_applies"] != true || tn["limit_bytes"] != float64(50) || tn["used_bytes"] != float64(40) {
+		t.Fatalf("tenant storage status: %s", st.Body)
+	}
+	sv := c.do("GET", "/api/platform/tenants/"+tl.ID+"/storage", "", nil, "Cookie", cookie)
+	if sv.J()["limit_applies"] != true || sv.J()["max_storage_bytes"] != float64(50) {
+		t.Fatalf("console storage view: %s", sv.Body)
+	}
+	// Storage of the tenant's own: no platform limit.
+	own := map[string]any{"storage_backend": "s3", "storage_s3_endpoint": "https://s3.example.com", "storage_s3_region": "eu-west-1", "storage_s3_bucket": "klantl",
+		"storage_s3_prefix": "", "storage_s3_auth": "static", "storage_s3_access_key": "AKL", "storage_s3_secret_key": "sl"}
+	k.want(k.do("PUT", "/api/settings", tok, own), 200, "own storage")
+	k.want(k.share(tok, map[string]string{"c.txt": strings.Repeat("c", 100), "d.txt": "d"}, nil), 201, "own storage has no platform limit")
+	if sv := c.do("GET", "/api/platform/tenants/"+tl.ID+"/storage", "", nil, "Cookie", cookie); sv.J()["limit_applies"] != false {
+		t.Fatalf("limit shown for own storage: %s", sv.Body)
+	}
+	au := c.do("GET", "/api/platform/audit", "", nil, "Cookie", cookie)
+	if !strings.Contains(string(au.Body), "max_storage_bytes 0-\\u003e50") {
+		t.Fatalf("limit change not audited: %s", au.Body)
 	}
 }

@@ -206,8 +206,10 @@ platform did.
   (administrator, self-registration, sign-in provider) respects it; the admin
   screen and registration answer with a clear message.
 - **Maximum storage** (bytes; 0 = unlimited): stored plus reserved bytes of all
-  shares of the tenant, checked when an upload is admitted, in addition to the
-  per-user quotas.
+  shares of the tenant, checked when an upload (also a reverse-share upload) is
+  admitted, in addition to the per-user quotas. It is the **storage limit** set on
+  the tenant's Storage card and applies only while the tenant uses storage the
+  platform provides (§8); changing it needs re-authentication.
 
 Quota changes apply immediately to an open tenant.
 
@@ -306,6 +308,16 @@ the tenant):
 | --- | --- |
 | **Tenant may configure its own storage** (default on) | The tenant's administrators configure S3, Azure Blob or GCS in Admin → Storage (same form and validation as single-tenant mode, *Test connection*, re-authentication, audit). Explicit credentials only (never the server's IAM role, managed/workload identity or application default credentials), and the endpoint must pass the SSRF guard (§8a) when saved and on every connection. Off: the tenant sees its storage read-only. |
 | **Storage provided by the platform** (default *none*) | Optional offers: the **platform bucket** — the platform default (*Platform settings → Default storage* or `SENDORA_PLATFORM_STORAGE_*`) under the tenant's fixed prefix `<platform prefix>tenants/<tenant id>/`; or the **local disk** of the server (the tenant's directory), only when the platform explicitly offers it. In the tenant's form the offer appears as the first choice. |
+
+**Storage limit** (GB, per tenant, on the tenant's *Storage* card; the same value
+as the quota `max_storage_bytes`, so there is one source of truth): applies only
+while the tenant stores new files on storage the platform provides (platform
+bucket or local disk). Uploads and reverse-share uploads that would exceed it
+are refused ("the storage limit of this organisation is reached"); tenant
+administrators see *used / limit* in Admin → Storage. Changing it needs
+re-authentication and is recorded as `tenant_quota_changed`. Storage the tenant
+configured itself has no platform limit (the field is hidden with an explanation).
+The *Quotas* card keeps the maximum number of users.
 
 **Storage for new tenants** (platform setting `new_tenant_storage_offer`, console
 *Platform settings*, or `SENDORA_NEW_TENANT_STORAGE_OFFER`; default `none`) is

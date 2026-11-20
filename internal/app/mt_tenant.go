@@ -219,10 +219,19 @@ func (s *Server) tenantUserAdmits(w http.ResponseWriter) bool {
 	return true
 }
 
-// tenantStorageAdmits checks an upload reservation against the tenant's total
-// storage quota, inside the caller's admission transaction.
+// tenantStorageAdmits checks an upload reservation against the tenant's
+// storage limit (set by the platform for the storage it provides), inside the
+// caller's admission transaction. Storage the tenant configured itself has no
+// platform limit.
 func (s *Server) tenantStorageAdmits(w http.ResponseWriter, tx *sql.Tx, add int64) bool {
 	if s.tenant == nil {
+		return true
+	}
+	// Read through the transaction (the store has one connection): storage of
+	// the tenant's own is in use when allowed and a remote backend is chosen.
+	var backend string
+	tx.QueryRow(`SELECT value FROM settings WHERE key='storage_backend'`).Scan(&backend)
+	if s.tenantStorageEditable() && backend != "" && backend != storage.KindLocal {
 		return true
 	}
 	var limit, stored, reserved int64
@@ -235,10 +244,26 @@ func (s *Server) tenantStorageAdmits(w http.ResponseWriter, tx *sql.Tx, add int6
 		return false
 	}
 	if stored+reserved+add > limit {
-		jerr(w, 413, "the storage quota of this organisation is exceeded")
+		jerr(w, 413, msgTenantStorageFull)
 		return false
 	}
 	return true
+}
+
+const msgTenantStorageFull = "the storage limit of this organisation is reached: delete old shares or ask the platform administrator for more space"
+
+// platformLimitApplies reports whether the platform's storage limit applies:
+// new files go to storage the platform provides (its bucket or the server's
+// disk), not to storage the tenant configured itself.
+func (s *Server) platformLimitApplies() bool {
+	return s.tenant != nil && !s.storageFromSettings().TenantManaged
+}
+
+// storageLimit returns the platform's storage limit in bytes (0 = none).
+func (s *Server) storageLimit() int64 {
+	var limit int64
+	s.St.DB.QueryRow(`SELECT max_storage_bytes FROM tenant_limits WHERE id=1`).Scan(&limit)
+	return limit
 }
 
 // TenantStats returns the counts the platform console shows: accounts (not

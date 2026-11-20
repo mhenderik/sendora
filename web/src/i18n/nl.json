@@ -1323,5 +1323,13 @@
   "Users then sign in at <slug>.<base domain>. With the current address as custom domain, existing share links keep working.": "Gebruikers loggen daarna in op <slug>.<basisdomein>. Met het huidige adres als eigen domein blijven bestaande deellinks werken.",
   "What happens": "Wat er gebeurt",
   "no conversion is scheduled": "er is geen omzetting gepland",
-  "restart the server to run the conversion (no process supervisor detected)": "herstart de server om de omzetting uit te voeren (geen procesbeheerder gevonden)"
+  "restart the server to run the conversion (no process supervisor detected)": "herstart de server om de omzetting uit te voeren (geen procesbeheerder gevonden)",
+  "Applies to the storage the platform provides. Uploads that would exceed it are refused.": "Geldt voor de opslag die het platform biedt. Uploads die de limiet zouden overschrijden, worden geweigerd.",
+  "Storage limit": "Opslaglimiet",
+  "Storage limit in GB (0 = unlimited)": "Opslaglimiet in GB (0 = onbeperkt)",
+  "Storage used: {used} of {limit} (limit set by the platform).": "Opslag in gebruik: {used} van {limit} (limiet ingesteld door het platform).",
+  "The platform provides no storage to this tenant, so there is no platform storage limit.": "Het platform biedt deze tenant geen opslag, dus er geldt geen opslaglimiet van het platform.",
+  "The tenant uses storage of its own, which it pays for and manages itself: no platform storage limit applies.": "De tenant gebruikt eigen opslag, die hij zelf beheert en betaalt: er geldt geen opslaglimiet van het platform.",
+  "Used": "In gebruik",
+  "the storage limit of this organisation is reached: delete old shares or ask the platform administrator for more space": "de opslaglimiet van deze organisatie is bereikt: verwijder oude gedeelde bestanden of vraag de platformbeheerder om meer ruimte"
 }

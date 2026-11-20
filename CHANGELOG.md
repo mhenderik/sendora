@@ -150,6 +150,11 @@ unchanged** (same layout, no migration needed).
   creation form defaults to *none*. **The platform never sees a tenant's own storage**:
   the console and its API show only the kind ("Own storage (Azure)") and the usage, no
   bucket, container, endpoint, prefix, account or key, and cannot change or test it.
+  A per-tenant **storage limit** in GB on the console's Storage card (the existing
+  `max_storage_bytes` quota, one source of truth; re-authentication, audited) applies
+  only to storage the platform provides; uploads and reverse-share uploads beyond it
+  are refused with a clear message and tenant administrators see used / limit. Storage
+  of the tenant's own has no platform limit.
   The platform setting **Storage for new tenants** (`new_tenant_storage_offer`, console or
   `SENDORA_NEW_TENANT_STORAGE_OFFER`; default `none`) is preselected in the create-tenant
   form; changing it needs re-authentication and is audited

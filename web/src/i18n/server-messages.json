@@ -411,7 +411,8 @@
     "choose S3, Azure Blob Storage or Google Cloud Storage: the platform provides no storage for this organisation",
     "configure a platform default storage backend (Default storage) before offering the platform bucket",
     "no conversion is scheduled",
-    "restart the server to run the conversion (no process supervisor detected)"
+    "restart the server to run the conversion (no process supervisor detected)",
+    "the storage limit of this organisation is reached: delete old shares or ask the platform administrator for more space"
   ],
   "dynamic": [
     "%d file(s) in %d share(s) are missing on disk and cannot be downloaded after the import.",

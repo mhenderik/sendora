@@ -87,6 +87,7 @@ const statusLabel = st => ({ running: t('running'), finished: t('finished'), fai
     <h1>{{ t('Storage') }}</h1>
     <p>{{ t('New files are stored in: {where}', { where: status.description }) }}</p>
     <p v-if="status.error" class="err" role="alert">{{ t('The storage backend is not usable: {error}', { error: status.error }) }}</p>
+    <p v-if="tenant && tenant.limit_applies && tenant.limit_bytes > 0" :class="tenant.used_bytes >= tenant.limit_bytes ? 'err' : ''" role="status">{{ t('Storage used: {used} of {limit} (limit set by the platform).', { used: fmtBytes(tenant.used_bytes), limit: fmtBytes(tenant.limit_bytes) }) }}</p>
     <p v-if="status.backend && status.backend !== 'local'" class="notice" role="note">{{ t('Remote storage can make uploads slower: after the transfer, each file is encrypted and copied to the object store before the share is ready, so large files or a distant region take longer. Downloads are read back from the object store and can be slower as well.') }}</p>
     <p class="muted">{{ t('Files are encrypted before they leave the server: an object store only ever receives encrypted data under random names that reveal neither share links nor file names.') }}</p>
     <h2 style="margin-top:20px">{{ t('Where files live') }}</h2>

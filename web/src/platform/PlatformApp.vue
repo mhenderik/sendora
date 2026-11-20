@@ -104,13 +104,20 @@ const refreshSel = () => openTenant(sel.value.tenant.id)
 const tid = () => sel.value.tenant.id
 const setStatus = s => run(async () => { await pconsole(`/tenants/${tid()}/${s}`, { method: 'POST' }); await refreshSel(); await loadTenants() })
 const saveQuota = () => run(async () => {
-  await pconsole(`/tenants/${tid()}/quotas`, { method: 'PUT', body: { max_users: Number(quota.max_users) || 0, max_storage_bytes: gbToBytes(String(quota.max_storage_gb || '0')) } })
+  await pconsole(`/tenants/${tid()}/quotas`, { method: 'PUT', body: { max_users: Number(quota.max_users) || 0 } })
   notice.value = t('Saved'); await loadTenants()
 })
 const addDomain = () => run(async () => { await pconsole(`/tenants/${tid()}/domains`, { method: 'POST', body: { domain: domainInput.value } }); domainInput.value = ''; await refreshSel() })
 const verifyDomain = d => run(async () => { await pconsole(`/tenants/${tid()}/domains/${encodeURIComponent(d)}/verify`, { method: 'POST' }); await refreshSel() })
 const removeDomain = d => run(async () => { await pconsole(`/tenants/${tid()}/domains/${encodeURIComponent(d)}`, { method: 'DELETE' }); await refreshSel() })
 const makePrimary = d => run(async () => { await pconsole(`/tenants/${tid()}/primary-domain`, { method: 'PUT', body: { domain: d } }); await refreshSel() })
+// The storage limit (GB) applies to storage the platform provides; one
+// source of truth with the quota (max_storage_bytes); re-authentication.
+const limit = reactive({ code: '' })
+const saveLimit = () => run(async () => {
+  await pconsole(`/tenants/${tid()}/quotas`, { method: 'PUT', body: { max_users: Number(quota.max_users) || 0, max_storage_bytes: gbToBytes(String(quota.max_storage_gb || '0')), ...reauth(limit.code) } })
+  limit.code = ''; notice.value = t('Saved'); await refreshSel(); await loadTenants()
+})
 const saveStorage = () => run(async () => {
   applyStorage(await pconsole(`/tenants/${tid()}/storage`, { method: 'PUT', body: { offer: storage.offer, tenant_managed: storage.tenant_managed } }))
   notice.value = t('Saved')
@@ -337,7 +344,7 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
             <p class="muted">{{ t('In use: {users} users, {storage}.', { users: sel.tenant.user_count, storage: fmtSize(sel.tenant.storage_used_bytes) }) }}</p>
             <div class="row">
               <div><label for="q-mu">{{ t('Maximum users (0 = unlimited)') }}</label><input id="q-mu" v-model="quota.max_users" inputmode="numeric" /></div>
-              <div><label for="q-ms">{{ t('Maximum storage in GB (0 = unlimited)') }}</label><input id="q-ms" v-model="quota.max_storage_gb" inputmode="decimal" /></div>
+
             </div>
             <div class="actions"><button :disabled="busy">{{ t('Save') }}</button></div>
           </form>
@@ -379,6 +386,19 @@ const fmtTime = v => (v ? new Date(v).toLocaleString() : '—')
             <label class="check"><input type="checkbox" v-model="storage.tenant_managed" /> {{ t('Tenant may configure its own storage') }}</label>
             <p class="muted">{{ t('Files keep the location they were written to; the tenant\'s administrators can move earlier files to the current location (Admin → Storage).') }}</p>
             <div class="actions"><button :disabled="busy">{{ t('Save') }}</button></div>
+          </form>
+          <form v-if="storage.view" class="card" @submit.prevent="saveLimit">
+            <h3>{{ t('Storage limit') }}</h3>
+            <template v-if="storage.view.limit_applies && storage.view.offer !== 'none'">
+              <p class="muted">{{ t('Applies to the storage the platform provides. Uploads that would exceed it are refused.') }}</p>
+              <p>{{ t('Used') }}: {{ fmtSize(storage.view.usage_bytes) }}<template v-if="sel.tenant.max_storage_bytes"> / {{ fmtSize(sel.tenant.max_storage_bytes) }}</template></p>
+              <label for="q-ms">{{ t('Storage limit in GB (0 = unlimited)') }}</label><input id="q-ms" v-model="quota.max_storage_gb" inputmode="decimal" />
+              <label for="q-code">{{ reauthLabel }}</label>
+              <input id="q-code" v-model="limit.code" :type="byPassword ? 'password' : 'text'" autocomplete="off" />
+              <div class="actions"><button :disabled="busy">{{ t('Save') }}</button></div>
+            </template>
+            <p v-else-if="!storage.view.limit_applies" class="muted">{{ t('The tenant uses storage of its own, which it pays for and manages itself: no platform storage limit applies.') }}</p>
+            <p v-else class="muted">{{ t('The platform provides no storage to this tenant, so there is no platform storage limit.') }}</p>
           </form>
           <form class="card" @submit.prevent="saveNetwork">
             <h3>{{ t('Network targets') }}</h3>

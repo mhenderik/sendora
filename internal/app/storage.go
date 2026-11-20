@@ -357,6 +357,9 @@ func (s *Server) storageStatus(w http.ResponseWriter, r *http.Request) {
 			"editable":        s.tenantStorageEditable(),
 			"managed_by":      managedBy,
 			"configured":      cfg.Backend != storage.KindNone,
+			"limit_applies":   s.platformLimitApplies(),
+			"limit_bytes":     s.storageLimit(),
+			"used_bytes":      usedBytes(s),
 			"offer":           offer,
 			"platform_choice": s.tenant.opts.DefaultStorage.Describe(),
 			"guarded":         s.guardTargets(),
@@ -683,4 +686,10 @@ func (s *Server) pruneRemoteBackups(ctx context.Context, b storage.Backend) []st
 		names = names[1:]
 	}
 	return removed
+}
+
+// usedBytes is the stored plus reserved bytes of a tenant (its storage limit).
+func usedBytes(s *Server) int64 {
+	n, _ := s.St.TenantStorageUsage()
+	return n
 }
